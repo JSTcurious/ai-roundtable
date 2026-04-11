@@ -1,93 +1,100 @@
-# ⬡ ai-roundtable
+# ai-roundtable ⬡
 
 > A group chat where your contacts are AI models.
 
----
-
-## The Problem
-
-You're deep into a conversation with Claude. You've built up context over 10 prompts. Then you wonder — what would GPT-4o say about this?
-
-So you open a new tab, re-explain everything from scratch, get a response with zero context of what you've already discussed, and manually reconcile two disconnected conversations in your head.
-
-For personal projects and brainstorming this is a nightmare. The deeper you go into a conversation, the more expensive it becomes to get a second opinion.
-
-## The Solution
-
-A roundtable for AI models.
-
-Everyone is in the room. Everyone hears everything. You @ mention who you want to speak. The conversation builds — round after round — just like a real roundtable discussion.
-
-```
-You: "@llama what stack should I use for this project?"
-🟣 Llama: "I'd recommend..."
-
-You: "@gpt4o do you agree?"
-🟢 GPT-4o: "Building on what Llama said..."
-
-You: "@gpt4omini summarize what everyone said"
-🔵 GPT-4o Mini: "Llama suggested X, GPT-4o added Y..."
-```
-
-Every participant has perfect recall of everything said from the very beginning. No one misses context. No one needs to be caught up.
-
-**You are the chair. Not the AI.**
+You `@mention` who you want to speak. Every model in the conversation has the full shared transcript — so when Claude responds after Gemini, it has heard everything. No copy-pasting across tabs. No context switching. A persistent, multi-model conversation where you stay in the chair.
 
 ---
 
-## Models Available (v1)
+## The Distinction
 
-| Mention | Model | Provider | Strength |
-|---|---|---|---|
-| `@llama` | Meta-Llama-3.1-405B-Instruct | Meta via GitHub Models | Open source reasoning |
-| `@gpt4o` | GPT-4o | OpenAI via GitHub Models | Creative alternatives |
-| `@gpt4omini` | GPT-4o Mini | OpenAI via GitHub Models | Fast concise responses |
+Most AI tools take what you type. ai-roundtable understands what you need.
+
+Every session starts with a short intake conversation — Claude asks a few questions, mirrors back what it heard, and constructs an optimized prompt before any frontier model is invoked. The intake is not overhead. It is the product.
+
+ai-roundtable is a **thinking session with a deliverable** — four providers working together in a structured process you controlled throughout. The transcript compounds. You walk out with something you can act on.
+
+```
+You:     @claude what stack should I use for this RAG system?
+Claude:  [responds with recommendation]
+
+You:     @gemini what are the risks of that approach?
+Gemini:  [responds — and has read Claude's answer]
+
+You:     @gpt4o what would you do differently?
+GPT-4o:  [responds — and has read both Claude and Gemini]
+
+You:     @claude consolidate everything into a decision
+Claude:  [synthesizes the full conversation]
+```
+
+**Pipeline:** models review in sequence, no shared awareness.  
+**Room:** everyone hears everything. You decide who speaks.
+
+---
+
+## v1 Features
+
+- `@mention` routing — call one, two, or all three models per prompt
+- Shared persistent transcript — every model receives the full conversation history on every call
+- Three providers via GitHub Models free tier — Claude Sonnet, Gemini Flash, GPT-4o
+- Model-aware system prompts — each model knows who else is in the room and their relative strengths
+- Streamlit UI — dark-themed chat interface with per-model color coding
+- Clear roundtable — reset the conversation without restarting the app
+
+---
+
+## Models in v1
+
+| Handle | Model | Strength |
+|--------|-------|----------|
+| `@claude` | claude-sonnet-4-5 | Reasoning, synthesis, long-form analysis |
+| `@gemini` | gemini-2.0-flash | Speed, breadth, multimodal awareness |
+| `@gpt4o` | gpt-4o | Code, structured output, instruction following |
+
+All three run via the **GitHub Models free tier** — no OpenAI or Anthropic billing required for v1.
 
 ---
 
 ## Quickstart
 
-### 1. Clone the repo
+### Prerequisites
+
+- Python 3.11+
+- [uv](https://github.com/astral-sh/uv) (recommended) or pip
+- GitHub account with [Models access](https://github.com/marketplace/models)
+- GitHub CLI (`gh`) authenticated
+
+### Install
 
 ```bash
-git clone git@github.com:JSTcurious/ai-roundtable.git
+git clone https://github.com/JSTcurious/ai-roundtable.git
 cd ai-roundtable
+uv add streamlit openai python-dotenv
 ```
 
-### 2. Get a GitHub Personal Access Token
-
-```
-github.com → Settings → Developer Settings
-→ Personal Access Tokens → Tokens (classic)
-→ Generate new token → select repo scope → copy token
-```
-
-### 3. Set up environment
+### Configure
 
 ```bash
 cp .env.example .env
-# Edit .env and add your GITHUB_TOKEN
 ```
 
-### 4. Install dependencies and run
+Get your GitHub token:
+```bash
+gh auth token
+```
+
+Add it to `.env`:
+```
+GITHUB_TOKEN=your_token_here
+```
+
+### Run
 
 ```bash
-uv add streamlit openai python-dotenv
-export GITHUB_TOKEN=your_token_here
 cd app
-uv run streamlit run main.py
+streamlit run main.py
 ```
-
-App opens at `http://localhost:8501`
-
----
-
-## How To Use
-
-- **Click model buttons** above the input to add @ mentions — no need to type them
-- **@ mention multiple models** in one prompt to get all of them to respond simultaneously
-- **Build the conversation** — every model reads the full transcript each round
-- **Ask one model to consolidate** — it has heard everything the others said
 
 ---
 
@@ -96,41 +103,55 @@ App opens at `http://localhost:8501`
 ```
 ai-roundtable/
 ├── app/
-│   ├── main.py         # Streamlit UI and session management
-│   ├── transcript.py   # Shared conversation history
-│   └── router.py       # @ mention parser and model config
-├── .env.example        # Environment variable template
+│   ├── main.py          # Streamlit UI and session management
+│   ├── transcript.py    # Shared conversation history
+│   └── router.py        # @mention parser and model registry
+├── .env.example         # Token template
 ├── .gitignore
-├── LICENSE             # MIT
+├── LICENSE              # MIT
+├── ARCHITECTURE.md      # Design decisions and what was rejected
+├── CHANGELOG.md         # Version history
 └── README.md
 ```
 
 ---
 
-## Roadmap
+## Origin
 
-- [ ] Real Claude via Anthropic API
-- [ ] Real Gemini via Google AI Studio
-- [ ] Export conversation transcript
-- [ ] Delegate chair to a model
-- [ ] Cognitive lens modes (CognitiveCV research)
+I was exploring how management thinking frameworks — the kind used to structure human group decision-making — could be applied to multi-model AI collaboration. Assign each AI agent a distinct cognitive role. Not a function. A thinking mode.
+
+Then Microsoft announced their two-model critique concept.
+
+But it clarified something: **Microsoft built a pipeline. I'm building a room.**
+
+Prior art timestamped on LinkedIn:
+- [Post 1 — the pain point](https://www.linkedin.com/posts/jstcurious_aiproduct-genai-jstcurious-activity-7445824161064808448-MAb0)
+- [Post 2 — the market gap](https://www.linkedin.com/posts/jstcurious_aiproduct-genai-buildinginpublic-activity-7446732294222061568-aUXn)
 
 ---
 
-## Why This Is Different
+## Roadmap
 
-| Tool | What it does |
-|---|---|
-| Ithy, MultipleChat | Query all models → return one merged answer |
-| Poe, AiZolo | Access multiple models under one subscription |
-| **ai-roundtable** | Persistent group conversation — models hear each other |
+**v1 (current)** — GitHub Models free tier, three providers, @mention routing, shared transcript
 
-The gap isn't multi-model responses. The gap is multi-model conversation.
+**v2 (in build)**
+- Thorough intake — Claude understands what you need before any model is invoked
+- Use case library — 16 curated starting points
+- Four providers — Claude + Gemini + GPT + Perplexity as fact-checker
+- Three tiers — Quick / Smart (advisor pattern) / Deep Thinking
+- Claude as orchestrator — intake, synthesis, Perplexity audit integration
+- Deep mode — cross-critique with specialized lenses per model
+- Markdown export + Google Drive + downstream handoffs to Claude Code and Perplexity
+- React + FastAPI + WebSocket streaming
+
+**v3** — CognitiveCV cognitive framework agents, PDF/Notion export, session persistence
 
 ---
 
 ## License
 
-MIT License — see LICENSE file for details.
+MIT — Jitender Thakur, 2026
 
-Built by [Jitender Thakur](https://jstcurious.com) · [@JSTcurious](https://github.com/JSTcurious)
+---
+
+*Built by [JSTcurious](https://github.com/JSTcurious) · [jstcurious.com](https://jstcurious.com)*
