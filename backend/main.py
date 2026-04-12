@@ -14,17 +14,19 @@ WebSocket:
     /ws/session                 — stream tokens from each model in real time (Session 6)
 
 Session flow (default mode):
-    User prompt → Claude → Gemini → GPT (sequential, full transcript each)
-    → Perplexity audit (SKIPPED in v2 — returns placeholder)
-    → Claude synthesis → return to frontend
+    Gemini + GPT + Perplexity pre-research run IN PARALLEL
+    → Perplexity audit (uses pre-research + Gemini + GPT responses)
+    → Claude synthesises everything → final deliverable
 
-Sequential in Round 1. Always. Never parallel.
+    Claude does NOT respond in Round 1. Claude only synthesises at the end.
+    Gemini and GPT stream tokens to the frontend simultaneously (serialised sends).
 """
 
 import asyncio
 import json
 import os
 import threading
+import time
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -49,8 +51,9 @@ from fastapi import FastAPI, HTTPException, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel
+from starlette.websockets import WebSocketDisconnect
 
-from backend.intake import IntakeSession
+from backend.intake import IntakeSession, OPENING_SUGGESTED_OPTIONS
 from backend.transcript import Transcript
 from backend.router import (
     get_tier_config, get_round1_system_prompt, build_synthesis_prompt,
@@ -59,7 +62,10 @@ from backend.router import (
 from backend.models.anthropic_client import call_claude
 from backend.models.google_client import call_gemini
 from backend.models.openai_client import call_gpt
-from backend.models.perplexity_client import audit as perplexity_audit
+from backend.models.perplexity_client import (
+    research as perplexity_research,
+    audit as perplexity_audit,
+)
 from backend.exporter import Exporter
 
 app = FastAPI(title="ai-roundtable v2")
@@ -149,7 +155,11 @@ async def intake_start():
     session = IntakeSession()
     opening = session.start()
     _intake_sessions[session_id] = session
-    return {"session_id": session_id, "message": opening}
+    return {
+        "session_id": session_id,
+        "message": opening,
+        "suggested_options": list(OPENING_SUGGESTED_OPTIONS),
+    }
 
 
 @app.post("/api/intake/respond")
@@ -164,7 +174,8 @@ async def intake_respond(req: IntakeRespondRequest):
             "session_id": str,
             "status":     "ongoing" | "complete",
             "message":    str,
-            "config":     dict | None
+            "config":     dict | None,
+            "suggested_options": list[str] | None,  # 2–4 chips when Claude included intake-ui
         }
     """
     session = _intake_sessions.get(req.session_id)
@@ -187,37 +198,33 @@ async def session_run(req: SessionRunRequest):
     Accepts the user's prompt, the session_config from intake, and any
     prior transcript history (empty list for the first turn).
 
-    Round 1 is strictly sequential:
-        Claude → Gemini → GPT
-    Each model receives the full transcript including all prior responses.
-
-    Perplexity audit is skipped in v2 — returns placeholder string.
-
-    Claude synthesis follows, incorporating all three Round 1 responses.
+    Gemini, GPT, and Perplexity Phase 1 pre-research run in parallel; transcript
+    records Gemini then GPT. Perplexity Phase 2 audits Gemini + GPT. Claude
+    synthesises only (no Round 1 Claude response).
 
     Returns:
         {
-            "round1": {
-                "claude":  str,
-                "gemini":  str,
-                "gpt":     str
-            },
-            "audit":     str,   # "Perplexity audit coming in v2.1."
+            "round1":    {"gemini": str, "gpt": str},
+            "research":  str,   # Perplexity Phase 1 pre-research
+            "audit":     str,   # Perplexity Phase 2 audit
             "synthesis": str
         }
 
-    Raises 400 if tier is invalid, 500 on any model call failure.
+    Gemini, GPT, and Perplexity pre-research run in parallel.
+    Claude does NOT participate in Round 1 — synthesises only.
+    Each skipped provider is noted; session continues regardless.
+    Raises 400 if tier is invalid.
     """
     config = req.session_config
     tier = config.get("tier", "deep")
     output_type = config.get("output_type", "report")
+    optimized_prompt = config.get("optimized_prompt", req.prompt)
 
     try:
-        tier_config = get_tier_config(tier)
+        get_tier_config(tier)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    # Reconstruct transcript from provided history and add the new prompt
     transcript = Transcript()
     transcript.session_config = config
     for msg in req.history:
@@ -231,58 +238,87 @@ async def session_run(req: SessionRunRequest):
             )
     transcript.add_user_message(req.prompt)
 
-    # ── Round 1: Claude ───────────────────────────────────────────────────────
-    claude_history = transcript.get_history_for_model("claude")
-    claude_response = call_claude(
-        messages=claude_history,
-        tier=tier,
-        system=get_round1_system_prompt("claude"),
-    )
-    claude_text = claude_response.content[0].text
-    transcript.add_model_message("Claude", claude_text, round="round1")
+    def _skip(sender: str, exc: Exception) -> str:
+        return f"[{sender} unavailable — skipped after retries: {exc}]"
 
-    # ── Round 1: Gemini ───────────────────────────────────────────────────────
-    # Gemini now has Claude's response in its history
     gemini_history = transcript.get_history_for_model("gemini")
-    gemini_response = call_gemini(
-        messages=gemini_history,
-        tier=tier,
-        system=get_round1_system_prompt("gemini"),
+    gpt_history    = transcript.get_history_for_model("gpt")
+
+    # ── Parallel: Gemini + GPT + Perplexity pre-research ─────────────────────
+    async def _gemini_task() -> str:
+        try:
+            r = await asyncio.to_thread(
+                _call_with_retry,
+                lambda: call_gemini(messages=gemini_history, tier=tier,
+                                    system=get_round1_system_prompt("gemini")),
+                "Gemini",
+            )
+            return r.text
+        except Exception as exc:
+            return _skip("Gemini", exc)
+
+    async def _gpt_task() -> str:
+        try:
+            r = await asyncio.to_thread(
+                _call_with_retry,
+                lambda: call_gpt(messages=gpt_history, tier=tier,
+                                 system=get_round1_system_prompt("gpt")),
+                "GPT",
+            )
+            return r.choices[0].message.content
+        except Exception as exc:
+            return _skip("GPT", exc)
+
+    async def _research_task() -> str:
+        try:
+            return await asyncio.to_thread(
+                _call_with_retry,
+                lambda: perplexity_research(optimized_prompt, tier=tier),
+                "Perplexity-research",
+            )
+        except Exception as exc:
+            return f"[Perplexity pre-research unavailable: {exc}]"
+
+    gemini_text, gpt_text, perplexity_pre = await asyncio.gather(
+        _gemini_task(), _gpt_task(), _research_task(),
     )
-    gemini_text = gemini_response.text
+
     transcript.add_model_message("Gemini", gemini_text, round="round1")
+    transcript.add_model_message("GPT",    gpt_text,    round="round1")
 
-    # ── Round 1: GPT ──────────────────────────────────────────────────────────
-    # GPT now has Claude's and Gemini's responses in its history
-    gpt_history = transcript.get_history_for_model("gpt")
-    gpt_response = call_gpt(
-        messages=gpt_history,
-        tier=tier,
-        system=get_round1_system_prompt("gpt"),
-    )
-    gpt_text = gpt_response.choices[0].message.content
-    transcript.add_model_message("GPT", gpt_text, round="round1")
-
-    # ── Perplexity audit (v2.1 stub) ──────────────────────────────────────────
-    audit_text = perplexity_audit(transcript.get_round1_responses(), tier=tier)
+    # ── Perplexity audit (Phase 2) ────────────────────────────────────────────
+    try:
+        audit_text = await asyncio.to_thread(
+            _call_with_retry,
+            lambda: perplexity_audit(
+                {"gemini": gemini_text, "gpt": gpt_text},
+                research_text=perplexity_pre,
+                tier=tier,
+            ),
+            "Perplexity-audit",
+        )
+    except Exception as exc:
+        audit_text = f"[Perplexity audit unavailable: {exc}]"
     transcript.add_model_message("Perplexity", audit_text, round="audit")
 
     # ── Synthesis: Claude ─────────────────────────────────────────────────────
-    # Claude receives the full transcript (all three Round 1 responses + audit)
-    # plus the synthesis system prompt scoped to the declared output_type.
-    synthesis_history = transcript.get_history_for_model("claude")
-    synthesis_prompt = build_synthesis_prompt(output_type)
+    synthesis_system = build_synthesis_prompt(
+        output_type=output_type,
+        gemini=gemini_text,
+        gpt=gpt_text,
+        perplexity=audit_text,
+        optimized_prompt=optimized_prompt,
+    )
     synthesis_response = call_claude(
-        messages=synthesis_history,
+        messages=[{"role": "user", "content": req.prompt}],
         tier=tier,
-        system=synthesis_prompt,
+        system=synthesis_system,
     )
     synthesis_text = synthesis_response.content[0].text
     transcript.add_model_message("Claude", synthesis_text, round="synthesis")
 
     return {
         "round1": {
-            "claude": claude_text,
             "gemini": gemini_text,
             "gpt":    gpt_text,
         },
@@ -355,7 +391,8 @@ def _build_transcript(config: dict, history: list, prompt: str) -> Transcript:
 async def _stream_tokens(
     websocket: WebSocket,
     sender: str,
-    sync_iter_factory,       # zero-arg callable that returns a sync token iterator
+    sync_iter_factory,                          # zero-arg callable → sync token iterator
+    send_lock: Optional[asyncio.Lock] = None,   # shared lock for parallel streams
 ) -> str:
     """
     Run a synchronous streaming iterator in a thread and forward each token
@@ -363,8 +400,8 @@ async def _stream_tokens(
 
     Returns the full accumulated response text.
 
-    Uses asyncio.Queue + loop.call_soon_threadsafe to bridge the sync iterator
-    into the async WebSocket handler without blocking the event loop.
+    send_lock — when two streams run concurrently (asyncio.gather), pass a shared
+    asyncio.Lock so WebSocket sends are serialised and frames are not interleaved.
     """
     loop = asyncio.get_event_loop()
     queue: asyncio.Queue = asyncio.Queue()
@@ -390,7 +427,12 @@ async def _stream_tokens(
         if isinstance(item, dict) and "__error__" in item:
             raise RuntimeError(f"{sender} stream error: {item['__error__']}")
         full_text += item
-        await websocket.send_json({"type": "token", "sender": sender, "token": item})
+        msg = {"type": "token", "sender": sender, "token": item}
+        if send_lock:
+            async with send_lock:
+                await websocket.send_json(msg)
+        else:
+            await websocket.send_json(msg)
 
     return full_text
 
@@ -416,6 +458,137 @@ def _gpt_token_iter(messages, tier, system):
             yield delta
 
 
+# ── Retry helpers ─────────────────────────────────────────────────────────────
+
+# Delay sequence for up to 3 retries: 5s → 10s → 20s
+_RETRY_DELAYS = [5, 10, 20]
+
+
+def _is_retryable(exc: Exception) -> bool:
+    """Return True for transient 503 / 429 / rate-limit errors from any provider."""
+    msg = str(exc).lower()
+    return any(k in msg for k in (
+        "503", "429", "rate limit", "rate_limit",
+        "unavailable", "overloaded", "too many requests",
+    ))
+
+
+def _retrying_iter(inner_factory, sender: str):
+    """
+    Wrap a sync token-iterator factory with retry-on-transient-error logic.
+
+    Retries up to 3 times (5s → 10s → 20s) when the iterator raises a
+    retryable error (503 / 429 / rate-limit) AND no tokens have been yielded
+    yet.  Once tokens are flowing, retrying would send duplicates to the
+    frontend — so mid-stream errors are always re-raised immediately.
+    Non-retryable errors are re-raised on the first attempt.
+    """
+    last_exc = None
+    for attempt in range(len(_RETRY_DELAYS) + 1):
+        if attempt > 0:
+            delay = _RETRY_DELAYS[attempt - 1]
+            print(f"[retry] {sender}: attempt {attempt}/{len(_RETRY_DELAYS)}, waiting {delay}s — {last_exc}")
+            time.sleep(delay)
+        started = False
+        try:
+            for token in inner_factory():
+                started = True
+                yield token
+            return  # clean completion
+        except Exception as e:
+            if not _is_retryable(e) or started:
+                raise  # non-retryable or mid-stream — do not retry
+            last_exc = e
+    raise last_exc  # all retries exhausted
+
+
+def _call_with_retry(fn, sender: str):
+    """
+    Call fn() with up to 3 retries on retryable errors (503 / 429 / rate-limit).
+    Delays: 5s → 10s → 20s.  Raises the last exception if all retries fail.
+    Used by the non-streaming REST endpoint.
+    """
+    last_exc = None
+    for attempt in range(len(_RETRY_DELAYS) + 1):
+        if attempt > 0:
+            delay = _RETRY_DELAYS[attempt - 1]
+            print(f"[retry] {sender}: attempt {attempt}/{len(_RETRY_DELAYS)}, waiting {delay}s — {last_exc}")
+            time.sleep(delay)
+        try:
+            return fn()
+        except Exception as e:
+            if not _is_retryable(e):
+                raise
+            last_exc = e
+    raise last_exc
+
+
+async def _stream_model(
+    websocket: WebSocket,
+    sender: str,
+    iter_factory,
+    transcript: Optional["Transcript"] = None,
+    send_lock: Optional[asyncio.Lock] = None,
+    *,
+    commit_to_transcript: bool = True,
+) -> str:
+    """
+    Stream one Round 1 model response with retry + graceful skip.
+
+    Wraps _stream_tokens with _retrying_iter so transient errors trigger
+    automatic backoff retries.  If all retries are exhausted the model is
+    skipped: an error frame is sent to the frontend, a skip note is added to
+    the transcript, and the session continues with the remaining models.
+
+    send_lock — pass a shared asyncio.Lock when running multiple models in
+    parallel via asyncio.gather() to serialise WebSocket sends.
+
+    Always sends model_complete before returning.
+    Returns the accumulated response text (or skip-note string on failure).
+    """
+    async def _send(msg: dict) -> None:
+        if send_lock:
+            async with send_lock:
+                await websocket.send_json(msg)
+        else:
+            await websocket.send_json(msg)
+
+    try:
+        text = await _stream_tokens(
+            websocket, sender,
+            lambda: _retrying_iter(iter_factory, sender),
+            send_lock=send_lock,
+        )
+    except RuntimeError as exc:
+        text = f"[{sender} unavailable — skipped after retries]"
+        await _send({
+            "type": "error",
+            "message": f"{sender} unavailable after retries — continuing session without it.",
+        })
+    if commit_to_transcript and transcript is not None:
+        transcript.add_model_message(sender, text, round="round1")
+    await _send({"type": "model_complete", "sender": sender})
+    return text
+
+
+async def _drain_client_pings(websocket: WebSocket) -> None:
+    """
+    Read client JSON while the session runs; answer keep-alive pings so inbound
+    frames are not mistaken for session payloads.
+    """
+    try:
+        while True:
+            data = await websocket.receive_json()
+            if isinstance(data, dict) and data.get("type") == "ping":
+                await websocket.send_json({"type": "pong"})
+    except WebSocketDisconnect:
+        return
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        return
+
+
 @app.websocket("/ws/session")
 async def session_websocket(websocket: WebSocket):
     """
@@ -428,25 +601,44 @@ async def session_websocket(websocket: WebSocket):
             "session_config": dict,   # from IntakeSession.session_config
             "history":        list    # [] for first turn
         }
+        Any number of {"type": "ping", ...} messages may precede the handshake; each is
+        answered with {"type": "pong"}. During streaming, pings are handled in parallel.
 
     Messages emitted (in order):
-        { "type": "token",              "sender": "Claude"|"Gemini"|"GPT", "token": str }
-        { "type": "model_complete",     "sender": "Claude"|"Gemini"|"GPT" }
-        { "type": "synthesis_complete", "content": str }   # full synthesis text
-        { "type": "session_complete" }
-        { "type": "error",              "message": str }   # on failure
+        {"type": "session_started"}
+        {"type": "token",              "sender": "Gemini"|"GPT", "token": str}  # parallel
+        {"type": "model_complete",     "sender": "Gemini"}
+        {"type": "model_complete",     "sender": "GPT"}
+        {"type": "error",              "message": str}   # skipped model (non-fatal)
+        {"type": "perplexity_thinking"}
+        {"type": "perplexity_complete", "content": str}
+        {"type": "synthesis_thinking"}
+        {"type": "token",              "sender": "Claude", "token": str}
+        {"type": "synthesis_complete", "content": str}
+        {"type": "session_complete"}
+        {"type": "error",              "message": str}   # fatal session error
 
-    Round 1 is sequential — Claude → Gemini → GPT. Never parallel.
-    Perplexity audit is a placeholder in v2 (deferred to v2.1).
+    Gemini and GPT stream simultaneously (asyncio.gather + shared send_lock).
+    Perplexity pre-research runs silently in the same gather.
+    Claude does NOT respond in Round 1 — synthesises only.
+    Each provider retries up to 3× (5s/10s/20s) on 503/429.
     """
     await websocket.accept()
 
-    try:
-        data = await websocket.receive_json()
-    except Exception:
-        await websocket.send_json({"type": "error", "message": "Invalid handshake — expected JSON with prompt and session_config."})
-        await websocket.close()
-        return
+    while True:
+        try:
+            data = await websocket.receive_json()
+        except WebSocketDisconnect:
+            await websocket.close()
+            return
+        except Exception:
+            await websocket.send_json({"type": "error", "message": "Invalid handshake — expected JSON with prompt and session_config."})
+            await websocket.close()
+            return
+        if isinstance(data, dict) and data.get("type") == "ping":
+            await websocket.send_json({"type": "pong"})
+            continue
+        break
 
     prompt = data.get("prompt", "")
     config = data.get("session_config", {})
@@ -461,59 +653,103 @@ async def session_websocket(websocket: WebSocket):
         await websocket.close()
         return
 
+    optimized_prompt = config.get("optimized_prompt", prompt)
     transcript = _build_transcript(config, history, prompt)
 
+    ping_task = asyncio.create_task(_drain_client_pings(websocket))
     try:
-        # ── Round 1: Claude ───────────────────────────────────────────────────
-        claude_history = transcript.get_history_for_model("claude")
-        claude_system = get_round1_system_prompt("claude")
-        claude_text = await _stream_tokens(
-            websocket, "Claude",
-            lambda: _claude_token_iter(claude_history, tier, claude_system),
-        )
-        transcript.add_model_message("Claude", claude_text, round="round1")
-        await websocket.send_json({"type": "model_complete", "sender": "Claude"})
+        await websocket.send_json({"type": "session_started"})
 
-        # ── Round 1: Gemini ───────────────────────────────────────────────────
-        # Gemini now has Claude's response in its history
+        # ── Parallel: Gemini streaming + GPT streaming + Perplexity pre-research
+        # Gemini and GPT stream tokens to the frontend simultaneously.
+        # Perplexity pre-research runs silently in the same gather.
+        # A shared send_lock serialises all WebSocket sends across the two streams.
         gemini_history = transcript.get_history_for_model("gemini")
-        gemini_system = get_round1_system_prompt("gemini")
-        gemini_text = await _stream_tokens(
-            websocket, "Gemini",
-            lambda: _gemini_token_iter(gemini_history, tier, gemini_system),
+        gpt_history    = transcript.get_history_for_model("gpt")
+        gemini_system  = get_round1_system_prompt("gemini")
+        gpt_system     = get_round1_system_prompt("gpt")
+        send_lock      = asyncio.Lock()
+
+        async def _research_task() -> str:
+            try:
+                return await asyncio.to_thread(
+                    _call_with_retry,
+                    lambda: perplexity_research(optimized_prompt, tier=tier),
+                    "Perplexity-research",
+                )
+            except Exception as exc:
+                return f"[Perplexity pre-research unavailable: {exc}]"
+
+        results = await asyncio.gather(
+            _stream_model(
+                websocket, "Gemini",
+                lambda: _gemini_token_iter(gemini_history, tier, gemini_system),
+                transcript=None,
+                send_lock=send_lock,
+                commit_to_transcript=False,
+            ),
+            _stream_model(
+                websocket, "GPT",
+                lambda: _gpt_token_iter(gpt_history, tier, gpt_system),
+                transcript=None,
+                send_lock=send_lock,
+                commit_to_transcript=False,
+            ),
+            _research_task(),
+            return_exceptions=True,
         )
+
+        gemini_text = results[0] if isinstance(results[0], str) else f"[Gemini error: {results[0]}]"
+        gpt_text = results[1] if isinstance(results[1], str) else f"[GPT error: {results[1]}]"
+        perplexity_pre = results[2] if isinstance(results[2], str) else ""
+
         transcript.add_model_message("Gemini", gemini_text, round="round1")
-        await websocket.send_json({"type": "model_complete", "sender": "Gemini"})
-
-        # ── Round 1: GPT ──────────────────────────────────────────────────────
-        # GPT now has Claude's and Gemini's responses in its history
-        gpt_history = transcript.get_history_for_model("gpt")
-        gpt_system = get_round1_system_prompt("gpt")
-        gpt_text = await _stream_tokens(
-            websocket, "GPT",
-            lambda: _gpt_token_iter(gpt_history, tier, gpt_system),
-        )
         transcript.add_model_message("GPT", gpt_text, round="round1")
-        await websocket.send_json({"type": "model_complete", "sender": "GPT"})
 
-        # ── Perplexity audit (v2.1 stub) ──────────────────────────────────────
-        audit_text = perplexity_audit(transcript.get_round1_responses(), tier=tier)
+        # ── Perplexity audit (Phase 2) ────────────────────────────────────────
+        await websocket.send_json({"type": "perplexity_thinking"})
+        try:
+            audit_text = await asyncio.to_thread(
+                _call_with_retry,
+                lambda: perplexity_audit(
+                    {"gemini": gemini_text, "gpt": gpt_text},
+                    research_text=perplexity_pre,
+                    tier=tier,
+                ),
+                "Perplexity-audit",
+            )
+        except Exception as exc:
+            audit_text = f"[Perplexity audit unavailable: {exc}]"
         transcript.add_model_message("Perplexity", audit_text, round="audit")
+        await websocket.send_json({"type": "perplexity_complete", "content": audit_text})
 
         # ── Synthesis: Claude ─────────────────────────────────────────────────
-        # Full transcript now includes all three Round 1 responses + audit placeholder
-        synthesis_history = transcript.get_history_for_model("claude")
-        synthesis_system = build_synthesis_prompt(output_type)
+        # Claude sees Gemini + GPT responses and Perplexity's live research + audit
+        # injected directly into the system prompt. No Round 1 response from Claude.
+        await websocket.send_json({"type": "synthesis_thinking"})
+        synthesis_system = build_synthesis_prompt(
+            output_type=output_type,
+            gemini=gemini_text,
+            gpt=gpt_text,
+            perplexity=audit_text,
+            optimized_prompt=optimized_prompt,
+        )
         synthesis_text = await _stream_tokens(
             websocket, "Claude",
-            lambda: _claude_token_iter(synthesis_history, tier, synthesis_system),
+            lambda: _claude_token_iter(
+                [{"role": "user", "content": prompt}], tier, synthesis_system
+            ),
         )
         transcript.add_model_message("Claude", synthesis_text, round="synthesis")
         await websocket.send_json({"type": "synthesis_complete", "content": synthesis_text})
-
         await websocket.send_json({"type": "session_complete"})
 
     except Exception as e:
         await websocket.send_json({"type": "error", "message": str(e)})
     finally:
+        ping_task.cancel()
+        try:
+            await ping_task
+        except asyncio.CancelledError:
+            pass
         await websocket.close()

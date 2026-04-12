@@ -1,0 +1,240 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Global inputs — chrome accent (not Claude orange).
+ * caret: text-primary for visibility on dark surface.
+ */
+input,
+textarea {
+  background-color: #1e1e1e;
+  caret-color: #e8e8e8;
+  color: #e8e8e8;
+  border: 1px solid #2a2a2a;
+}
+
+input:focus,
+textarea:focus {
+  border-color: #6b6b6b;
+  outline: none;
+}
+
+body {
+  background-color: #0d0d0d;
+  color: #e8e8e8;
+}
+
+/* IntakeFlow — Claude typing indicator (three dots) */
+@keyframes intake-typing-dot {
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.intake-typing-indicator .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: #888888;
+  animation: intake-typing-dot 1.2s ease-in-out infinite;
+}
+
+.intake-typing-indicator .dot:nth-child(1) {
+  animation-delay: 0s;
+}
+
+.intake-typing-indicator .dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.intake-typing-indicator .dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+/* ModelBubble + SynthesisPanel — thin dark scrollbar */
+.model-bubble-scroll {
+  overflow-y: auto;
+  scroll-behavior: smooth;
+  scrollbar-width: thin;
+  scrollbar-color: #6b6b6b #2a2a2a;
+}
+
+.model-bubble-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.model-bubble-scroll::-webkit-scrollbar-track {
+  background: #2a2a2a;
+}
+
+.model-bubble-scroll::-webkit-scrollbar-thumb {
+  background-color: #6b6b6b;
+  border-radius: 3px;
+}
+
+.synthesis-panel-scroll {
+  overflow-y: auto;
+  scroll-behavior: smooth;
+  scrollbar-width: thin;
+  scrollbar-color: #6b6b6b #2a2a2a;
+}
+
+.synthesis-panel-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.synthesis-panel-scroll::-webkit-scrollbar-track {
+  background: #2a2a2a;
+}
+
+.synthesis-panel-scroll::-webkit-scrollbar-thumb {
+  background-color: #6b6b6b;
+  border-radius: 3px;
+}
+
+/* ModelBubble + SynthesisPanel — markdown body (no @tailwindcss/typography) */
+.markdown-session :first-child {
+  margin-top: 0;
+}
+
+.markdown-session :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-session h1,
+.markdown-session h2,
+.markdown-session h3,
+.markdown-session h4 {
+  color: #e8e8e8;
+  font-weight: 600;
+  margin: 0.75em 0 0.35em;
+  line-height: 1.25;
+}
+
+.markdown-session h1 {
+  font-size: 1.125rem;
+}
+
+.markdown-session h2 {
+  font-size: 1.05rem;
+}
+
+.markdown-session h3,
+.markdown-session h4 {
+  font-size: 1rem;
+}
+
+.markdown-session p {
+  margin: 0.5em 0;
+}
+
+.markdown-session ul,
+.markdown-session ol {
+  margin: 0.5em 0;
+  padding-left: 1.25rem;
+}
+
+.markdown-session li {
+  margin: 0.25em 0;
+}
+
+/* GFM task lists (remark-gfm) — [ ] / [x] */
+.markdown-session ul:has(> li > input[type="checkbox"]) {
+  list-style: none;
+  padding-left: 0;
+}
+
+.markdown-session li:has(> input[type="checkbox"]) {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.markdown-session li input[type="checkbox"] {
+  margin-top: 0.2em;
+  flex-shrink: 0;
+  accent-color: #e8712a;
+}
+
+.markdown-session code {
+  font-size: 0.875em;
+  background: #2a2a2a;
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+}
+
+.markdown-session pre {
+  margin: 0.75em 0;
+  padding: 0.75rem 1rem;
+  background: #2a2a2a;
+  border-radius: 8px;
+  overflow-x: auto;
+  font-size: 0.875rem;
+}
+
+.markdown-session pre code {
+  background: transparent;
+  padding: 0;
+}
+
+.markdown-session a {
+  color: #4285f4;
+  text-decoration: underline;
+}
+
+.markdown-session blockquote {
+  margin: 0.75em 0;
+  padding-left: 1rem;
+  border-left: 3px solid #2a2a2a;
+  color: #888888;
+}
+
+/* SessionView — progress bar active node (●) */
+@keyframes session-progress-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.session-progress-node-active {
+  animation: session-progress-pulse 1.2s ease-in-out infinite;
+}
+
+/* SessionView — pre-token “thinking” dots (staggered 0.3s, fade in model color) */
+@keyframes session-thinking-dot-fade {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.session-thinking-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  animation: session-thinking-dot-fade 0.9s ease-in-out infinite;
+}
+
+.session-thinking-dots .session-thinking-dot:nth-child(1) {
+  animation-delay: 0s;
+}
+
+.session-thinking-dots .session-thinking-dot:nth-child(2) {
+  animation-delay: 0.3s;
+}
+
+.session-thinking-dots .session-thinking-dot:nth-child(3) {
+  animation-delay: 0.6s;
+}

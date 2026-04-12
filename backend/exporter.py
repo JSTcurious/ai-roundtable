@@ -140,15 +140,21 @@ class Exporter:
         lines += ["---", ""]
 
         # ── Perplexity Audit ──────────────────────────────────────────────────
+        audit_msgs = [
+            m for m in transcript.messages
+            if m.get("round") == "audit" and m.get("role") == "assistant" and m.get("sender") == "Perplexity"
+        ]
+        audit_text = (audit_msgs[-1].get("content") or "").strip() if audit_msgs else ""
         lines += [
             "## Perplexity Audit",
             "*Fact-check findings — live web*",
             "",
-            "*Coming in v2.1 — Perplexity audit not available in this session.*",
-            "",
-            "---",
-            "",
         ]
+        if audit_text:
+            lines += [audit_text, ""]
+        else:
+            lines += ["*No Perplexity audit in this transcript.*", ""]
+        lines += ["---", ""]
 
         # ── Synthesis ─────────────────────────────────────────────────────────
         if synthesis_text:

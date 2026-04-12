@@ -30,54 +30,63 @@ from backend.models.openai_client import MODELS as GPT_MODELS
 
 
 ROUND1_SYSTEM_PROMPTS = {
+    # Round 1 order: Gemini → GPT → Claude.
+    # Each prompt reflects only what that model can actually see in the transcript
+    # at the time it is called. Do not reference models that have not yet spoken.
+
+    "gemini": """You are Gemini, participating in a roundtable \
+discussion with GPT and Claude. Your strength is deep reasoning \
+and challenging assumptions. Lead with that. You are responding \
+first — no other model has spoken yet. Answer directly. \
+Do not prefix your response with your name.""",
+
+    "gpt": """You are GPT, participating in a roundtable \
+discussion with Gemini and Claude. Your strength is structure, \
+actionability, and breadth. Lead with that. You have the full \
+conversation history including what Gemini said before you. \
+Build on it where relevant. Be direct. Do not prefix your \
+response with your name.""",
+
     "claude": """You are Claude, participating in a roundtable \
 discussion with Gemini and GPT. Your strength is reasoning, \
 synthesis, and natural prose. Lead with that. You have the \
-full conversation history. Be direct and build on what others \
-have said when relevant. Do not prefix your response with \
-your name.""",
-
-    "gemini": """You are Gemini, participating in a roundtable \
-discussion with Claude and GPT. Your strength is deep reasoning \
-and challenging assumptions. Lead with that. You have the full \
-conversation history including what Claude said before you. \
-Be direct. Do not prefix your response with your name.""",
-
-    "gpt": """You are GPT, participating in a roundtable \
-discussion with Claude and Gemini. Your strength is structure, \
-actionability, and breadth. Lead with that. You have the full \
-conversation history including what Claude and Gemini said \
-before you. Be direct. Do not prefix your response with \
+full conversation history including what Gemini and GPT said \
+before you. Build on their responses where relevant — push back \
+where you disagree. Be direct. Do not prefix your response with \
 your name.""",
 }
 
 # v2: synthesis works without a Perplexity audit.
 # The {audit_section} placeholder is populated with a v2.1 notice at runtime.
-SYNTHESIS_PROMPT = """You have the following inputs from this roundtable session:
+SYNTHESIS_PROMPT = """You are the expert chair of this roundtable. \
+You have heard two expert perspectives and have live web research.
 
-1. Your own response (Claude)
-2. Gemini's response
-3. GPT's response
-{audit_section}
+Gemini's analysis:
+{gemini}
 
-Produce a final synthesis that:
-- Incorporates the strongest reasoning from each model
-- Explicitly surfaces where models disagreed and what that disagreement means for the user
-- Makes a clear recommendation or conclusion
-- Matches the output format the user declared in intake: {output_type}
+GPT's analysis:
+{gpt}
 
-Do not summarize the responses. Synthesize them.
-The user wants something they can act on — not a summary of what three models said.
+Perplexity live research + audit:
+{perplexity}
 
-Structure your synthesis to match {output_type}:
-- roadmap → month-by-month with milestones
-- report → sections with headers and cited sources
-- decision → options, tradeoffs, recommendation
-- plan → phases, timeline, next actions
-- brainstorm → categorized ideas, ranked by consensus
+The user's request: {output_type}
+Full context: {optimized_prompt}
+
+Now produce ONE definitive, integrated final answer.
+
+Rules:
+- Add your own expert perspective — don't just summarize what Gemini and GPT said
+- Take the strongest insights from each and weave them into a coherent whole
+- Where models disagreed, note it in ONE sentence and give your recommendation
+- Correct anything Perplexity flagged as outdated
+- Incorporate current information from Perplexity's live research
+- End with 3 concrete next steps the user can take starting this week
+- Write as THE expert giving one definitive answer, not as a moderator summarizing others
+- Match output format: {output_type}
+- Do NOT use comparison tables
+- Do NOT list what each model said separately
 """
-
-AUDIT_SECTION_V2 = "4. Perplexity fact-check audit: coming in v2.1 — not available in this session."
 
 
 # Maps tier names as they may arrive from the frontend or session_config
@@ -301,16 +310,30 @@ def get_use_case(use_case_id: str) -> Optional[dict]:
     return None
 
 
-def build_synthesis_prompt(output_type: str) -> str:
+def build_synthesis_prompt(
+    output_type: str,
+    gemini: str = "",
+    gpt: str = "",
+    perplexity: str = "",
+    optimized_prompt: str = "",
+) -> str:
     """
-    Return the Claude synthesis prompt with output_type and audit section filled in.
+    Return the Claude synthesis system prompt with all inputs injected.
 
-    In v2, the audit section is a placeholder noting Perplexity is coming in v2.1.
+    Claude does not participate in Round 1 — it synthesises from Gemini,
+    GPT, and Perplexity's live research + audit.
 
     Args:
-        output_type: e.g. "roadmap", "report", "decision", "plan", "brainstorm"
+        output_type:       e.g. "roadmap", "report", "decision", "plan", "brainstorm"
+        gemini:            Gemini's Round 1 response text
+        gpt:               GPT's Round 1 response text
+        perplexity:        Perplexity Phase 2 audit text (includes Phase 1 research)
+        optimized_prompt:  the full optimized prompt from intake
     """
     return SYNTHESIS_PROMPT.format(
         output_type=output_type,
-        audit_section=AUDIT_SECTION_V2,
+        gemini=gemini or "(not available)",
+        gpt=gpt or "(not available)",
+        perplexity=perplexity or "(not available)",
+        optimized_prompt=optimized_prompt or "(not available)",
     )

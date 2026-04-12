@@ -77,7 +77,19 @@ async def run():
             msg = json.loads(raw)
             mtype = msg.get("type")
 
-            if mtype == "token":
+            if mtype == "session_started":
+                print("[session_started]")
+
+            elif mtype == "perplexity_thinking":
+                print("[perplexity_thinking]")
+
+            elif mtype == "perplexity_complete":
+                print(f"[perplexity_complete] {len(msg.get('content') or '')} chars")
+
+            elif mtype == "synthesis_thinking":
+                print("[synthesis_thinking]")
+
+            elif mtype == "token":
                 sender = msg["sender"]
                 token = msg["token"]
                 if sender != current_sender:

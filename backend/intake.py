@@ -21,7 +21,58 @@ Notes:
 """
 
 import json
+import re
+from typing import Any, List, Optional, Tuple
+
 from backend.models.anthropic_client import call_claude
+
+# Unicode bidi overrides, directional formatting, and other invisible control characters
+# that Claude occasionally embeds and that corrupt displayed text.
+# Ranges covered:
+#   U+200B–U+200F  zero-width/directional marks
+#   U+202A–U+202E  directional embeddings and overrides
+#   U+2066–U+2069  directional isolates
+#   U+061C         Arabic letter mark
+#   U+FEFF         BOM / zero-width no-break space
+_BIDI_CONTROL_RE = re.compile(
+    "[\u200b-\u200f\u202a-\u202e\u2066-\u2069\u061c\ufeff]"
+)
+
+
+def sanitize_text(text: str) -> str:
+    """Strip Unicode bidi overrides and invisible control characters from a string."""
+    if not isinstance(text, str):
+        return text
+    return _BIDI_CONTROL_RE.sub("", text)
+
+
+def sanitize_config(obj: Any) -> Any:
+    """
+    Recursively sanitize all string values in a config dict/list.
+    Returns the same structure with bidi characters removed from every string.
+    """
+    if isinstance(obj, str):
+        return sanitize_text(obj)
+    if isinstance(obj, dict):
+        return {k: sanitize_config(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [sanitize_config(item) for item in obj]
+    return obj
+
+
+# Plain-text suffix on every gathering turn (parsed server-side, stripped from display).
+INTAKE_OPTIONS_MARKER = "INTAKE_OPTIONS:"
+
+# Legacy fenced metadata (still parsed if present).
+INTAKE_UI_FENCE = "```intake-ui"
+
+# Returned with POST /api/intake/start alongside the static opening line.
+OPENING_SUGGESTED_OPTIONS: List[str] = [
+    "Career, learning, or a job transition",
+    "A research, product, or technical decision",
+    "Strategy, planning, or a project kickoff",
+    "I'll describe it in my own words below",
+]
 
 # Intake always runs on Sonnet — fast enough for conversational turns,
 # capable enough to produce a high-quality optimized prompt.
@@ -36,6 +87,10 @@ prompt that eliminates every assumption before the frontier \
 models are invoked. Do not rush. A thorough intake produces \
 a deliverable worth acting on. A shallow intake produces a \
 generic answer.
+
+**Important:** Output plain ASCII/UTF-8 text only. Do not use any Unicode \
+directional formatting characters, bidi overrides, or special Unicode control \
+characters in your responses.
 
 ## Step 1 — Mirror First (Always)
 
@@ -181,6 +236,45 @@ The optimized prompt must:
 - Be specific enough that two different frontier models
   produce meaningfully different, non-generic responses
 
+## Intake Options — suggested answer chips (every question turn)
+
+At the end of every turn where you ask a question or offer a mirror \
+**until** you emit the final session config, append **exactly one** line \
+in this exact format:
+
+INTAKE_OPTIONS: ["option A", "option B", "option C", "option D"]
+
+Rules:
+- The line must start with exactly `INTAKE_OPTIONS:` then a JSON array (space after colon is optional).
+- Provide **3 or 4** options when possible (minimum **2**). Never skip this line.
+- Each option must be a **concrete answer** a user could tap to respond to \
+  **that exact question** — job titles, time ranges, tools, yes/no, etc.
+- Derive labels from the topic already in the thread. \
+  Never use generic menu phrases that could apply to any chat. Forbidden \
+  examples (do not output these or anything similar): \
+  "Provide context", "Get recommendations", "Compare roles", "See next steps", \
+  "Tell me more", "Continue", "Explore options", "Learn more".
+- Do **not** repeat the prose question as an option; options are **answers**, not echoes.
+- On the **final** turn (when you output the session config in ```json), \
+  do **not** include an INTAKE_OPTIONS line.
+
+Good examples (wording must fit the actual question — these are patterns only):
+
+- Asking about current role:
+  INTAKE_OPTIONS: ["Software Engineer", "Data Engineer", "Product Manager", "Something else"]
+
+- Asking about hours per week:
+  INTAKE_OPTIONS: ["5-10 hrs/week", "10-15 hrs/week", "15-20 hrs/week", "20+ hrs/week"]
+
+- Asking about target role:
+  INTAKE_OPTIONS: ["AI Application Engineer", "ML Engineer", "MLOps Engineer", "Not sure yet"]
+
+- After a mirror of a career transition:
+  INTAKE_OPTIONS: ["Yes, that's right", "Mostly — a few details to add", "Not quite — I'll clarify"]
+
+- Asking about timeline:
+  INTAKE_OPTIONS: ["Within 3 months", "3–6 months", "6–12 months", "No fixed deadline"]
+
 ## Tone Throughout
 
 Not a form. Not a checklist. Not an interrogation.
@@ -189,6 +283,108 @@ what information matters, asks only what is necessary,
 and genuinely cares that the session produces something
 worth the user's time.
 """
+
+
+def split_intake_options_block(message: str) -> Tuple[str, Optional[List[str]]]:
+    """
+    Remove the last ``INTAKE_OPTIONS: [...]`` suffix and return display text plus
+    2–4 option strings, or (message, None) if absent or invalid.
+    """
+    if INTAKE_OPTIONS_MARKER not in message:
+        return message, None
+    idx = message.rfind(INTAKE_OPTIONS_MARKER)
+    prefix = message[:idx].rstrip()
+    suffix = message[idx + len(INTAKE_OPTIONS_MARKER) :].strip()
+    try:
+        if not suffix.startswith("["):
+            return message, None
+        depth = 0
+        end_i = -1
+        for i, ch in enumerate(suffix):
+            if ch == "[":
+                depth += 1
+            elif ch == "]":
+                depth -= 1
+                if depth == 0:
+                    end_i = i + 1
+                    break
+        if end_i < 0:
+            return message, None
+        parsed = json.loads(suffix[:end_i])
+        if not isinstance(parsed, list):
+            return message, None
+        cleaned: List[str] = []
+        for x in parsed:
+            s = str(x).strip()
+            if s:
+                cleaned.append(s)
+        cleaned = cleaned[:4]
+        if len(cleaned) < 2:
+            return message, None
+        return prefix, cleaned
+    except (json.JSONDecodeError, ValueError):
+        return message, None
+
+
+def extract_display_and_suggestions(raw: str) -> Tuple[str, Optional[List[str]]]:
+    """
+    Strip INTAKE_OPTIONS (preferred) and/or legacy ```intake-ui``` block; return
+    display text and merged suggested options (2–4 items) or None.
+    """
+    d, opts_io = split_intake_options_block(raw)
+    d2, opts_ui = split_intake_ui_block(d)
+    opts = opts_io if opts_io is not None else opts_ui
+    return d2, opts
+
+
+def _merge_without_intake_ui(message: str, fence_idx: int, closing_idx: int) -> str:
+    """Drop the ```intake-ui ... ``` segment; trim surrounding whitespace."""
+    before = message[:fence_idx].rstrip()
+    after = message[closing_idx + 3 :].lstrip()
+    if before and after:
+        return f"{before}\n\n{after}".strip()
+    return (before or after).strip()
+
+
+def split_intake_ui_block(message: str) -> Tuple[str, Optional[List[str]]]:
+    """
+    Remove a legacy ```intake-ui ... ``` block and return suggested option strings
+    (2–4 items), or None if absent / invalid / too few.
+    """
+    if INTAKE_UI_FENCE not in message:
+        return message, None
+    try:
+        idx = message.index(INTAKE_UI_FENCE)
+        start = idx + len(INTAKE_UI_FENCE)
+        end = message.index("```", start)
+        raw = message[start:end].strip()
+        meta = json.loads(raw)
+        opts = meta.get("suggested_options")
+        if not isinstance(opts, list):
+            return _merge_without_intake_ui(message, idx, end), None
+        cleaned: List[str] = []
+        for x in opts:
+            s = str(x).strip()
+            if s:
+                cleaned.append(s)
+        cleaned = cleaned[:4]
+        if len(cleaned) < 2:
+            return _merge_without_intake_ui(message, idx, end), None
+        return _merge_without_intake_ui(message, idx, end), cleaned
+    except (ValueError, json.JSONDecodeError):
+        return message, None
+
+
+def strip_session_config_block(message: str) -> str:
+    """Remove the trailing ```json ... ``` session config from display text."""
+    fence = "```json"
+    if fence not in message:
+        return message
+    try:
+        i = message.index(fence)
+        return message[:i].rstrip()
+    except ValueError:
+        return message
 
 
 class IntakeSession:
@@ -231,8 +427,9 @@ class IntakeSession:
         Returns:
             {
                 "status":  "ongoing" | "complete",
-                "message": str,         # Claude's full response text
-                "config":  dict | None  # populated when status == "complete"
+                "message": str,         # Claude text for display (fences stripped)
+                "config":  dict | None,  # populated when status == "complete"
+                "suggested_options": list[str] | None  # 2–4 chips when present
             }
         """
         self.history.append({"role": "user", "content": user_message})
@@ -251,16 +448,22 @@ class IntakeSession:
             self.complete = True
             self.session_config = self._extract_config(assistant_message)
             self.normalize_tier(self.session_config)
+            self.session_config = sanitize_config(self.session_config)
+            display, _opts = extract_display_and_suggestions(assistant_message)
+            display = strip_session_config_block(display)
             return {
                 "status": "complete",
-                "message": assistant_message,
+                "message": display,
                 "config": self.session_config,
+                "suggested_options": None,
             }
 
+        display, suggested = extract_display_and_suggestions(assistant_message)
         return {
             "status": "ongoing",
-            "message": assistant_message,
+            "message": display,
             "config": None,
+            "suggested_options": suggested,
         }
 
     def normalize_tier(self, config: dict) -> None:

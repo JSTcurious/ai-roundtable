@@ -63,7 +63,7 @@ def call_gpt(
 
     return _get_client().chat.completions.create(
         model=model,
-        max_tokens=4096,
+        max_completion_tokens=4096,
         messages=full_messages,
         stream=stream,
     )

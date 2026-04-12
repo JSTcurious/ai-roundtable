@@ -1,27 +1,25 @@
 /**
- * frontend/src/components/common/StreamingText.jsx
- *
- * Renders text that arrives token-by-token from the WebSocket stream.
- *
- * Behavior:
- *   - Renders content as it accumulates — no buffering, no wait
- *   - Shows a blinking cursor while isStreaming is true
- *   - Cursor disappears when isStreaming becomes false
- *
- * Used inside ModelBubble for all streaming model responses.
- * Production AI apps stream. This one streams.
+ * Renders streamed model text; supports multi-character chunks (e.g. Gemini).
+ * Streaming pulse is orange only for Claude (Claude progress node).
  */
 
 import React from "react";
 
-/**
- * @param {Object} props
- * @param {string}  props.content     - accumulated text so far
- * @param {boolean} props.isStreaming - true while tokens are still arriving
- */
-function StreamingText({ content, isStreaming }) {
-  // TODO: render content with streaming cursor indicator
-  return null;
+function StreamingText({ content, isStreaming, sender }) {
+  const pulseClass =
+    sender === "Claude" ? "bg-claude" : "bg-accent-ui";
+
+  return (
+    <div className="whitespace-pre-wrap break-words text-[0.9375rem] leading-relaxed text-text-primary">
+      {content}
+      {isStreaming ? (
+        <span
+          className={`ml-0.5 inline-block h-[1em] w-2 animate-pulse align-[-0.125em] ${pulseClass}`}
+          aria-hidden
+        />
+      ) : null}
+    </div>
+  );
 }
 
 export default StreamingText;

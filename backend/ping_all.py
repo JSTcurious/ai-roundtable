@@ -8,7 +8,6 @@ Usage:
 
 Expects backend/.env to be present with all four API keys.
 Loads the .env file automatically before running pings.
-Perplexity is skipped — deferred to v2.1.
 """
 
 import os
@@ -35,11 +34,17 @@ def main():
     from backend.models.anthropic_client import ping as ping_claude
     from backend.models.google_client import ping as ping_gemini
     from backend.models.openai_client import ping as ping_gpt
+    from backend.models.perplexity_client import ping as ping_perplexity
 
     print("Running pings...\n")
     all_ok = True
 
-    for name, fn in [("Claude", ping_claude), ("Gemini", ping_gemini), ("GPT", ping_gpt)]:
+    for name, fn in [
+        ("Claude", ping_claude),
+        ("Gemini", ping_gemini),
+        ("GPT", ping_gpt),
+        ("Perplexity", ping_perplexity),
+    ]:
         result = fn()
         if result["ok"]:
             print(f"✓ {name:<12} {result['model']}: {result['response']!r}")
@@ -47,10 +52,8 @@ def main():
             print(f"✗ {name:<12} FAILED: {result['error']}")
             all_ok = False
 
-    print(f"⚠ {'Perplexity':<12} SKIPPED: deferred to v2.1")
-
     print()
-    print("Three clients connected." if all_ok else "One or more clients failed.")
+    print("All four clients connected." if all_ok else "One or more clients failed.")
 
 
 if __name__ == "__main__":

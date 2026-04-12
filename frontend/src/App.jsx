@@ -1,29 +1,77 @@
 /**
- * frontend/src/App.jsx
- *
- * Root application component for ai-roundtable v2.
- *
- * The four screens (in order):
- *   1. UseCaseLibrary   — 16 curated cards across 4 families
- *   2. IntakeFlow       — Claude-powered intake conversation
- *   3. SessionView      — live roundtable with streaming model responses
- *   4. SynthesisPanel   — Claude synthesis + Take This Further handoffs
- *
- * State:
- *   screen          — which of the four screens is active
- *   sessionConfig   — populated after intake completes
- *   transcript      — session message history for display
- *
- * Design system: see tailwind.config.js
- * Background: #0d0d0d — inputs always use #1e1e1e (surface), never bg
- * Caret: #E8712A — always
+ * App flow: LandingPage → IntakeFlow → SessionView (incl. TakeFurther).
+ * Resume: Landing .json → SessionView (read-only + export).
  */
 
-import React from "react";
+import React, { useCallback, useState } from "react";
+import LandingPage from "./components/LandingPage";
+import IntakeFlow from "./components/IntakeFlow";
+import SessionView from "./components/SessionView";
+
+const SCREENS = {
+  LANDING: "landing",
+  INTAKE: "intake",
+  SESSION: "session",
+};
 
 function App() {
-  // TODO: implement screen routing and session state
-  return null;
+  const [screen, setScreen] = useState(SCREENS.LANDING);
+  const [intakeMountKey, setIntakeMountKey] = useState(0);
+  const [initialIntakeMessage, setInitialIntakeMessage] = useState(null);
+  const [sessionConfig, setSessionConfig] = useState(null);
+  const [resumeTranscript, setResumeTranscript] = useState(null);
+
+  const handleLandingSubmit = useCallback((text) => {
+    setInitialIntakeMessage(text.trim());
+    setResumeTranscript(null);
+    setIntakeMountKey((k) => k + 1);
+    setScreen(SCREENS.INTAKE);
+  }, []);
+
+  const handleResumeSession = useCallback(({ session_config, transcript }) => {
+    setSessionConfig(session_config);
+    setResumeTranscript(transcript);
+    setInitialIntakeMessage(null);
+    setScreen(SCREENS.SESSION);
+  }, []);
+
+  const handleIntakeComplete = useCallback((config) => {
+    setSessionConfig(config);
+    setResumeTranscript(null);
+    setScreen(SCREENS.SESSION);
+  }, []);
+
+  const handleBackToLanding = useCallback(() => {
+    setScreen(SCREENS.LANDING);
+    setInitialIntakeMessage(null);
+    setSessionConfig(null);
+    setResumeTranscript(null);
+  }, []);
+
+  return (
+    <>
+      {screen === SCREENS.LANDING && (
+        <LandingPage onSubmitDescription={handleLandingSubmit} onResumeSession={handleResumeSession} />
+      )}
+      {screen === SCREENS.INTAKE && (
+        <IntakeFlow
+          key={intakeMountKey}
+          initialUserMessage={initialIntakeMessage}
+          selectedUseCase={null}
+          onComplete={handleIntakeComplete}
+          onBack={handleBackToLanding}
+        />
+      )}
+      {screen === SCREENS.SESSION && sessionConfig && (
+        <SessionView
+          sessionConfig={sessionConfig}
+          resumeTranscript={resumeTranscript}
+          onSynthesisComplete={() => {}}
+          onNavigateHome={handleBackToLanding}
+        />
+      )}
+    </>
+  );
 }
 
 export default App;
