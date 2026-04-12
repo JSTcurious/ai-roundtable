@@ -4,3 +4,5 @@ __pycache__/
 .streamlit/secrets.toml
 .DS_Store
 CLAUDE.md
+frontend/node_modules/
+frontend/.env.local
