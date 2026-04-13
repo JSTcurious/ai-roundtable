@@ -5,22 +5,28 @@ Claude client for ai-roundtable v2 — Anthropic direct API.
 
 Claude's role in the roundtable:
     - Orchestrator: conducts intake, synthesizes final deliverable
-    - Round 1: reasoning, synthesis, natural prose
     - Synthesis: incorporates all model responses + Perplexity audit
 
-Tiers (v2):
+Tiers:
     quick   — claude-sonnet-4-5
+    smart   — executor: claude-sonnet-4-5 → advisor: claude-opus-4-5
     deep    — claude-opus-4-5
-    (Smart tier / advisor pattern deferred to v2.1)
 
 Functions:
     call_claude(messages, tier, system, stream)
-        — primary call function used by intake, Round 1, and synthesis
+        — primary call; intake, streaming Round 1, and synthesis
+    call_claude_smart(messages, system)
+        — two-call executor + advisor pattern for Smart tier
+    call_claude_smart_async(messages, system)
+        — async wrapper; runs call_claude_smart in a thread pool (non-blocking event loop)
     ping()
         — smoke test: confirm API key and connectivity
 """
 
+import asyncio
 import os
+from functools import partial
+
 from anthropic import Anthropic
 
 _client = None
@@ -33,8 +39,19 @@ def _get_client() -> Anthropic:
 
 MODELS = {
     "quick": "claude-sonnet-4-5",
-    "deep": "claude-opus-4-5",
+    "smart": "claude-sonnet-4-5",   # executor model for smart tier
+    "deep":  "claude-opus-4-5",
 }
+
+_ADVISOR_MODEL = "claude-opus-4-5"
+
+_ADVISOR_PROMPT = (
+    "Review this response and produce an improved final version.\n\n"
+    "Original request: {request}\n"
+    "Response to review: {response}\n\n"
+    "Identify gaps, weak reasoning, missing considerations. "
+    "Output only the improved response — no preamble, no explanation."
+)
 
 
 def call_claude(
@@ -68,6 +85,62 @@ def call_claude(
     if stream:
         return _get_client().messages.stream(**kwargs)
     return _get_client().messages.create(**kwargs)
+
+
+def call_claude_smart(messages: list, system: str = None) -> dict:
+    """
+    Two-call executor + advisor pattern for Smart tier.
+
+    1. claude-sonnet-4-5 (executor) produces an initial response.
+    2. claude-opus-4-5 (advisor) reviews it and returns an improved version.
+
+    Args:
+        messages: list of {"role": str, "content": str} dicts
+        system:   optional system prompt string
+
+    Returns:
+        {
+            "executor_text":   str,
+            "advisor_text":    str,   # use this as the final response
+            "executor_tokens": int,   # input + output
+            "advisor_tokens":  int,
+        }
+    """
+    client = _get_client()
+    kwargs = dict(model=MODELS["smart"], max_tokens=4096, messages=messages)
+    if system:
+        kwargs["system"] = system
+    exec_resp = client.messages.create(**kwargs)
+    exec_text = exec_resp.content[0].text
+
+    last_user = next(
+        (m["content"] for m in reversed(messages) if m["role"] == "user"), ""
+    )
+    adv_resp = client.messages.create(
+        model=_ADVISOR_MODEL,
+        max_tokens=4096,
+        messages=[{
+            "role": "user",
+            "content": _ADVISOR_PROMPT.format(request=last_user, response=exec_text),
+        }],
+    )
+    adv_text = adv_resp.content[0].text
+
+    return {
+        "executor_text":   exec_text,
+        "advisor_text":    adv_text,
+        "executor_tokens": exec_resp.usage.input_tokens + exec_resp.usage.output_tokens,
+        "advisor_tokens":  adv_resp.usage.input_tokens + adv_resp.usage.output_tokens,
+    }
+
+
+async def call_claude_smart_async(messages: list, system=None) -> dict:
+    """Async wrapper for smart tier — runs executor then advisor without blocking the event loop."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None,
+        partial(call_claude_smart, messages, system=system),
+    )
 
 
 def ping() -> dict:

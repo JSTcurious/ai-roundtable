@@ -6,19 +6,26 @@ Gemini client for ai-roundtable v2 — Google direct API (google-genai SDK).
 Gemini's role in the roundtable:
     - Round 1: deep reasoning, challenging assumptions
 
-Tiers (v2):
+Tiers:
     quick   — gemini-2.5-flash
+    smart   — executor: gemini-2.5-flash → advisor: gemini-2.5-pro
     deep    — gemini-2.5-pro
-    (Smart tier / advisor pattern deferred to v2.1)
 
 Functions:
     call_gemini(messages, tier, system, stream)
         — primary call function used by Round 1
+    call_gemini_smart(messages, system)
+        — two-call executor + advisor pattern for Smart tier
+    call_gemini_smart_async(messages, system)
+        — async wrapper; runs call_gemini_smart in a thread pool
     ping()
         — smoke test: confirm API key and connectivity
 """
 
+import asyncio
 import os
+from functools import partial
+
 from google import genai
 from google.genai import types
 
@@ -32,8 +39,17 @@ def _get_client() -> genai.Client:
 
 MODELS = {
     "quick": "gemini-2.5-flash",
-    "deep": "gemini-2.5-pro",
+    "smart": "gemini-2.5-flash",   # executor model for smart tier
+    "deep":  "gemini-2.5-pro",
 }
+
+_ADVISOR_PROMPT = (
+    "Review this response and produce an improved final version.\n\n"
+    "Original request: {request}\n"
+    "Response to review: {response}\n\n"
+    "Identify gaps, weak reasoning, missing considerations. "
+    "Output only the improved response — no preamble, no explanation."
+)
 
 
 def call_gemini(
@@ -88,6 +104,59 @@ def call_gemini(
         model=model_name,
         contents=contents,
         config=config,
+    )
+
+
+def call_gemini_smart(messages: list, system: str = None) -> dict:
+    """
+    Two-call executor + advisor pattern for Smart tier.
+
+    1. gemini-2.5-flash (executor) produces an initial response.
+    2. gemini-2.5-pro (advisor) reviews it and returns an improved version.
+
+    Args:
+        messages: list of {"role": str, "content": str} dicts
+        system:   optional system instruction string
+
+    Returns:
+        {
+            "executor_text":   str,
+            "advisor_text":    str,   # use this as the final response
+            "executor_tokens": int,   # prompt + candidates
+            "advisor_tokens":  int,
+        }
+    """
+    exec_resp = call_gemini(messages=messages, tier="smart", system=system)
+    exec_text = exec_resp.text
+
+    last_user = next(
+        (m["content"] for m in reversed(messages) if m["role"] == "user"), ""
+    )
+    adv_resp = call_gemini(
+        messages=[{"role": "user", "content": _ADVISOR_PROMPT.format(request=last_user, response=exec_text)}],
+        tier="deep",  # gemini-2.5-pro
+    )
+    adv_text = adv_resp.text
+
+    exec_meta = exec_resp.usage_metadata
+    adv_meta  = adv_resp.usage_metadata
+
+    return {
+        "executor_text":   exec_text,
+        "advisor_text":    adv_text,
+        "executor_tokens": (getattr(exec_meta, "prompt_token_count", 0) or 0)
+                           + (getattr(exec_meta, "candidates_token_count", 0) or 0),
+        "advisor_tokens":  (getattr(adv_meta,  "prompt_token_count", 0) or 0)
+                           + (getattr(adv_meta,  "candidates_token_count", 0) or 0),
+    }
+
+
+async def call_gemini_smart_async(messages: list, system=None) -> dict:
+    """Async wrapper for smart tier — runs executor then advisor without blocking the event loop."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None,
+        partial(call_gemini_smart, messages, system=system),
     )
 
 

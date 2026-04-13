@@ -14,6 +14,18 @@ const SCREENS = {
   SESSION: "session",
 };
 
+/** Landing “use as-is” path — skip intake, go straight to SessionView. */
+function buildDirectSessionConfig(userInput) {
+  return {
+    optimized_prompt: userInput,
+    session_title: userInput,
+    output_type: "general",
+    tier: "smart",
+    intake_summary: "Direct question — no intake conducted",
+    open_assumptions: ["No intake conducted — output based on question as typed"],
+  };
+}
+
 function App() {
   const [screen, setScreen] = useState(SCREENS.LANDING);
   const [intakeMountKey, setIntakeMountKey] = useState(0);
@@ -26,6 +38,15 @@ function App() {
     setResumeTranscript(null);
     setIntakeMountKey((k) => k + 1);
     setScreen(SCREENS.INTAKE);
+  }, []);
+
+  const handleDirectSession = useCallback((text) => {
+    const t = text.trim();
+    if (!t) return;
+    setSessionConfig(buildDirectSessionConfig(t));
+    setResumeTranscript(null);
+    setInitialIntakeMessage(null);
+    setScreen(SCREENS.SESSION);
   }, []);
 
   const handleResumeSession = useCallback(({ session_config, transcript }) => {
@@ -51,7 +72,11 @@ function App() {
   return (
     <>
       {screen === SCREENS.LANDING && (
-        <LandingPage onSubmitDescription={handleLandingSubmit} onResumeSession={handleResumeSession} />
+        <LandingPage
+          onSubmitDescription={handleLandingSubmit}
+          onDirectSession={handleDirectSession}
+          onResumeSession={handleResumeSession}
+        />
       )}
       {screen === SCREENS.INTAKE && (
         <IntakeFlow

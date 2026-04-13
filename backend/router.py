@@ -4,17 +4,16 @@ backend/router.py
 Model selection and tier routing logic for ai-roundtable v2.
 
 Determines which models participate in a session, which tier
-(Quick / Deep Thinking) each call uses, and the system prompt
-each model receives for Round 1.
+each call uses, and the system prompt each model receives for Round 1.
 
-Tiers (v2):
-    quick         — fast executor model, good for brainstorms and gut checks
-    deep_thinking — full-capability model throughout, for reports and decisions
-    (Smart tier / advisor pattern deferred to v2.1)
+Tiers:
+    quick   — executor model only; fast + cheap; brainstorms and gut checks
+    smart   — executor streams first, advisor improves silently; default recommended
+    deep    — advisor-level model throughout; critical reports and architecture decisions
 
 Constants:
     ROUND1_SYSTEM_PROMPTS   — per-model system prompts for Round 1
-    SYNTHESIS_PROMPT        — Claude synthesis prompt template (v2: no audit input)
+    SYNTHESIS_PROMPT        — Claude synthesis prompt template
 
 Functions:
     get_tier_config(tier)              — model IDs and call strategy for a tier
@@ -27,6 +26,7 @@ from typing import Optional
 from backend.models.anthropic_client import MODELS as CLAUDE_MODELS
 from backend.models.google_client import MODELS as GEMINI_MODELS
 from backend.models.openai_client import MODELS as GPT_MODELS
+from backend.models.perplexity_client import MODELS as PERPLEXITY_MODELS
 
 
 ROUND1_SYSTEM_PROMPTS = {
@@ -91,8 +91,9 @@ Rules:
 
 # Maps tier names as they may arrive from the frontend or session_config
 TIER_ALIASES = {
-    "quick": "quick",
-    "deep": "deep_thinking",
+    "quick":         "quick",
+    "smart":         "smart",
+    "deep":          "deep_thinking",
     "deep_thinking": "deep_thinking",
 }
 
@@ -102,28 +103,70 @@ def get_tier_config(tier: str) -> dict:
     Return the model IDs and calling strategy for a given tier.
 
     Args:
-        tier: "quick" | "deep_thinking" (also accepts "deep")
+        tier: "quick" | "smart" | "deep" | "deep_thinking"
 
-    Returns:
+    Returns (quick / deep_thinking):
         {
-            "claude":  str,   # model ID
-            "gemini":  str,
-            "gpt":     str,
-            "strategy": str,  # "quick" | "deep_thinking"
+            "mode":       "single",
+            "claude":     str,
+            "gemini":     str,
+            "gpt":        str,
+            "perplexity": str,
+            "strategy":   str,
+        }
+
+    Returns (smart):
+        {
+            "mode":            "smart",
+            "claude_executor": str,
+            "claude_advisor":  str,
+            "gemini_executor": str,
+            "gemini_advisor":  str,
+            "gpt_executor":    str,
+            "gpt_advisor":     str,
+            "perplexity":      str,
+            "strategy":        "smart",
         }
 
     Raises ValueError for unrecognised tier names.
     """
     normalised = TIER_ALIASES.get(tier)
     if normalised is None:
-        raise ValueError(f"Unknown tier: {tier!r}. Expected 'quick' or 'deep_thinking'.")
+        raise ValueError(
+            f"Unknown tier: {tier!r}. Expected 'quick', 'smart', 'deep', or 'deep_thinking'."
+        )
 
-    key = "quick" if normalised == "quick" else "deep"
+    if normalised == "quick":
+        return {
+            "mode":       "single",
+            "claude":     CLAUDE_MODELS["quick"],
+            "gemini":     GEMINI_MODELS["quick"],
+            "gpt":        GPT_MODELS["quick"],
+            "perplexity": PERPLEXITY_MODELS["quick"],
+            "strategy":   "quick",
+        }
+
+    if normalised == "smart":
+        return {
+            "mode":            "smart",
+            "claude_executor": CLAUDE_MODELS["smart"],
+            "claude_advisor":  CLAUDE_MODELS["deep"],
+            "gemini_executor": GEMINI_MODELS["smart"],
+            "gemini_advisor":  GEMINI_MODELS["deep"],
+            "gpt_executor":    GPT_MODELS["smart"],
+            "gpt_advisor":     GPT_MODELS["deep"],
+            "perplexity":      PERPLEXITY_MODELS["smart"],
+            "strategy":        "smart",
+        }
+
+    # deep_thinking
     return {
-        "claude":   CLAUDE_MODELS[key],
-        "gemini":   GEMINI_MODELS[key],
-        "gpt":      GPT_MODELS[key],
-        "strategy": normalised,
+        "mode":       "single",
+        "claude":     CLAUDE_MODELS["deep"],
+        "gemini":     GEMINI_MODELS["deep"],
+        "gpt":        GPT_MODELS["deep"],
+        "perplexity": PERPLEXITY_MODELS["deep"],
+        "strategy":   "deep_thinking",
     }
 
 

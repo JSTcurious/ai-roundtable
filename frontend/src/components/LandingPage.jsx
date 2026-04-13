@@ -1,8 +1,8 @@
 /**
- * Landing — entry screen. No use-case library; submit opens intake.
+ * Landing — entry screen. Quick vs Refined toggle; submit runs selected path.
  */
 
-import React, { useCallback, useRef, useState } from "react";
+import React, { Fragment, useCallback, useRef, useState } from "react";
 
 function parseResumePayload(raw) {
   let data;
@@ -25,23 +25,16 @@ function parseResumePayload(raw) {
   return { session_config, transcript };
 }
 
-function roomDotStyle(backgroundColor) {
-  return {
-    width: 12,
-    height: 12,
-    borderRadius: "50%",
-    flexShrink: 0,
-    backgroundColor,
-  };
-}
-
 /**
  * @param {Object} props
- * @param {function(string)} props.onSubmitDescription — trimmed text → navigate to IntakeFlow
+ * @param {function(string)} props.onSubmitDescription — trimmed text → IntakeFlow (same as → submit)
+ * @param {function(string)} props.onDirectSession — trimmed text → SessionView, skip intake
  * @param {function({ session_config: object, transcript: object })} props.onResumeSession — valid resume payload
  */
-function LandingPage({ onSubmitDescription, onResumeSession }) {
+function LandingPage({ onSubmitDescription, onDirectSession, onResumeSession }) {
   const [draft, setDraft] = useState("");
+  /** "refined" = intake first (default); "quick" = straight to roundtable */
+  const [pathMode, setPathMode] = useState("refined");
   const [resumeHint, setResumeHint] = useState(null);
   const fileRef = useRef(null);
 
@@ -50,9 +43,13 @@ function LandingPage({ onSubmitDescription, onResumeSession }) {
       e.preventDefault();
       const t = draft.trim();
       if (!t) return;
+      if (pathMode === "quick") {
+        if (typeof onDirectSession === "function") onDirectSession(t);
+        return;
+      }
       onSubmitDescription(t);
     },
-    [draft, onSubmitDescription]
+    [draft, pathMode, onSubmitDescription, onDirectSession]
   );
 
   const handleFile = useCallback(
@@ -80,6 +77,52 @@ function LandingPage({ onSubmitDescription, onResumeSession }) {
     [onResumeSession]
   );
 
+  const panelRows = [
+    { key: "you", name: "You", role: "Chair", nameColor: "#F0A500" },
+    { key: "claude", name: "Claude", role: "Orchestrator", nameColor: "#E8712A" },
+    { key: "gemini", name: "Gemini", role: "Deep reasoner", nameColor: "#4285F4" },
+    { key: "gpt", name: "GPT", role: "Structurer", nameColor: "#10A37F" },
+    {
+      key: "perplexity",
+      name: "Perplexity",
+      role: "Live researcher + fact-checker",
+      nameColor: "#20808D",
+    },
+  ];
+
+  const howRowBodies = [
+    <span key="how-0" className="text-[#e8e8e8]">
+      <span style={{ color: "#F0A500", fontWeight: "bold" }}>You</span>
+      <span style={{ color: "#e8e8e8" }}>:</span>{" "}
+      describe your situation, however you want
+    </span>,
+    <span key="how-1" className="text-[#e8e8e8]">
+      <span style={{ color: "#E8712A", fontWeight: "bold" }}>Claude</span>{" "}
+      <span style={{ color: "#e8e8e8" }}>↔</span>{" "}
+      <span style={{ color: "#F0A500", fontWeight: "bold" }}>You</span>
+      <span style={{ color: "#e8e8e8" }}>:</span>{" "}
+      Intent capture via questions
+    </span>,
+    <span key="how-2" className="text-[#e8e8e8]">
+      <span style={{ color: "#4285F4", fontWeight: "bold" }}>Gemini</span> +{" "}
+      <span style={{ color: "#10A37F", fontWeight: "bold" }}>GPT</span>
+      <span style={{ color: "#e8e8e8" }}>:</span>{" "}
+      research independently
+    </span>,
+    <span key="how-3" className="text-[#e8e8e8]">
+      <span style={{ color: "#20808D", fontWeight: "bold" }}>Perplexity</span>
+      <span style={{ color: "#e8e8e8" }}>:</span>{" "}
+      adds live web + citations
+    </span>,
+    <span key="how-4" className="text-[#e8e8e8]">
+      <span style={{ color: "#E8712A", fontWeight: "bold" }}>Claude</span>{" "}
+      <span style={{ color: "#e8e8e8" }}>↔</span>{" "}
+      <span style={{ color: "#F0A500", fontWeight: "bold" }}>You</span>
+      <span style={{ color: "#e8e8e8" }}>:</span>{" "}
+      one expert answer
+    </span>,
+  ];
+
   return (
     <div className="min-h-screen bg-bg text-text-primary">
       <div className="mx-auto w-full max-w-[720px] px-6 py-16 pb-28 sm:py-20 sm:pb-32">
@@ -97,7 +140,7 @@ function LandingPage({ onSubmitDescription, onResumeSession }) {
             <span>ai-roundtable</span>
           </h1>
           <p className="mt-3 text-base text-text-secondary sm:text-lg">
-            Putting the best frontier minds to work.
+            You and the right experts. One room. No FOMO.
           </p>
         </header>
 
@@ -109,15 +152,16 @@ function LandingPage({ onSubmitDescription, onResumeSession }) {
                 type="text"
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
-                placeholder="Describe what you're working on..."
+                placeholder="What do you need to figure out?"
                 className="w-full rounded-lg border border-border bg-surface py-3 pl-4 pr-14 text-sm text-text-primary caret-chrome placeholder:text-text-secondary focus:border-border-focus focus:outline-none"
+                autoFocus
                 autoComplete="off"
-                aria-label="Describe what you are working on"
+                aria-label="What you need to figure out"
               />
               <button
                 type="submit"
                 className="absolute right-2 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-md border border-border text-text-primary transition-colors hover:border-accent-ui focus:border-border-focus focus:outline-none"
-                aria-label="Continue to intake"
+                aria-label={pathMode === "quick" ? "Start roundtable" : "Continue to intake"}
               >
                 <span className="text-lg leading-none" aria-hidden>
                   →
@@ -125,15 +169,56 @@ function LandingPage({ onSubmitDescription, onResumeSession }) {
               </button>
             </div>
           </form>
-          <div className="mt-3 text-left">
-            <input ref={fileRef} type="file" accept=".json,application/json" className="hidden" onChange={handleFile} />
-            <button
-              type="button"
-              onClick={() => fileRef.current?.click()}
-              className="text-left text-sm text-text-secondary underline decoration-text-secondary/40 underline-offset-4 transition-colors hover:text-text-primary hover:decoration-text-primary/60"
+          <div className="mt-4 space-y-3 text-left">
+            <div
+              role="radiogroup"
+              aria-label="Start mode"
+              className="inline-flex rounded-full border border-[#2a2a2a] bg-[#1e1e1e] p-1"
             >
-              📂 Resume a saved session
-            </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={pathMode === "quick"}
+                onClick={() => setPathMode("quick")}
+                className={`rounded-full px-5 py-2 text-[0.875rem] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-border-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${
+                  pathMode === "quick"
+                    ? "bg-[#2a2a2a] font-medium text-[#e8e8e8]"
+                    : "bg-transparent font-normal text-[#888888]"
+                }`}
+              >
+                <span aria-hidden>⚡</span>{" "}
+                Quick
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={pathMode === "refined"}
+                onClick={() => setPathMode("refined")}
+                className={`rounded-full px-5 py-2 text-[0.875rem] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-border-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${
+                  pathMode === "refined"
+                    ? "bg-[#2a2a2a] font-medium text-[#e8e8e8]"
+                    : "bg-transparent font-normal text-[#888888]"
+                }`}
+              >
+                <span aria-hidden>✨</span>{" "}
+                Refined
+              </button>
+            </div>
+            <p className="text-xs leading-relaxed text-[#888888] sm:text-sm" role="status">
+              {pathMode === "quick"
+                ? "Goes straight to the roundtable"
+                : "Claude asks smart questions first (recommended)"}
+            </p>
+            <div>
+              <input ref={fileRef} type="file" accept=".json,application/json" className="hidden" onChange={handleFile} />
+              <button
+                type="button"
+                onClick={() => fileRef.current?.click()}
+                className="text-left text-sm text-[#888888] underline decoration-[#888888]/40 underline-offset-4 transition-colors hover:text-text-primary hover:decoration-text-primary/60"
+              >
+                📂 Resume a saved session
+              </button>
+            </div>
             {resumeHint && (
               <p className="mt-2 text-sm text-red-400" role="alert">
                 {resumeHint}
@@ -145,81 +230,41 @@ function LandingPage({ onSubmitDescription, onResumeSession }) {
         {/* 3. Divider */}
         <hr className="my-12 border-0 border-t border-border" />
 
-        {/* 4. Two columns */}
-        <div className="grid gap-10 sm:grid-cols-2 sm:gap-8">
-          <section aria-labelledby="room-heading">
-            <h2 id="room-heading" className="mb-4 text-sm font-semibold uppercase tracking-wide text-text-primary">
-              THE ROOM
-            </h2>
-            <div className="space-y-3 text-sm leading-relaxed">
-              <div className="flex flex-wrap items-center gap-x-2">
-                <span className="shrink-0 rounded-full" style={roomDotStyle("#E8712A")} aria-hidden />
-                <span className="font-semibold text-text-primary">Claude</span>
-                <span className="text-[#888888]">Orchestrator</span>
-              </div>
-              <div className="flex flex-wrap items-center gap-x-2">
-                <span className="shrink-0 rounded-full" style={roomDotStyle("#4285F4")} aria-hidden />
-                <span className="font-semibold text-text-primary">Gemini</span>
-                <span className="text-[#888888]">Deep reasoner</span>
-              </div>
-              <div className="flex flex-wrap items-center gap-x-2">
-                <span className="shrink-0 rounded-full" style={roomDotStyle("#10A37F")} aria-hidden />
-                <span className="font-semibold text-text-primary">GPT</span>
-                <span className="text-[#888888]">Structurer</span>
-              </div>
-              <div className="flex flex-wrap items-center gap-x-2">
-                <span className="shrink-0 rounded-full" style={roomDotStyle("#20808D")} aria-hidden />
-                <span className="font-semibold text-text-primary">Perplexity</span>
-                <span className="text-[#888888]">Live researcher + fact-checker</span>
-              </div>
-            </div>
-          </section>
-
-          <section aria-labelledby="how-heading" className="min-w-0 overflow-x-hidden">
-            <h2 id="how-heading" className="mb-4 text-sm font-normal uppercase tracking-wide text-[#e8e8e8]">
-              HOW IT WORKS
-            </h2>
-            <ul className="list-none space-y-3 p-0 text-sm font-normal leading-normal text-[#e8e8e8]">
-              <li>
-                <span className="mr-2 inline-block text-sm text-[#888888]">•</span>
-                <span className="text-[#e8e8e8]">You describe your situation</span>
-              </li>
-              <li>
-                <span className="mr-2 inline-block text-sm text-[#888888]">•</span>
-                <span className="text-[#e8e8e8]">
-                  <span style={{ color: "#E8712A", fontWeight: "bold" }}>Claude</span> clarifies your intent through probing
+        {/* 4. Two columns — paired rows share min-height for horizontal alignment */}
+        <div className="grid min-w-0 grid-cols-2 items-start gap-x-8 gap-y-0">
+          <h2
+            id="panel-heading"
+            className="mb-4 text-sm font-semibold uppercase tracking-wide leading-snug text-text-primary"
+          >
+            THE PANEL
+          </h2>
+          <h2
+            id="how-heading"
+            className="mb-4 text-sm font-semibold uppercase tracking-wide leading-snug text-text-primary"
+          >
+            HOW IT WORKS
+          </h2>
+          {panelRows.map((row, i) => (
+            <Fragment key={row.key}>
+              <div className="flex min-h-[36px] flex-wrap items-center gap-x-2 text-sm leading-relaxed">
+                <span className="mr-2 inline-block shrink-0 text-sm text-[#888888]" aria-hidden>
+                  •
                 </span>
-              </li>
-              <li>
-                <span className="mr-2 inline-block text-sm text-[#888888]">•</span>
-                <span className="text-[#e8e8e8]">
-                  <span style={{ color: "#4285F4", fontWeight: "bold" }}>Gemini</span> +{" "}
-                  <span style={{ color: "#10A37F", fontWeight: "bold" }}>GPT</span> research independently
+                <span className="font-semibold" style={{ color: row.nameColor }}>
+                  {row.name}
                 </span>
-              </li>
-              <li>
-                <span className="mr-2 inline-block text-sm text-[#888888]">•</span>
-                <span className="text-[#e8e8e8]">
-                  <span style={{ color: "#20808D", fontWeight: "bold" }}>Perplexity</span> adds live web + citations
+                <span style={{ color: "#e8e8e8" }}>:</span>{" "}
+                <span className="text-[#e8e8e8]">{row.role}</span>
+              </div>
+              <div className="flex min-h-[36px] items-center text-sm font-normal leading-normal min-w-0 overflow-x-hidden">
+                <span className="mr-2 inline-block shrink-0 text-sm text-[#888888]" aria-hidden>
+                  •
                 </span>
-              </li>
-              <li>
-                <span className="mr-2 inline-block text-sm text-[#888888]">•</span>
-                <span className="text-[#e8e8e8]">
-                  <span style={{ color: "#E8712A", fontWeight: "bold" }}>Claude</span> synthesizes — one deliverable
-                </span>
-              </li>
-            </ul>
-          </section>
+                {howRowBodies[i]}
+              </div>
+            </Fragment>
+          ))}
         </div>
-
-        {/* 5. Divider */}
-        <hr className="my-12 border-0 border-t border-border" />
-
-        {/* 6. Bottom tagline */}
-        <p className="mt-2 text-center text-sm leading-relaxed text-[#888888]">
-          All the right experts. One room. No FOMO.
-        </p>
       </div>
     </div>
   );

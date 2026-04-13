@@ -43,7 +43,8 @@ def _get_client() -> OpenAI:
 
 MODELS = {
     "quick": "sonar",
-    "deep": "sonar-pro",
+    "smart": "sonar-pro",   # sonar-pro for smart tier
+    "deep":  "sonar-pro",
 }
 
 

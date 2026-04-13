@@ -11,9 +11,11 @@ session config before a single frontier model is invoked.
 Classes:
     IntakeSession   — manages a single intake conversation with history
                       and extracts the JSON session config on completion
+    RefineSession   — two-step prompt refinement loop (probe → confirm)
 
 Constants:
-    INTAKE_SYSTEM_PROMPT  — full master system prompt for the intake conductor
+    INTAKE_SYSTEM_PROMPT      — full master system prompt for intake
+    REFINEMENT_SYSTEM_PROMPT  — system prompt template for prompt refinement
 
 Notes:
     Intake always uses claude-sonnet-4-5 regardless of the session tier
@@ -133,8 +135,23 @@ have everything they need. Answer what you can — if anything \
 feels irrelevant or you'd rather just get started, just say so."
 
 ### LEARNING_CAREER questions (ask what's relevant):
-- Current role and years of experience
-- Tech stack and daily tools
+
+**Engineering background** — always ask this first, as two questions in sequence:
+
+Q1: "What best describes your current engineering background?"
+INTAKE_OPTIONS: ["Data/Software engineer, Python + SQL stack", \
+"Backend engineer, Java/Node/Go", \
+"Full-stack engineer, web + APIs", \
+"DevOps/Platform engineer"]
+
+Q2: "How long have you been working in this role?"
+INTAKE_OPTIONS: ["0-2 years", "3-5 years", "6-10 years", "10+ years"]
+
+These two questions together give you: role type, current tech stack, \
+and experience level — everything needed to calibrate the optimized prompt. \
+Never collapse them into one vague question like "What's your background?"
+
+**Remaining questions (ask what's relevant):**
 - Prior exposure to target domain
 - Math/foundational background if relevant
 - Hours available per week
@@ -205,7 +222,7 @@ Then output the session config as JSON:
     "deadline": "6 months, job search Month 5"
   },
   "output_type": "roadmap",
-  "tier": "deep",
+  "tier": "smart",
   "recommended_seats": ["claude", "gemini", "gpt"],
   "perplexity_audit_focus": "Current AI engineer job requirements and top skills as of April 2026",
   "open_assumptions": [
@@ -219,21 +236,46 @@ Then output the session config as JSON:
 ## Tier Selection
 
 Choose "tier" based on the declared output type:
-- "quick"  — brainstorms, gut checks, simple Q&A
-- "deep"   — roadmaps, reports, evaluations, architecture decisions, strategic plans
+- "quick"  — brainstorms, gut checks, simple Q&A (fast, cheap)
+- "smart"  — most work: research, plans, evaluations, decisions. \
+Near-Deep quality. **Recommended default.**
+- "deep"   — critical reports, architecture reviews, strategic plans \
+where maximum depth is worth the extra time and cost
 
-Default to "deep" for anything the user will act on. Only use "quick" if they
-explicitly want speed over depth.
+Default to "smart" for most sessions. \
+Use "deep" only when the user explicitly needs maximum depth. \
+Use "quick" only if they explicitly want speed over depth.
+
+## The Specificity Principle
+
+**Specific questions produce specific prompts. Generic questions produce generic prompts.**
+
+Every question you ask must be specific enough that the answer \
+directly changes what goes into the optimized prompt. \
+If the answer wouldn't change the prompt, don't ask the question.
+
+Bad: "Tell me about your background." \
+Good: "What best describes your current engineering background?" \
+      (with options that name actual role types and stacks)
+
+Bad: "What are your goals?" \
+Good: "What role are you targeting — AI Application Engineer, \
+ML Engineer, MLOps, or something else?"
+
+The user's exact situation must appear in the optimized prompt — \
+not a generic paraphrase of it.
 
 ## Quality Bar for the Optimized Prompt
 
 The optimized prompt must:
 - Contain no assumptions that weren't confirmed in intake
-- Specify the user's exact situation, not a generic version
-- Name the desired output format explicitly
-- Include constraints that will affect the answer
+- Name the user's specific role type, stack, and experience level — \
+  not "an engineer" or "someone with some experience"
+- Specify the desired output format explicitly
+- Include constraints that will directly affect the answer \
+  (hours/week, deadline, learning style, budget)
 - Tell the models what good looks like for this specific user
-- Be specific enough that two different frontier models
+- Be specific enough that two different frontier models \
   produce meaningfully different, non-generic responses
 
 ## Intake Options — suggested answer chips (every question turn)
@@ -260,20 +302,32 @@ Rules:
 
 Good examples (wording must fit the actual question — these are patterns only):
 
-- Asking about current role:
-  INTAKE_OPTIONS: ["Software Engineer", "Data Engineer", "Product Manager", "Something else"]
+- Asking about engineering background (Q1):
+  INTAKE_OPTIONS: ["Data/Software engineer, Python + SQL stack", \
+"Backend engineer, Java/Node/Go", \
+"Full-stack engineer, web + APIs", \
+"DevOps/Platform engineer"]
 
-- Asking about hours per week:
-  INTAKE_OPTIONS: ["5-10 hrs/week", "10-15 hrs/week", "15-20 hrs/week", "20+ hrs/week"]
+- Asking about years in role (Q2):
+  INTAKE_OPTIONS: ["0-2 years", "3-5 years", "6-10 years", "10+ years"]
 
 - Asking about target role:
   INTAKE_OPTIONS: ["AI Application Engineer", "ML Engineer", "MLOps Engineer", "Not sure yet"]
+
+- Asking about hours per week:
+  INTAKE_OPTIONS: ["5-10 hrs/week", "10-15 hrs/week", "15-20 hrs/week", "20+ hrs/week"]
 
 - After a mirror of a career transition:
   INTAKE_OPTIONS: ["Yes, that's right", "Mostly — a few details to add", "Not quite — I'll clarify"]
 
 - Asking about timeline:
-  INTAKE_OPTIONS: ["Within 3 months", "3–6 months", "6–12 months", "No fixed deadline"]
+  INTAKE_OPTIONS: ["Within 3 months", "3-6 months", "6-12 months", "No fixed deadline"]
+
+- Asking about learning style:
+  INTAKE_OPTIONS: ["Hands-on projects", "Structured courses", "Reading docs + papers", "Mix of all three"]
+
+- Asking about decision deadline (RESEARCH_DECISION):
+  INTAKE_OPTIONS: ["This week", "This month", "Next quarter", "No hard deadline"]
 
 ## Tone Throughout
 
@@ -402,6 +456,7 @@ class IntakeSession:
         self.history = []
         self.complete = False
         self.session_config = None
+        self.active_refine: Optional["RefineSession"] = None
 
     def start(self) -> str:
         """
@@ -470,19 +525,90 @@ class IntakeSession:
         """
         Normalise the tier field in-place before the config leaves intake.
 
-        Smart tier is deferred to v2.1. If Claude recommends "smart" (which
-        it may from historical training data), map it to "deep" — the closest
-        equivalent without the advisor pattern.
+        Preserve "smart" for the approval UI; backend maps smart → deep-capable
+        models at session time until the advisor pattern is fully wired.
 
         Mapping:
-            "smart"  → "deep"   (v2.1 feature, use deep as closest equivalent)
-            "quick"  → "quick"  (no change)
-            "deep"   → "deep"   (no change)
-            anything else → "deep"  (safe default for unknown values)
+            "quick"  → "quick"
+            "smart"  → "smart"
+            "deep" / "deep_thinking" → "deep"
+            anything else → "deep"
         """
-        TIER_MAP = {"quick": "quick", "deep": "deep", "smart": "deep"}
+        TIER_MAP = {"quick": "quick", "deep": "deep", "deep_thinking": "deep", "smart": "smart"}
         current = config.get("tier", "deep")
         config["tier"] = TIER_MAP.get(current, "deep")
+
+    def refine(self, user_message: str) -> dict:
+        """
+        Post-intake prompt refinement (POST /api/intake/refine).
+
+        First call while ``active_refine`` is None: starts :class:`RefineSession`
+        and returns a probing question + optional chip options.
+
+        Second call: passes the user's answer to ``confirm()`` and merges the
+        rewritten ``optimized_prompt`` into ``session_config``.
+
+        Returns:
+            {
+                "status": "probing" | "refined",
+                "message": str,
+                "suggested_options": list[str] | None,
+                "config": dict | None,
+            }
+        """
+        if not self.session_config:
+            raise ValueError("Intake session has no config — refine only after intake completes.")
+        prompt = self.session_config.get("optimized_prompt")
+        if prompt is None:
+            prompt = self.session_config.get("optimizedPrompt")
+        if not isinstance(prompt, str) or not str(prompt).strip():
+            raise ValueError("session_config is missing optimized_prompt.")
+
+        msg = (user_message or "").strip()
+        if not msg:
+            raise ValueError("Message must not be empty.")
+
+        if self.active_refine is None:
+            self.active_refine = RefineSession(str(prompt).strip(), msg)
+            pr = self.active_refine.probe()
+            opts = pr.get("suggested_options")
+            if isinstance(opts, list):
+                opts = [sanitize_text(str(x).strip()) for x in opts if str(x).strip()]
+                if len(opts) < 2:
+                    opts = None
+            else:
+                opts = None
+            return {
+                "status": "probing",
+                "message": sanitize_text(pr.get("question") or ""),
+                "suggested_options": opts,
+                "config": None,
+            }
+
+        cr = self.active_refine.confirm(msg)
+        self.active_refine = None
+        new_prompt = cr.get("updated_prompt") or ""
+        if isinstance(new_prompt, str) and new_prompt.strip():
+            merged = dict(self.session_config)
+            merged["optimized_prompt"] = new_prompt.strip()
+            self.session_config = sanitize_config(merged)
+        opts = cr.get("suggested_options")
+        if isinstance(opts, list):
+            opts = [sanitize_text(str(x).strip()) for x in opts if str(x).strip()]
+            if len(opts) < 2:
+                opts = None
+        else:
+            opts = None
+        return {
+            "status": "refined",
+            "message": sanitize_text(cr.get("question") or ""),
+            "suggested_options": opts,
+            "config": self.session_config,
+        }
+
+    def clear_refine(self) -> None:
+        """Discard an in-progress RefineSession (e.g. user left the refine flow)."""
+        self.active_refine = None
 
     def _extract_config(self, message: str) -> dict:
         """
@@ -500,3 +626,186 @@ class IntakeSession:
         except (ValueError, json.JSONDecodeError) as e:
             print(f"[intake] Config extraction failed: {e}")
             return {}
+
+
+# ── Prompt refinement loop ────────────────────────────────────────────────────
+
+REFINEMENT_SYSTEM_PROMPT = """\
+You are refining an optimized prompt for a roundtable discussion \
+with frontier AI models.
+
+The current prompt is:
+{current_prompt}
+
+The user wants to adjust or add something.
+Your job:
+1. Ask ONE probing question to fully understand their intent — \
+   do not just append their feedback, understand what they actually need.
+2. When you have the answer, rewrite the entire prompt holistically — \
+   not appending, fully restructuring to incorporate the new context.
+
+The refined prompt must:
+- Preserve all the context from the original intake
+- Incorporate the new information naturally
+- Remain specific, not generic
+- Be better than the original
+
+Always end by asking if they are satisfied or want to refine further.
+
+**Important:** Output plain ASCII/UTF-8 text only. \
+No Unicode directional formatting characters or bidi overrides.
+"""
+
+_REFINED_PROMPT_FENCE = "```refined-prompt"
+
+
+def _strip_refined_prompt_block(message: str) -> str:
+    """Remove a ```refined-prompt ... ``` block from display text."""
+    if _REFINED_PROMPT_FENCE not in message:
+        return message
+    try:
+        i   = message.index(_REFINED_PROMPT_FENCE)
+        end = message.index("```", i + len(_REFINED_PROMPT_FENCE))
+        before = message[:i].rstrip()
+        after  = message[end + 3:].lstrip()
+        if before and after:
+            return f"{before}\n\n{after}".strip()
+        return (before or after).strip()
+    except ValueError:
+        return message
+
+
+def _extract_refined_prompt(message: str) -> Optional[str]:
+    """
+    Extract the refined optimized prompt from a ```refined-prompt ... ``` block.
+    Returns None if the block is absent or unparseable.
+    """
+    if _REFINED_PROMPT_FENCE not in message:
+        return None
+    try:
+        start = message.index(_REFINED_PROMPT_FENCE) + len(_REFINED_PROMPT_FENCE)
+        end   = message.index("```", start)
+        return message[start:end].strip() or None
+    except ValueError:
+        return None
+
+
+class RefineSession:
+    """
+    Two-step prompt refinement loop.
+
+    Step 1 — probe():
+        Claude reads the current optimized prompt and the user's feedback,
+        then asks ONE probing question to understand the intent behind the request.
+
+    Step 2 — confirm(probe_answer):
+        Claude rewrites the entire optimized prompt holistically, incorporating
+        the new context. Returns the updated prompt and a confirmation question.
+
+    Usage:
+        session = RefineSession(current_prompt, user_feedback)
+        result  = session.probe()
+        # result["status"] == "probing"
+        # send result["question"] + result["suggested_options"] to frontend
+
+        result2 = session.confirm(probe_answer)
+        # result2["status"] == "refined"
+        # result2["updated_prompt"] is the new complete optimized prompt
+    """
+
+    def __init__(self, current_prompt: str, user_feedback: str):
+        self.current_prompt = current_prompt
+        self.user_feedback  = user_feedback
+        self.history: List[dict] = []
+
+    def _system(self, extra: str = "") -> str:
+        base = REFINEMENT_SYSTEM_PROMPT.format(current_prompt=self.current_prompt)
+        return f"{base}\n{extra}".strip() if extra else base
+
+    def probe(self) -> dict:
+        """
+        Step 1 — ask one probing question.
+
+        Returns:
+            {
+                "status":           "probing",
+                "question":         str,
+                "suggested_options": list[str] | None,
+                "updated_prompt":   None,
+            }
+        """
+        user_msg = (
+            f"The user wants to adjust: {self.user_feedback}\n\n"
+            "Ask your ONE probing question to understand their intent fully. "
+            "End with INTAKE_OPTIONS: [\"option A\", \"option B\", \"option C\"]"
+        )
+        self.history.append({"role": "user", "content": user_msg})
+
+        response = call_claude(
+            messages=self.history,
+            tier=INTAKE_MODEL_TIER,
+            system=self._system(),
+        )
+        assistant_text = response.content[0].text
+        self.history.append({"role": "assistant", "content": assistant_text})
+
+        display, options = extract_display_and_suggestions(assistant_text)
+        display = sanitize_text(display)
+
+        return {
+            "status":            "probing",
+            "question":          display,
+            "suggested_options": options,
+            "updated_prompt":    None,
+        }
+
+    def confirm(self, probe_answer: str) -> dict:
+        """
+        Step 2 — rewrite the optimized prompt based on the probe answer.
+
+        Args:
+            probe_answer: the user's answer to the probing question
+
+        Returns:
+            {
+                "status":           "refined",
+                "updated_prompt":   str,   # new complete optimized prompt
+                "question":         str,   # confirmation question for the user
+                "suggested_options": ["Yes — looks good",
+                                      "I'd like to adjust something else"],
+            }
+        """
+        if not self.history:
+            raise RuntimeError("confirm() called before probe() — no conversation history.")
+
+        self.history.append({"role": "user", "content": probe_answer})
+
+        extra_instructions = (
+            "Now rewrite the full optimized prompt holistically. "
+            "Output it inside a ```refined-prompt ... ``` fenced block. "
+            "After the block, ask a short confirmation question. "
+            "End with: "
+            'INTAKE_OPTIONS: ["Yes — looks good", "I\'d like to adjust something else"]'
+        )
+
+        response = call_claude(
+            messages=self.history,
+            tier=INTAKE_MODEL_TIER,
+            system=self._system(extra_instructions),
+        )
+        assistant_text = response.content[0].text
+        self.history.append({"role": "assistant", "content": assistant_text})
+
+        updated_prompt = _extract_refined_prompt(assistant_text)
+        display, options = extract_display_and_suggestions(assistant_text)
+        display = sanitize_text(_strip_refined_prompt_block(display))
+
+        if options is None:
+            options = ["Yes — looks good", "I'd like to adjust something else"]
+
+        return {
+            "status":            "refined",
+            "updated_prompt":    sanitize_text(updated_prompt or self.current_prompt),
+            "question":          display or "Does this capture it now, or would you like to refine further?",
+            "suggested_options": options,
+        }

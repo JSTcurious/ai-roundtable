@@ -6,19 +6,24 @@ GPT client for ai-roundtable v2 — OpenAI direct API.
 GPT's role in the roundtable:
     - Round 1: structure, actionability, breadth
 
-Tiers (v2):
+Tiers:
     quick   — gpt-4o
+    smart   — executor: gpt-4o → advisor: gpt-4o (gpt-5 when available)
     deep    — gpt-5
-    (Smart tier / advisor pattern deferred to v2.1)
 
 Functions:
     call_gpt(messages, tier, system, stream)
         — primary call function used by Round 1
+    call_gpt_smart(messages, system)
+        — two-call executor + advisor pattern for Smart tier
     ping()
         — smoke test: confirm API key and connectivity
 """
 
+import asyncio
 import os
+from functools import partial
+
 from openai import OpenAI
 
 _client = None
@@ -31,8 +36,21 @@ def _get_client() -> OpenAI:
 
 MODELS = {
     "quick": "gpt-4o",
-    "deep": "gpt-5",
+    "smart": "gpt-4o",   # executor model for smart tier
+    "deep":  "gpt-5",
 }
+
+# gpt-5 as advisor; fall back to gpt-4o if not yet available on this account
+_ADVISOR_MODEL = "gpt-5"
+_ADVISOR_MODEL_FALLBACK = "gpt-4o"
+
+_ADVISOR_PROMPT = (
+    "Review this response and produce an improved final version.\n\n"
+    "Original request: {request}\n"
+    "Response to review: {response}\n\n"
+    "Identify gaps, weak reasoning, missing considerations. "
+    "Output only the improved response — no preamble, no explanation."
+)
 
 
 def call_gpt(
@@ -66,6 +84,71 @@ def call_gpt(
         max_completion_tokens=4096,
         messages=full_messages,
         stream=stream,
+    )
+
+
+def call_gpt_smart(messages: list, system: str = None) -> dict:
+    """
+    Two-call executor + advisor pattern for Smart tier.
+
+    1. gpt-4o (executor) produces an initial response.
+    2. gpt-5 (advisor) reviews it and returns an improved version.
+       Falls back to gpt-4o advisor if gpt-5 is unavailable.
+
+    Args:
+        messages: list of {"role": str, "content": str} dicts
+        system:   optional system prompt — prepended as system message
+
+    Returns:
+        {
+            "executor_text":   str,
+            "advisor_text":    str,   # use this as the final response
+            "executor_tokens": int,   # prompt + completion
+            "advisor_tokens":  int,
+        }
+    """
+    exec_resp = call_gpt(messages=messages, tier="smart", system=system)
+    exec_text = exec_resp.choices[0].message.content
+
+    last_user = next(
+        (m["content"] for m in reversed(messages) if m["role"] == "user"), ""
+    )
+    advisor_messages = [{
+        "role": "user",
+        "content": _ADVISOR_PROMPT.format(request=last_user, response=exec_text),
+    }]
+
+    try:
+        adv_resp = _get_client().chat.completions.create(
+            model=_ADVISOR_MODEL,
+            max_completion_tokens=4096,
+            messages=advisor_messages,
+        )
+    except Exception as e:
+        if "404" in str(e) or "model" in str(e).lower():
+            adv_resp = _get_client().chat.completions.create(
+                model=_ADVISOR_MODEL_FALLBACK,
+                max_completion_tokens=4096,
+                messages=advisor_messages,
+            )
+        else:
+            raise
+    adv_text = adv_resp.choices[0].message.content
+
+    return {
+        "executor_text":   exec_text,
+        "advisor_text":    adv_text,
+        "executor_tokens": exec_resp.usage.prompt_tokens + exec_resp.usage.completion_tokens,
+        "advisor_tokens":  adv_resp.usage.prompt_tokens + adv_resp.usage.completion_tokens,
+    }
+
+
+async def call_gpt_smart_async(messages: list, system=None) -> dict:
+    """Async wrapper for smart tier — runs executor then advisor without blocking the event loop."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None,
+        partial(call_gpt_smart, messages, system=system),
     )
 
 

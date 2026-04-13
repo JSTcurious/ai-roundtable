@@ -56,12 +56,23 @@ from starlette.websockets import WebSocketDisconnect
 from backend.intake import IntakeSession, OPENING_SUGGESTED_OPTIONS
 from backend.transcript import Transcript
 from backend.router import (
-    get_tier_config, get_round1_system_prompt, build_synthesis_prompt,
-    USE_CASE_LIBRARY, get_use_case,
+    get_tier_config,
+    get_round1_system_prompt,
+    build_synthesis_prompt,
+    USE_CASE_LIBRARY,
+    get_use_case,
 )
-from backend.models.anthropic_client import call_claude
-from backend.models.google_client import call_gemini
-from backend.models.openai_client import call_gpt
+from backend.models.anthropic_client import (
+    call_claude,
+    call_claude_smart,
+    call_claude_smart_async,
+)
+from backend.models.google_client import (
+    call_gemini,
+    call_gemini_smart,
+    call_gemini_smart_async,
+)
+from backend.models.openai_client import call_gpt, call_gpt_smart, call_gpt_smart_async
 from backend.models.perplexity_client import (
     research as perplexity_research,
     audit as perplexity_audit,
@@ -77,8 +88,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# In-memory session store — maps session_id → IntakeSession
-# Sufficient for v2 (single-user, single-server). Replace with Redis for multi-user.
+# In-memory session store — sufficient for v2. Replace with Redis for multi-user.
 _intake_sessions: dict[str, IntakeSession] = {}
 
 
@@ -87,6 +97,15 @@ _intake_sessions: dict[str, IntakeSession] = {}
 class IntakeRespondRequest(BaseModel):
     session_id: str
     message: str
+
+
+class IntakeRefineRequest(BaseModel):
+    session_id: str
+    message: str
+
+
+class IntakeRefineCancelRequest(BaseModel):
+    session_id: str
 
 
 class SessionRunRequest(BaseModel):
@@ -188,6 +207,39 @@ async def intake_respond(req: IntakeRespondRequest):
     return {"session_id": req.session_id, **result}
 
 
+# ── Prompt refinement (post-intake) ───────────────────────────────────────────
+
+@app.post("/api/intake/refine")
+async def intake_refine(req: IntakeRefineRequest):
+    """
+    Refine the optimized prompt after intake completes.
+
+    First ``message`` starts a probe (``status``: ``probing``). The next message
+    completes the rewrite (``status``: ``refined``) and returns the full
+    ``session_config`` with an updated ``optimized_prompt``.
+    """
+    session = _intake_sessions.get(req.session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Intake session not found.")
+    if not session.complete or not session.session_config:
+        raise HTTPException(status_code=400, detail="Complete intake before refining the prompt.")
+    try:
+        result = await asyncio.to_thread(session.refine, req.message)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"session_id": req.session_id, **result}
+
+
+@app.post("/api/intake/refine/cancel")
+async def intake_refine_cancel(req: IntakeRefineCancelRequest):
+    """Drop an in-progress refine so a new cycle can start from a clean state."""
+    session = _intake_sessions.get(req.session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Intake session not found.")
+    session.clear_refine()
+    return {"session_id": req.session_id, "ok": True}
+
+
 # ── Core session loop ─────────────────────────────────────────────────────────
 
 @app.post("/api/session/run")
@@ -216,14 +268,16 @@ async def session_run(req: SessionRunRequest):
     Raises 400 if tier is invalid.
     """
     config = req.session_config
-    tier = config.get("tier", "deep")
+    tier = config.get("tier", "smart")
     output_type = config.get("output_type", "report")
     optimized_prompt = config.get("optimized_prompt", req.prompt)
 
     try:
-        get_tier_config(tier)
+        tier_config = get_tier_config(tier)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+    mode = tier_config.get("mode", "single")
 
     transcript = Transcript()
     transcript.session_config = config
@@ -243,31 +297,52 @@ async def session_run(req: SessionRunRequest):
 
     gemini_history = transcript.get_history_for_model("gemini")
     gpt_history    = transcript.get_history_for_model("gpt")
+    gemini_system  = get_round1_system_prompt("gemini")
+    gpt_system     = get_round1_system_prompt("gpt")
 
     # ── Parallel: Gemini + GPT + Perplexity pre-research ─────────────────────
-    async def _gemini_task() -> str:
-        try:
-            r = await asyncio.to_thread(
-                _call_with_retry,
-                lambda: call_gemini(messages=gemini_history, tier=tier,
-                                    system=get_round1_system_prompt("gemini")),
-                "Gemini",
-            )
-            return r.text
-        except Exception as exc:
-            return _skip("Gemini", exc)
+    if mode == "smart":
+        async def _gemini_task() -> str:
+            try:
+                result = await _call_with_retry_async(
+                    lambda: call_gemini_smart_async(gemini_history, gemini_system),
+                    "Gemini-smart",
+                )
+                return result["advisor_text"]
+            except Exception as exc:
+                return _skip("Gemini", exc)
 
-    async def _gpt_task() -> str:
-        try:
-            r = await asyncio.to_thread(
-                _call_with_retry,
-                lambda: call_gpt(messages=gpt_history, tier=tier,
-                                 system=get_round1_system_prompt("gpt")),
-                "GPT",
-            )
-            return r.choices[0].message.content
-        except Exception as exc:
-            return _skip("GPT", exc)
+        async def _gpt_task() -> str:
+            try:
+                result = await _call_with_retry_async(
+                    lambda: call_gpt_smart_async(gpt_history, gpt_system),
+                    "GPT-smart",
+                )
+                return result["advisor_text"]
+            except Exception as exc:
+                return _skip("GPT", exc)
+    else:
+        async def _gemini_task() -> str:
+            try:
+                r = await asyncio.to_thread(
+                    _call_with_retry,
+                    lambda: call_gemini(messages=gemini_history, tier=tier, system=gemini_system),
+                    "Gemini",
+                )
+                return r.text
+            except Exception as exc:
+                return _skip("Gemini", exc)
+
+        async def _gpt_task() -> str:
+            try:
+                r = await asyncio.to_thread(
+                    _call_with_retry,
+                    lambda: call_gpt(messages=gpt_history, tier=tier, system=gpt_system),
+                    "GPT",
+                )
+                return r.choices[0].message.content
+            except Exception as exc:
+                return _skip("GPT", exc)
 
     async def _research_task() -> str:
         try:
@@ -301,7 +376,7 @@ async def session_run(req: SessionRunRequest):
         audit_text = f"[Perplexity audit unavailable: {exc}]"
     transcript.add_model_message("Perplexity", audit_text, round="audit")
 
-    # ── Synthesis: Claude ─────────────────────────────────────────────────────
+    # ── Synthesis: Claude (smart: executor → advisor; else: single call) ──────
     synthesis_system = build_synthesis_prompt(
         output_type=output_type,
         gemini=gemini_text,
@@ -309,12 +384,22 @@ async def session_run(req: SessionRunRequest):
         perplexity=audit_text,
         optimized_prompt=optimized_prompt,
     )
-    synthesis_response = call_claude(
-        messages=[{"role": "user", "content": req.prompt}],
-        tier=tier,
-        system=synthesis_system,
-    )
-    synthesis_text = synthesis_response.content[0].text
+    if mode == "smart":
+        result = await _call_with_retry_async(
+            lambda: call_claude_smart_async(
+                [{"role": "user", "content": req.prompt}],
+                synthesis_system,
+            ),
+            "Claude-smart",
+        )
+        synthesis_text = result["advisor_text"]
+    else:
+        synthesis_response = call_claude(
+            messages=[{"role": "user", "content": req.prompt}],
+            tier=tier,
+            system=synthesis_system,
+        )
+        synthesis_text = synthesis_response.content[0].text
     transcript.add_model_message("Claude", synthesis_text, round="synthesis")
 
     return {
@@ -458,6 +543,45 @@ def _gpt_token_iter(messages, tier, system):
             yield delta
 
 
+# ── Smart tier advisor helpers ────────────────────────────────────────────────
+#
+# These run AFTER the executor has already streamed its tokens to the frontend.
+# Each helper calls the advisor model (pro/opus/gpt-5) with the executor's output
+# and returns the improved final text.  Called via asyncio.to_thread in the WS handler.
+
+_ADVISOR_PROMPT = (
+    "Review this response and produce an improved final version.\n\n"
+    "Original request: {request}\n"
+    "Response to review: {response}\n\n"
+    "Identify gaps, weak reasoning, missing considerations. "
+    "Output only the improved response — no preamble, no explanation."
+)
+
+
+def _gemini_advisor(executor_text: str, request: str) -> str:
+    resp = call_gemini(
+        messages=[{"role": "user", "content": _ADVISOR_PROMPT.format(request=request, response=executor_text)}],
+        tier="deep",  # gemini-2.5-pro
+    )
+    return resp.text
+
+
+def _gpt_advisor(executor_text: str, request: str) -> str:
+    resp = call_gpt(
+        messages=[{"role": "user", "content": _ADVISOR_PROMPT.format(request=request, response=executor_text)}],
+        tier="deep",  # gpt-5 (or fallback to gpt-4o via call_gpt)
+    )
+    return resp.choices[0].message.content
+
+
+def _claude_advisor(executor_text: str, request: str) -> str:
+    resp = call_claude(
+        messages=[{"role": "user", "content": _ADVISOR_PROMPT.format(request=request, response=executor_text)}],
+        tier="deep",  # claude-opus-4-5
+    )
+    return resp.content[0].text
+
+
 # ── Retry helpers ─────────────────────────────────────────────────────────────
 
 # Delay sequence for up to 3 retries: 5s → 10s → 20s
@@ -516,6 +640,27 @@ def _call_with_retry(fn, sender: str):
             time.sleep(delay)
         try:
             return fn()
+        except Exception as e:
+            if not _is_retryable(e):
+                raise
+            last_exc = e
+    raise last_exc
+
+
+async def _call_with_retry_async(coro_factory, sender: str):
+    """
+    Await coro_factory() with up to 3 retries on retryable errors (503 / 429 / rate-limit).
+    Same backoff as _call_with_retry but without blocking the event loop on sleep.
+    """
+    last_exc = None
+    for attempt in range(len(_RETRY_DELAYS) + 1):
+        if attempt > 0:
+            delay = _RETRY_DELAYS[attempt - 1]
+            print(f"[retry] {sender}: attempt {attempt}/{len(_RETRY_DELAYS)}, waiting {delay}s — {last_exc}")
+            await asyncio.sleep(delay)
+        try:
+            coro = coro_factory()
+            return await coro
         except Exception as e:
             if not _is_retryable(e):
                 raise
@@ -609,6 +754,8 @@ async def session_websocket(websocket: WebSocket):
         {"type": "token",              "sender": "Gemini"|"GPT", "token": str}  # parallel
         {"type": "model_complete",     "sender": "Gemini"}
         {"type": "model_complete",     "sender": "GPT"}
+        {"type": "advisor_thinking",   "sender": "Gemini"|"GPT"}   # optional Smart tier
+        {"type": "advisor_complete",   "sender": "Gemini"|"GPT"}
         {"type": "error",              "message": str}   # skipped model (non-fatal)
         {"type": "perplexity_thinking"}
         {"type": "perplexity_complete", "content": str}
@@ -643,16 +790,17 @@ async def session_websocket(websocket: WebSocket):
     prompt = data.get("prompt", "")
     config = data.get("session_config", {})
     history = data.get("history", [])
-    tier = config.get("tier", "deep")
+    tier = config.get("tier", "smart")
     output_type = config.get("output_type", "report")
 
     try:
-        get_tier_config(tier)  # validate — raises ValueError on bad tier
+        tier_config = get_tier_config(tier)
     except ValueError as e:
         await websocket.send_json({"type": "error", "message": str(e)})
         await websocket.close()
         return
 
+    mode = tier_config.get("mode", "single")
     optimized_prompt = config.get("optimized_prompt", prompt)
     transcript = _build_transcript(config, history, prompt)
 
@@ -660,10 +808,9 @@ async def session_websocket(websocket: WebSocket):
     try:
         await websocket.send_json({"type": "session_started"})
 
-        # ── Parallel: Gemini streaming + GPT streaming + Perplexity pre-research
-        # Gemini and GPT stream tokens to the frontend simultaneously.
-        # Perplexity pre-research runs silently in the same gather.
-        # A shared send_lock serialises all WebSocket sends across the two streams.
+        # ── Round 1 + Perplexity pre-research ───────────────────────────────────
+        # quick/deep: stream Gemini + GPT in parallel. smart: async smart clients
+        # (executor + advisor) off the event loop, then chunk-emit advisor text.
         gemini_history = transcript.get_history_for_model("gemini")
         gpt_history    = transcript.get_history_for_model("gpt")
         gemini_system  = get_round1_system_prompt("gemini")
@@ -680,31 +827,75 @@ async def session_websocket(websocket: WebSocket):
             except Exception as exc:
                 return f"[Perplexity pre-research unavailable: {exc}]"
 
-        results = await asyncio.gather(
-            _stream_model(
-                websocket, "Gemini",
-                lambda: _gemini_token_iter(gemini_history, tier, gemini_system),
-                transcript=None,
-                send_lock=send_lock,
-                commit_to_transcript=False,
-            ),
-            _stream_model(
-                websocket, "GPT",
-                lambda: _gpt_token_iter(gpt_history, tier, gpt_system),
-                transcript=None,
-                send_lock=send_lock,
-                commit_to_transcript=False,
-            ),
-            _research_task(),
-            return_exceptions=True,
-        )
+        def _smart_round1_body(res, sender_name: str) -> str:
+            if isinstance(res, Exception):
+                return f"[{sender_name} unavailable — skipped after retries: {res}]"
+            if isinstance(res, dict) and res.get("advisor_text") is not None:
+                return str(res["advisor_text"])
+            return f"[{sender_name} unavailable]"
 
-        gemini_text = results[0] if isinstance(results[0], str) else f"[Gemini error: {results[0]}]"
-        gpt_text = results[1] if isinstance(results[1], str) else f"[GPT error: {results[1]}]"
-        perplexity_pre = results[2] if isinstance(results[2], str) else ""
+        if mode == "smart":
+            r1_results = await asyncio.gather(
+                _research_task(),
+                _call_with_retry_async(
+                    lambda: call_gemini_smart_async(gemini_history, gemini_system),
+                    "Gemini-smart",
+                ),
+                _call_with_retry_async(
+                    lambda: call_gpt_smart_async(gpt_history, gpt_system),
+                    "GPT-smart",
+                ),
+                return_exceptions=True,
+            )
+            perplexity_pre = r1_results[0] if isinstance(r1_results[0], str) else ""
+            gem_res = r1_results[1]
+            gpt_res = r1_results[2]
+            gemini_text_body = _smart_round1_body(gem_res, "Gemini")
+            gpt_text_body = _smart_round1_body(gpt_res, "GPT")
+
+            async def _emit_model_tokens(sender: str, text: str) -> None:
+                body = text or ""
+                step = 48
+                for i in range(0, len(body), step):
+                    piece = body[i : i + step]
+                    async with send_lock:
+                        await websocket.send_json({"type": "token", "sender": sender, "token": piece})
+                async with send_lock:
+                    await websocket.send_json({"type": "model_complete", "sender": sender})
+
+            await asyncio.gather(
+                _emit_model_tokens("Gemini", gemini_text_body),
+                _emit_model_tokens("GPT", gpt_text_body),
+            )
+            gemini_text = gemini_text_body
+            gpt_text = gpt_text_body
+        else:
+            results = await asyncio.gather(
+                _stream_model(
+                    websocket, "Gemini",
+                    lambda: _gemini_token_iter(gemini_history, tier, gemini_system),
+                    transcript=None,
+                    send_lock=send_lock,
+                    commit_to_transcript=False,
+                ),
+                _stream_model(
+                    websocket, "GPT",
+                    lambda: _gpt_token_iter(gpt_history, tier, gpt_system),
+                    transcript=None,
+                    send_lock=send_lock,
+                    commit_to_transcript=False,
+                ),
+                _research_task(),
+                return_exceptions=True,
+            )
+            gemini_exec = results[0] if isinstance(results[0], str) else f"[Gemini error: {results[0]}]"
+            gpt_exec = results[1] if isinstance(results[1], str) else f"[GPT error: {results[1]}]"
+            perplexity_pre = results[2] if isinstance(results[2], str) else ""
+            gemini_text = gemini_exec
+            gpt_text = gpt_exec
 
         transcript.add_model_message("Gemini", gemini_text, round="round1")
-        transcript.add_model_message("GPT", gpt_text, round="round1")
+        transcript.add_model_message("GPT",    gpt_text,    round="round1")
 
         # ── Perplexity audit (Phase 2) ────────────────────────────────────────
         await websocket.send_json({"type": "perplexity_thinking"})
@@ -723,9 +914,7 @@ async def session_websocket(websocket: WebSocket):
         transcript.add_model_message("Perplexity", audit_text, round="audit")
         await websocket.send_json({"type": "perplexity_complete", "content": audit_text})
 
-        # ── Synthesis: Claude ─────────────────────────────────────────────────
-        # Claude sees Gemini + GPT responses and Perplexity's live research + audit
-        # injected directly into the system prompt. No Round 1 response from Claude.
+        # ── Synthesis: Claude executor → (smart) advisor ─────────────────────
         await websocket.send_json({"type": "synthesis_thinking"})
         synthesis_system = build_synthesis_prompt(
             output_type=output_type,
@@ -734,12 +923,32 @@ async def session_websocket(websocket: WebSocket):
             perplexity=audit_text,
             optimized_prompt=optimized_prompt,
         )
-        synthesis_text = await _stream_tokens(
-            websocket, "Claude",
-            lambda: _claude_token_iter(
-                [{"role": "user", "content": prompt}], tier, synthesis_system
-            ),
-        )
+        if mode == "smart":
+            try:
+                pack = await _call_with_retry_async(
+                    lambda: call_claude_smart_async(
+                        [{"role": "user", "content": prompt}],
+                        synthesis_system,
+                    ),
+                    "Claude-smart",
+                )
+                synthesis_text = str(pack.get("advisor_text", ""))
+            except Exception:
+                synthesis_text = ""
+            step = 48
+            for i in range(0, len(synthesis_text), step):
+                piece = synthesis_text[i : i + step]
+                async with send_lock:
+                    await websocket.send_json({"type": "token", "sender": "Claude", "token": piece})
+        else:
+            synthesis_text = await _stream_tokens(
+                websocket, "Claude",
+                lambda: _claude_token_iter(
+                    [{"role": "user", "content": prompt}], tier, synthesis_system
+                ),
+                send_lock=send_lock,
+            )
+
         transcript.add_model_message("Claude", synthesis_text, round="synthesis")
         await websocket.send_json({"type": "synthesis_complete", "content": synthesis_text})
         await websocket.send_json({"type": "session_complete"})

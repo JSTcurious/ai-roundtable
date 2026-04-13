@@ -212,6 +212,9 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
   const [gptR1, setGptR1] = useState("");
   const [geminiR1Complete, setGeminiR1Complete] = useState(false);
   const [gptR1Complete, setGptR1Complete] = useState(false);
+  /** Smart-tier advisor pass — shown under Gemini/GPT bubbles until advisor_complete */
+  const [geminiAdvisorReviewing, setGeminiAdvisorReviewing] = useState(false);
+  const [gptAdvisorReviewing, setGptAdvisorReviewing] = useState(false);
 
   const [sessionStarted, setSessionStarted] = useState(false);
   /** off | thinking | content */
@@ -353,6 +356,8 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     setGptR1(gp);
     setGeminiR1Complete(true);
     setGptR1Complete(true);
+    setGeminiAdvisorReviewing(false);
+    setGptAdvisorReviewing(false);
     setSessionStarted(true);
     setPerplexityPhase(audit.trim() ? "content" : "off");
     setPerplexityContent(audit);
@@ -388,6 +393,8 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     setGptR1("");
     setGeminiR1Complete(false);
     setGptR1Complete(false);
+    setGeminiAdvisorReviewing(false);
+    setGptAdvisorReviewing(false);
     setSessionStarted(false);
     setPerplexityPhase("off");
     setPerplexityContent("");
@@ -437,6 +444,18 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
         case "model_complete":
           handleModelComplete(data.sender);
           break;
+        case "advisor_thinking": {
+          const advSender = data.sender;
+          if (advSender === "Gemini") setGeminiAdvisorReviewing(true);
+          if (advSender === "GPT") setGptAdvisorReviewing(true);
+          break;
+        }
+        case "advisor_complete": {
+          const advDone = data.sender;
+          if (advDone === "Gemini") setGeminiAdvisorReviewing(false);
+          if (advDone === "GPT") setGptAdvisorReviewing(false);
+          break;
+        }
         case "perplexity_thinking":
           phaseRef.current = "perplexity";
           setPerplexityPhase("thinking");
@@ -715,31 +734,45 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
                 {showGeminiThinking ? (
                   <ThinkingDotsBubble label="GEMINI" color={MODEL_HEX.Gemini} />
                 ) : (
-                  <ModelBubble
-                    sender="Gemini"
-                    content={bubbleBody(geminiR1, geminiR1Complete)}
-                    isStreaming={geminiR1Streaming}
-                    round="round1"
-                    complete={geminiR1Complete}
-                    scrollContainerRef={(el) => {
-                      bubbleScrollRefs.current.Gemini = el;
-                    }}
-                  />
+                  <div>
+                    <ModelBubble
+                      sender="Gemini"
+                      content={bubbleBody(geminiR1, geminiR1Complete)}
+                      isStreaming={geminiR1Streaming}
+                      round="round1"
+                      complete={geminiR1Complete}
+                      scrollContainerRef={(el) => {
+                        bubbleScrollRefs.current.Gemini = el;
+                      }}
+                    />
+                    {geminiAdvisorReviewing ? (
+                      <p className="mt-1 text-xs text-[#888888]" role="status" aria-live="polite">
+                        ⚖ advisor reviewing...
+                      </p>
+                    ) : null}
+                  </div>
                 )}
 
                 {showGptThinking ? (
                   <ThinkingDotsBubble label="GPT" color={MODEL_HEX.GPT} />
                 ) : (
-                  <ModelBubble
-                    sender="GPT"
-                    content={bubbleBody(gptR1, gptR1Complete)}
-                    isStreaming={gptR1Streaming}
-                    round="round1"
-                    complete={gptR1Complete}
-                    scrollContainerRef={(el) => {
-                      bubbleScrollRefs.current.GPT = el;
-                    }}
-                  />
+                  <div>
+                    <ModelBubble
+                      sender="GPT"
+                      content={bubbleBody(gptR1, gptR1Complete)}
+                      isStreaming={gptR1Streaming}
+                      round="round1"
+                      complete={gptR1Complete}
+                      scrollContainerRef={(el) => {
+                        bubbleScrollRefs.current.GPT = el;
+                      }}
+                    />
+                    {gptAdvisorReviewing ? (
+                      <p className="mt-1 text-xs text-[#888888]" role="status" aria-live="polite">
+                        ⚖ advisor reviewing...
+                      </p>
+                    ) : null}
+                  </div>
                 )}
               </div>
 
