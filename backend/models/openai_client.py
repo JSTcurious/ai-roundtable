@@ -37,11 +37,11 @@ def _get_client() -> OpenAI:
 MODELS = {
     "quick": "gpt-4o",
     "smart": "gpt-4o",   # executor model for smart tier
-    "deep":  "gpt-5",
+    "deep":  "gpt-4o",
 }
 
 # gpt-5 as advisor; fall back to gpt-4o if not yet available on this account
-_ADVISOR_MODEL = "gpt-5"
+_ADVISOR_MODEL = "gpt-4o"
 _ADVISOR_MODEL_FALLBACK = "gpt-4o"
 
 _ADVISOR_PROMPT = (

@@ -29,7 +29,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Optional
+from typing import Dict, List, Optional
 
 
 def _load_env():
@@ -47,6 +47,7 @@ def _load_env():
 
 _load_env()
 
+from anthropic import APIStatusError as AnthropicAPIStatusError
 from fastapi import FastAPI, HTTPException, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
@@ -101,7 +102,10 @@ class IntakeRespondRequest(BaseModel):
 
 class IntakeRefineRequest(BaseModel):
     session_id: str
-    message: str
+    message: Optional[str] = None  # legacy: same as user_feedback or probe_answer
+    current_prompt: Optional[str] = None
+    user_feedback: Optional[str] = None
+    probe_answer: Optional[str] = None
 
 
 class IntakeRefineCancelRequest(BaseModel):
@@ -200,10 +204,13 @@ async def intake_respond(req: IntakeRespondRequest):
     session = _intake_sessions.get(req.session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Intake session not found.")
-    if session.complete:
-        raise HTTPException(status_code=400, detail="Intake session already complete.")
 
-    result = session.respond(req.message)
+    try:
+        result = session.respond(req.message)
+    except AnthropicAPIStatusError as e:
+        if e.status_code == 529:
+            raise HTTPException(status_code=503, detail="Claude is temporarily overloaded — please wait a moment and try again.")
+        raise HTTPException(status_code=502, detail=f"Anthropic API error: {e.message}")
     return {"session_id": req.session_id, **result}
 
 
@@ -223,8 +230,23 @@ async def intake_refine(req: IntakeRefineRequest):
         raise HTTPException(status_code=404, detail="Intake session not found.")
     if not session.complete or not session.session_config:
         raise HTTPException(status_code=400, detail="Complete intake before refining the prompt.")
+    pa = (req.probe_answer or "").strip() if req.probe_answer else ""
+    fb = (req.user_feedback or "").strip() if req.user_feedback else ""
+    legacy = (req.message or "").strip() if req.message else ""
+    if pa:
+        payload = pa
+    elif fb:
+        payload = fb
+    elif legacy:
+        payload = legacy
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide probe_answer, user_feedback, or message.",
+        )
+    cp = (req.current_prompt or "").strip() if req.current_prompt else None
     try:
-        result = await asyncio.to_thread(session.refine, req.message)
+        result = await asyncio.to_thread(session.refine, payload, cp)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"session_id": req.session_id, **result}
@@ -268,7 +290,7 @@ async def session_run(req: SessionRunRequest):
     Raises 400 if tier is invalid.
     """
     config = req.session_config
-    tier = config.get("tier", "smart")
+    tier = config.get("tier", "smart"); print(f"[SESSION] tier={tier}", flush=True)
     output_type = config.get("output_type", "report")
     optimized_prompt = config.get("optimized_prompt", req.prompt)
 
@@ -734,6 +756,57 @@ async def _drain_client_pings(websocket: WebSocket) -> None:
         return
 
 
+async def _generate_observations(
+    prompt: str,
+    gemini: str,
+    gpt: str,
+    perplexity: str,
+    tier: str,
+) -> list:
+    """
+    Ask Claude to identify 3–5 key observations from the Round 1 responses.
+
+    Returns a list of observation strings ready to surface to the chair.
+    Falls back to [] on any error so the session continues straight to synthesis.
+    Each observation is already phrased to inform a keep/overrule decision.
+    """
+    system = (
+        "You are analyzing two AI model responses to identify key observations for synthesis. "
+        "Respond ONLY with valid JSON in this exact format with no other text:\n"
+        "{\"observations\": [\"...\", \"...\"]}\n\n"
+        "Each observation must be a single self-contained sentence that:\n"
+        "- States what Gemini and/or GPT said (a point of agreement, disagreement, or key decision)\n"
+        "- States what you intend to do in the final synthesis\n"
+        "- Ends with: 'Do you want to keep this, or overrule?'\n"
+        "Identify exactly 3 to 5 observations. No preamble, no markdown, only the JSON object."
+    )
+    obs_prompt = (
+        f"User's request: {prompt}\n\n"
+        f"Gemini's response:\n{gemini[:2500]}\n\n"
+        f"GPT's response:\n{gpt[:2500]}\n\n"
+        f"Perplexity fact-check:\n{perplexity[:1000]}"
+    )
+    try:
+        resp = await asyncio.to_thread(
+            call_claude,
+            messages=[{"role": "user", "content": obs_prompt}],
+            tier="quick",
+            system=system,
+        )
+        raw = resp.content[0].text.strip()
+        # Strip markdown fences if Claude wrapped the JSON
+        if raw.startswith("```"):
+            parts = raw.split("```")
+            raw = parts[1].lstrip("json").strip() if len(parts) > 1 else raw
+        data = json.loads(raw)
+        obs = data.get("observations", [])
+        if isinstance(obs, list) and obs:
+            return [str(o).strip() for o in obs[:5] if str(o).strip()]
+    except Exception as exc:
+        print(f"[observations] skipping chair dialogue: {exc}", flush=True)
+    return []
+
+
 @app.websocket("/ws/session")
 async def session_websocket(websocket: WebSocket):
     """
@@ -790,7 +863,7 @@ async def session_websocket(websocket: WebSocket):
     prompt = data.get("prompt", "")
     config = data.get("session_config", {})
     history = data.get("history", [])
-    tier = config.get("tier", "smart")
+    tier = config.get("tier", "smart"); print(f"[SESSION] tier={tier}", flush=True)
     output_type = config.get("output_type", "report")
 
     try:
@@ -914,6 +987,46 @@ async def session_websocket(websocket: WebSocket):
         transcript.add_model_message("Perplexity", audit_text, round="audit")
         await websocket.send_json({"type": "perplexity_complete", "content": audit_text})
 
+        # ── Chair dialogue — surface observations one at a time ───────────────
+        # Generate 3–5 observations; skip silently on any error.
+        observations = await _generate_observations(
+            prompt=optimized_prompt,
+            gemini=gemini_text,
+            gpt=gpt_text,
+            perplexity=audit_text,
+            tier=tier,
+        )
+        chair_decisions: list = []
+
+        if observations:
+            # Pause the ping drain so we can receive chair_decision messages here.
+            ping_task.cancel()
+            try:
+                await ping_task
+            except asyncio.CancelledError:
+                pass
+
+            for idx, obs_text in enumerate(observations):
+                await websocket.send_json({
+                    "type": "synthesis_observation",
+                    "observation_text": obs_text,
+                    "observation_index": idx + 1,
+                    "total_observations": len(observations),
+                })
+                # Await chair decision; handle keep-alive pings inline.
+                while True:
+                    try:
+                        msg = await websocket.receive_json()
+                    except Exception:
+                        break  # disconnected — bail out of dialogue
+                    if isinstance(msg, dict) and msg.get("type") == "ping":
+                        await websocket.send_json({"type": "pong"})
+                        continue
+                    if isinstance(msg, dict) and msg.get("type") == "chair_decision":
+                        chair_decisions.append(msg)
+                        break
+                    # Ignore any other client frames.
+
         # ── Synthesis: Claude executor → (smart) advisor ─────────────────────
         await websocket.send_json({"type": "synthesis_thinking"})
         synthesis_system = build_synthesis_prompt(
@@ -923,6 +1036,15 @@ async def session_websocket(websocket: WebSocket):
             perplexity=audit_text,
             optimized_prompt=optimized_prompt,
         )
+        # Incorporate any chair overrules into the synthesis prompt.
+        overrules = [
+            d for d in chair_decisions
+            if d.get("decision") == "overrule" and str(d.get("overrule_text", "")).strip()
+        ]
+        if overrules:
+            synthesis_system += "\n\n## Chair Decisions — incorporate exactly\n"
+            for i, d in enumerate(overrules, 1):
+                synthesis_system += f"\n{i}. {str(d['overrule_text']).strip()}"
         if mode == "smart":
             try:
                 pack = await _call_with_retry_async(

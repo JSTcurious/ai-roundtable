@@ -128,20 +128,26 @@ function LandingPage({ onSubmitDescription, onDirectSession, onResumeSession }) 
       <div className="mx-auto w-full max-w-[720px] px-6 py-16 pb-28 sm:py-20 sm:pb-32">
         {/* 1. Header */}
         <header className="text-center">
-          <h1 className="flex items-center justify-center gap-2.5 text-3xl font-bold tracking-tight text-text-primary sm:text-4xl">
+          <h1 className="flex items-center justify-center gap-2.5 text-3xl font-bold tracking-tight sm:text-4xl" style={{ color: "#F5A623" }}>
             <svg
-              className="h-8 w-8 shrink-0 text-text-primary sm:h-9 sm:w-9"
+              className="h-8 w-8 shrink-0 sm:h-9 sm:w-9"
               viewBox="0 0 24 24"
               aria-hidden
               focusable="false"
+              style={{ transform: "rotate(90deg)" }}
             >
               <polygon fill="currentColor" points="12,1.5 21.5,7.25 21.5,16.75 12,22.5 2.5,16.75 2.5,7.25" />
             </svg>
-            <span>ai-roundtable</span>
+            <span style={{ textTransform: "uppercase" }}>AI-ROUNDTABLE</span>
           </h1>
-          <p className="mt-3 text-base text-text-secondary sm:text-lg">
+          <p className="mt-3 text-base sm:text-lg" style={{ color: "#F5A623" }}>
             You and the right experts. One room. No FOMO.
           </p>
+          <div className="mx-auto mt-5 max-w-[480px] text-center" style={{ color: "#888888", fontSize: "0.85rem", lineHeight: "1.8" }}>
+            <p>Multiple perspectives. One room. You decide.</p>
+            <p>Gemini reasons. GPT structures. Perplexity fact-checks. Claude synthesizes.</p>
+            <p>You chair the session and own the outcome.</p>
+          </div>
         </header>
 
         {/* 2. Chat input */}
@@ -169,40 +175,42 @@ function LandingPage({ onSubmitDescription, onDirectSession, onResumeSession }) 
               </button>
             </div>
           </form>
-          <div className="mt-4 space-y-3 text-left">
-            <div
-              role="radiogroup"
-              aria-label="Start mode"
-              className="inline-flex rounded-full border border-[#2a2a2a] bg-[#1e1e1e] p-1"
-            >
-              <button
-                type="button"
-                role="radio"
-                aria-checked={pathMode === "quick"}
-                onClick={() => setPathMode("quick")}
-                className={`rounded-full px-5 py-2 text-[0.875rem] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-border-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${
-                  pathMode === "quick"
-                    ? "bg-[#2a2a2a] font-medium text-[#e8e8e8]"
-                    : "bg-transparent font-normal text-[#888888]"
-                }`}
+          <div className="mt-4 space-y-3 text-center">
+            <div className="flex justify-center">
+              <div
+                role="radiogroup"
+                aria-label="Start mode"
+                className="inline-flex rounded-full border border-[#2a2a2a] bg-[#1e1e1e] p-1"
               >
-                <span aria-hidden>⚡</span>{" "}
-                Quick
-              </button>
-              <button
-                type="button"
-                role="radio"
-                aria-checked={pathMode === "refined"}
-                onClick={() => setPathMode("refined")}
-                className={`rounded-full px-5 py-2 text-[0.875rem] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-border-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${
-                  pathMode === "refined"
-                    ? "bg-[#2a2a2a] font-medium text-[#e8e8e8]"
-                    : "bg-transparent font-normal text-[#888888]"
-                }`}
-              >
-                <span aria-hidden>✨</span>{" "}
-                Refined
-              </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={pathMode === "quick"}
+                  onClick={() => setPathMode("quick")}
+                  className={`rounded-full px-5 py-2 text-[0.875rem] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-border-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${
+                    pathMode === "quick"
+                      ? "bg-[#2a2a2a] font-medium text-[#e8e8e8]"
+                      : "bg-transparent font-normal text-[#888888]"
+                  }`}
+                >
+                  <span aria-hidden>⚡</span>{" "}
+                  AS-IS PROMPT
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={pathMode === "refined"}
+                  onClick={() => setPathMode("refined")}
+                  className={`rounded-full px-5 py-2 text-[0.875rem] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-border-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${
+                    pathMode === "refined"
+                      ? "bg-[#2a2a2a] font-medium text-[#e8e8e8]"
+                      : "bg-transparent font-normal text-[#888888]"
+                  }`}
+                >
+                  <span aria-hidden>✨</span>{" "}
+                  REFINED PROMPT
+                </button>
+              </div>
             </div>
             <p className="text-xs leading-relaxed text-[#888888] sm:text-sm" role="status">
               {pathMode === "quick"

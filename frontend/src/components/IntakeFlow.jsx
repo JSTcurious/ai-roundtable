@@ -132,19 +132,44 @@ function IntakeFlow({ initialUserMessage, selectedUseCase, onComplete, onBack })
   const [pendingConfig, setPendingConfig] = useState(null);
   const [editedPrompt, setEditedPrompt] = useState("");
   const [tierChoice, setTierChoice] = useState("smart");
-  /** review → refine_input → refine_chat → tier (final Approve) */
-  const [approvalPhase, setApprovalPhase] = useState("review");
+  /** null = intake Q&A · then review → refine_input → refine_chat → tier (final Approve) */
+  const [approvalPhase, setApprovalPhase] = useState(null);
   const [refineDraft, setRefineDraft] = useState("");
   const [refineSending, setRefineSending] = useState(false);
   const [refineError, setRefineError] = useState(null);
   const [refineThread, setRefineThread] = useState([]);
+  /** True until the first real /api/intake/refine call completes — guards probe_answer vs user_feedback. */
+  const [refineIsFirstMessage, setRefineIsFirstMessage] = useState(true);
+  /** After a full refine (probe → rewrite), show confirmation chips from API. */
+  const [postRefineReview, setPostRefineReview] = useState(false);
+  const [postRefineMeta, setPostRefineMeta] = useState(null);
   const listEndRef = useRef(null);
   const refineInputRef = useRef(null);
   const autoSeedSentForSessionRef = useRef(null);
+  const cancelOnLeaveRef = useRef({ sessionId: null, phase: null });
+
+  useEffect(() => {
+    cancelOnLeaveRef.current = { sessionId, phase: approvalPhase };
+  }, [sessionId, approvalPhase]);
+
+  useEffect(() => {
+    return () => {
+      const { sessionId: sid, phase } = cancelOnLeaveRef.current;
+      if (!sid) return;
+      if (phase === "refine_input" || phase === "refine_chat") {
+        fetch(`${API_BASE}/api/intake/refine/cancel`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ session_id: sid }),
+          keepalive: true,
+        }).catch(() => {});
+      }
+    };
+  }, []);
 
   useEffect(() => {
     listEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, intakeComplete, sending, approvalPhase, refineThread]);
+  }, [messages, intakeComplete, sending, approvalPhase, refineThread, postRefineReview]);
 
   useEffect(() => {
     if (!intakeComplete || !pendingConfig) return;
@@ -179,10 +204,12 @@ function IntakeFlow({ initialUserMessage, selectedUseCase, onComplete, onBack })
       setIntakeComplete(false);
       setPendingConfig(null);
       setEditedPrompt("");
-      setApprovalPhase("review");
+      setApprovalPhase(null);
       setRefineDraft("");
       setRefineError(null);
       setRefineThread([]);
+      setPostRefineReview(false);
+      setPostRefineMeta(null);
       try {
         const res = await fetch(`${API_BASE}/api/intake/start`, { method: "POST" });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -190,13 +217,17 @@ function IntakeFlow({ initialUserMessage, selectedUseCase, onComplete, onBack })
         if (cancelled) return;
         setSessionId(data.session_id);
         const openingOpts = normalizeSuggestedOptions(data.suggested_options);
-        const next = [
-          {
-            role: "assistant",
-            content: data.message || "",
-            ...(openingOpts.length >= 2 ? { suggestedOptions: openingOpts } : {}),
-          },
-        ];
+        // If initialUserMessage is present the auto-seed will fire immediately —
+        // skip the generic opener so the chat starts with the user's own message.
+        const next = initialUserMessage?.trim()
+          ? []
+          : [
+              {
+                role: "assistant",
+                content: data.message || "",
+                ...(openingOpts.length >= 2 ? { suggestedOptions: openingOpts } : {}),
+              },
+            ];
         const fq = selectedUseCase?.first_question;
         if (fq) {
           next.push({
@@ -259,6 +290,8 @@ function IntakeFlow({ initialUserMessage, selectedUseCase, onComplete, onBack })
           setRefineDraft("");
           setRefineError(null);
           setRefineThread([]);
+          setPostRefineReview(false);
+          setPostRefineMeta(null);
         }
       } catch (e) {
         setSendError(e.message || "Send failed");
@@ -310,7 +343,16 @@ function IntakeFlow({ initialUserMessage, selectedUseCase, onComplete, onBack })
     return pickOptimizedPrompt(pendingConfig);
   }, [editedPrompt, pendingConfig]);
 
+  /** Post–refine confirmation: API chips or default Yes / Adjust pair. */
+  const postRefineChipLabels = useMemo(() => {
+    if (!postRefineReview || !postRefineMeta) return null;
+    const o = normalizeSuggestedOptions(postRefineMeta.suggestedOptions);
+    return o.length >= 2 ? o : ["Yes — looks good", "Adjust something else"];
+  }, [postRefineReview, postRefineMeta]);
+
   const goToTierSelection = useCallback(async () => {
+    setPostRefineReview(false);
+    setPostRefineMeta(null);
     if (!sessionId) {
       setApprovalPhase("tier");
       return;
@@ -327,17 +369,61 @@ function IntakeFlow({ initialUserMessage, selectedUseCase, onComplete, onBack })
     setApprovalPhase("tier");
   }, [sessionId]);
 
+  const handlePostRefineOption = useCallback(
+    (label) => {
+      const lower = String(label).toLowerCase();
+      const affirms =
+        (lower.includes("yes") && (lower.includes("good") || lower.includes("looks"))) ||
+        lower.includes("✓");
+      if (affirms) {
+        void goToTierSelection();
+        return;
+      }
+      setPostRefineReview(false);
+      setPostRefineMeta(null);
+      setRefineThread([]);
+      setRefineError(null);
+      setRefineIsFirstMessage(true);
+      setApprovalPhase("refine_input");
+    },
+    [goToTierSelection]
+  );
+
+  const handleBack = useCallback(async () => {
+    if (
+      sessionId &&
+      (approvalPhase === "refine_input" || approvalPhase === "refine_chat")
+    ) {
+      try {
+        await fetch(`${API_BASE}/api/intake/refine/cancel`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ session_id: sessionId }),
+        });
+      } catch {
+        /* non-fatal */
+      }
+    }
+    if (typeof onBack === "function") onBack();
+  }, [sessionId, approvalPhase, onBack]);
+
   const sendRefinementMessage = useCallback(
     async (rawText) => {
       const text = rawText.trim();
       if (!text || !sessionId || refineSending) return;
       setRefineError(null);
       setRefineSending(true);
+      const isProbeRound = !refineIsFirstMessage;
+      const promptText = (editedPrompt.trim() || pickOptimizedPrompt(pendingConfig)).trim();
+      const body = isProbeRound
+        ? { session_id: sessionId, probe_answer: text }
+        : { session_id: sessionId, current_prompt: promptText, user_feedback: text };
+      setRefineIsFirstMessage(false);
       try {
         const res = await fetch(`${API_BASE}/api/intake/refine`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ session_id: sessionId, message: text }),
+          body: JSON.stringify(body),
         });
         if (!res.ok) {
           const errBody = await res.json().catch(() => ({}));
@@ -368,6 +454,15 @@ function IntakeFlow({ initialUserMessage, selectedUseCase, onComplete, onBack })
           }
           setRefineThread([]);
           setApprovalPhase("review");
+          let opts = normalizeSuggestedOptions(data.suggested_options);
+          if (opts.length < 2) {
+            opts = normalizeSuggestedOptions(parseIntakeOptionsFromMessage(data.message || ""));
+          }
+          setPostRefineReview(true);
+          setPostRefineMeta({
+            message: data.message || "",
+            suggestedOptions: opts.length >= 2 ? opts : null,
+          });
         } else {
           throw new Error("Unexpected refine response");
         }
@@ -377,7 +472,7 @@ function IntakeFlow({ initialUserMessage, selectedUseCase, onComplete, onBack })
         setRefineSending(false);
       }
     },
-    [sessionId, refineSending]
+    [sessionId, refineSending, refineIsFirstMessage, editedPrompt, pendingConfig]
   );
 
   const lastMessage = messages.length ? messages[messages.length - 1] : null;
@@ -395,7 +490,7 @@ function IntakeFlow({ initialUserMessage, selectedUseCase, onComplete, onBack })
           {typeof onBack === "function" && (
             <button
               type="button"
-              onClick={onBack}
+              onClick={handleBack}
               className="text-sm text-[#888888] transition-colors hover:text-[#e8e8e8]"
             >
               ← Home
@@ -505,6 +600,11 @@ function IntakeFlow({ initialUserMessage, selectedUseCase, onComplete, onBack })
                       <div className="whitespace-pre-wrap" dir="ltr" style={CLAUDE_BUBBLE_TEXT_GUARD_STYLE}>
                         {displayAssistantText(msg.content)}
                       </div>
+                      {msg.promptBlock && (
+                        <div className="mt-3 max-h-[200px] overflow-y-auto rounded-lg border border-[#2a2a2a] bg-[#0d0d0d] px-3 py-2 text-sm leading-relaxed text-[#e8e8e8] whitespace-pre-wrap break-words">
+                          {msg.promptBlock}
+                        </div>
+                      )}
                     </div>
                     {opts.length >= 2 && (
                       <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -525,6 +625,37 @@ function IntakeFlow({ initialUserMessage, selectedUseCase, onComplete, onBack })
                 );
               })}
             </div>
+          )}
+
+          {intakeComplete && approvalPhase === "refine_chat" && refineThread.length > 0 && !refineSending && (
+            <form
+              className="flex gap-2"
+              onSubmit={(e) => {
+                e.preventDefault();
+                sendRefinementMessage(refineDraft);
+                setRefineDraft("");
+              }}
+            >
+              <label htmlFor="refine-reply" className="sr-only">
+                Reply to Claude
+              </label>
+              <textarea
+                id="refine-reply"
+                rows={2}
+                value={refineDraft}
+                onChange={(e) => setRefineDraft(e.target.value)}
+                placeholder="Your answer…"
+                className="min-h-[2.5rem] min-w-0 flex-1 resize-y rounded-lg border border-[#2a2a2a] bg-[#1e1e1e] px-3 py-2 text-sm text-[#e8e8e8] placeholder:text-[#888888] focus:border-[#6B6B6B] focus:outline-none"
+              />
+              <button
+                type="submit"
+                disabled={refineSending || !refineDraft.trim()}
+                className="inline-flex h-10 shrink-0 items-center justify-center self-start rounded-lg border border-[#6B6B6B] bg-[#1e1e1e] px-3 text-sm text-[#e8e8e8] focus:outline-none disabled:opacity-40"
+                aria-label="Send"
+              >
+                <span aria-hidden>→</span>
+              </button>
+            </form>
           )}
 
           {sending && !intakeComplete && sessionId && (
@@ -558,7 +689,7 @@ function IntakeFlow({ initialUserMessage, selectedUseCase, onComplete, onBack })
 
         {((!intakeComplete && !starting && sessionId) || intakeComplete) && (
           <div className="shrink-0 border-t border-[#2a2a2a] bg-[#0d0d0d] pt-4 pb-[max(1.5rem,env(safe-area-inset-bottom,0px))]">
-            {!intakeComplete && !starting && sessionId && (
+            {!intakeComplete && !starting && sessionId && approvalPhase === null && (
               <div className="space-y-3">
                 {showOptionChips && (
                   <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -575,7 +706,7 @@ function IntakeFlow({ initialUserMessage, selectedUseCase, onComplete, onBack })
                     ))}
                   </div>
                 )}
-                {!sending && (
+                {approvalPhase === null && !sending && (
                   <form
                     onSubmit={(e) => {
                       e.preventDefault();
@@ -614,9 +745,21 @@ function IntakeFlow({ initialUserMessage, selectedUseCase, onComplete, onBack })
               <div className="space-y-5">
                 {approvalPhase === "refine_input" && (
                   <div className="space-y-3">
-                    <h2 className="text-lg font-semibold leading-snug text-[#e8e8e8]">
-                      What would you like to adjust?
-                    </h2>
+                    <div className="mr-auto w-full max-w-[min(100%,36rem)]">
+                      <div className="mb-2 flex items-center gap-2">
+                        <span className="h-2 w-2 shrink-0 rounded-full bg-[#E8712A]" aria-hidden />
+                        <span className="text-sm font-medium text-[#e8e8e8]">Claude</span>
+                      </div>
+                      <div
+                        dir="ltr"
+                        className="rounded-lg border border-[#2a2a2a] bg-[#1e1e1e] px-4 py-3 text-[0.9375rem] leading-relaxed text-[#e8e8e8]"
+                        style={CLAUDE_BUBBLE_TEXT_GUARD_STYLE}
+                      >
+                        <div className="whitespace-pre-wrap" dir="ltr" style={CLAUDE_BUBBLE_TEXT_GUARD_STYLE}>
+                          What would you like to adjust?
+                        </div>
+                      </div>
+                    </div>
                     <form
                       className="flex gap-2"
                       onSubmit={(e) => {
@@ -631,42 +774,32 @@ function IntakeFlow({ initialUserMessage, selectedUseCase, onComplete, onBack })
                       <textarea
                         ref={refineInputRef}
                         id="refine-adjust"
-                        rows={3}
+                        rows={2}
                         value={refineDraft}
                         onChange={(e) => setRefineDraft(e.target.value)}
                         disabled={refineSending}
-                        placeholder="Tell me what to change…"
-                        className="min-h-[2.75rem] min-w-0 flex-1 resize-y rounded-lg border border-[#2a2a2a] bg-[#1e1e1e] px-3 py-2 text-sm text-[#e8e8e8] placeholder:text-[#888888] focus:border-[#6B6B6B] focus:outline-none disabled:opacity-60"
+                        placeholder="Your answer…"
+                        className="min-h-[2.5rem] min-w-0 flex-1 resize-y rounded-lg border border-[#2a2a2a] bg-[#1e1e1e] px-3 py-2 text-sm text-[#e8e8e8] placeholder:text-[#888888] focus:border-[#6B6B6B] focus:outline-none disabled:opacity-60"
                       />
                       <button
                         type="submit"
                         disabled={refineSending || !refineDraft.trim()}
-                        className="inline-flex h-10 shrink-0 items-center justify-center self-start rounded-lg border border-[#6B6B6B] bg-[#1e1e1e] px-3 text-sm font-medium text-[#e8e8e8] transition-colors hover:border-[#6B6B6B] focus:outline-none disabled:opacity-40"
+                        className="inline-flex h-10 shrink-0 items-center justify-center self-start rounded-lg border border-[#6B6B6B] bg-[#1e1e1e] px-3 text-sm text-[#e8e8e8] focus:outline-none disabled:opacity-40"
+                        aria-label="Send"
                       >
-                        {refineSending ? "…" : "→ Send"}
+                        {refineSending ? "…" : "→"}
                       </button>
                     </form>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setApprovalPhase("review");
-                        setRefineDraft("");
-                        setRefineError(null);
-                      }}
-                      className="text-sm text-[#888888] underline decoration-[#888888]/40 underline-offset-4 hover:text-[#e8e8e8]"
-                    >
-                      ← Back to review
-                    </button>
                   </div>
                 )}
 
-                {(approvalPhase === "review" || approvalPhase === "refine_chat") && (
+                {approvalPhase === "review" && (
                   <div className="space-y-4">
                     <div>
                       <h2 className="text-lg font-semibold leading-snug text-[#e8e8e8]">
-                        {"Here's how I'd frame this"}
+                        Your optimized prompt
                       </h2>
-                      <p className="mt-1.5 text-sm text-[#888888]">Review and refine if needed</p>
+                      <p className="mt-1.5 text-sm text-[#888888]">Review before sending to the roundtable</p>
                     </div>
 
                     <div className="max-h-[280px] w-full overflow-y-auto overflow-x-hidden rounded-lg border border-[#2a2a2a] bg-[#0d0d0d] px-3 py-2 text-sm leading-relaxed text-[#e8e8e8] whitespace-pre-wrap break-words">
@@ -680,76 +813,48 @@ function IntakeFlow({ initialUserMessage, selectedUseCase, onComplete, onBack })
                       )}
                     </div>
 
-                    {approvalPhase === "review" && (
-                      <>
-                        <div className="mr-auto w-full max-w-[min(100%,36rem)]">
-                          <div className="mb-2 flex items-center gap-2">
-                            <span className="h-2 w-2 shrink-0 rounded-full bg-[#E8712A]" aria-hidden />
-                            <span className="text-sm font-medium text-[#e8e8e8]">Claude</span>
-                          </div>
-                          <div
-                            dir="ltr"
-                            className="rounded-lg border border-[#2a2a2a] bg-[#1e1e1e] px-4 py-3 text-[0.9375rem] leading-relaxed text-[#e8e8e8]"
-                            style={CLAUDE_BUBBLE_TEXT_GUARD_STYLE}
-                          >
-                            <div className="whitespace-pre-wrap" dir="ltr" style={CLAUDE_BUBBLE_TEXT_GUARD_STYLE}>
-                              Does this capture everything?{"\n"}
-                              Anything to adjust or add?
-                            </div>
-                          </div>
-                        </div>
+                    <hr className="border-[#2a2a2a]" />
 
-                        <div className="flex flex-wrap items-center gap-3">
+                    {postRefineChipLabels ? (
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                        {postRefineChipLabels.map((label, j) => (
                           <button
+                            key={`${j}-${label.slice(0, 32)}`}
                             type="button"
-                            onClick={goToTierSelection}
-                            className="rounded-lg bg-[#e8e8e8] px-5 py-2.5 text-sm font-bold text-[#0d0d0d] transition-opacity hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-[#e8e8e8] focus:ring-offset-2 focus:ring-offset-[#0d0d0d]"
+                            disabled={refineSending}
+                            onClick={() => handlePostRefineOption(label)}
+                            className="rounded-lg border border-[#2a2a2a] bg-[#1e1e1e] px-3 py-2.5 text-left text-sm leading-snug text-[#e8e8e8] transition-colors hover:border-[#6B6B6B] focus:border-[#6B6B6B] focus:outline-none disabled:opacity-50"
                           >
-                            ✓ Yes, approve
+                            {label}
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setRefineError(null);
-                              setApprovalPhase("refine_input");
-                            }}
-                            className="rounded-lg border border-[#6B6B6B] bg-transparent px-4 py-2.5 text-sm font-medium text-[#e8e8e8] transition-colors hover:border-[#888888] focus:outline-none"
-                          >
-                            Refine it →
-                          </button>
-                        </div>
-                      </>
-                    )}
-
-                    {approvalPhase === "refine_chat" && refineThread.length > 0 && !refineSending && (
-                      <form
-                        className="flex gap-2"
-                        onSubmit={(e) => {
-                          e.preventDefault();
-                          sendRefinementMessage(refineDraft);
-                          setRefineDraft("");
-                        }}
-                      >
-                        <label htmlFor="refine-reply" className="sr-only">
-                          Reply to Claude
-                        </label>
-                        <textarea
-                          id="refine-reply"
-                          rows={2}
-                          value={refineDraft}
-                          onChange={(e) => setRefineDraft(e.target.value)}
-                          placeholder="Your answer…"
-                          className="min-h-[2.5rem] min-w-0 flex-1 resize-y rounded-lg border border-[#2a2a2a] bg-[#1e1e1e] px-3 py-2 text-sm text-[#e8e8e8] placeholder:text-[#888888] focus:border-[#6B6B6B] focus:outline-none"
-                        />
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="flex flex-wrap items-center gap-3">
                         <button
-                          type="submit"
-                          disabled={!refineDraft.trim()}
-                          className="inline-flex h-10 shrink-0 items-center justify-center self-start rounded-lg border border-[#6B6B6B] bg-[#1e1e1e] px-3 text-sm text-[#e8e8e8] focus:outline-none disabled:opacity-40"
-                          aria-label="Send"
+                          type="button"
+                          onClick={goToTierSelection}
+                          className="rounded-lg bg-[#e8e8e8] px-5 py-2.5 text-sm font-bold text-[#0d0d0d] transition-opacity hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-[#e8e8e8] focus:ring-offset-2 focus:ring-offset-[#0d0d0d]"
                         >
-                          <span aria-hidden>→</span>
+                          Approve →
                         </button>
-                      </form>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setRefineThread([
+                              { role: "user", content: "I'd like to adjust the prompt" },
+                              { role: "assistant", content: "Of course — what would you like to change?" },
+                            ]);
+                            setRefineIsFirstMessage(true);
+                            setRefineError(null);
+                            setRefineDraft("");
+                            setApprovalPhase("refine_chat");
+                          }}
+                          className="rounded-lg border border-[#6B6B6B] bg-transparent px-4 py-2.5 text-sm font-medium text-[#e8e8e8] transition-colors hover:border-[#888888] focus:outline-none"
+                        >
+                          Adjust
+                        </button>
+                      </div>
                     )}
                   </div>
                 )}
@@ -781,7 +886,7 @@ function IntakeFlow({ initialUserMessage, selectedUseCase, onComplete, onBack })
                       </div>
                       <p className="mx-auto mt-2 w-full min-w-0 px-1 text-center text-xs leading-relaxed text-[#888888] break-words">
                         {tierChoice === "quick" &&
-                          "Fast · cost-effective · good for quick questions"}
+                          "Single executor per model · fastest · good for gut checks and brainstorms"}
                         {tierChoice === "smart" &&
                           "Executor + advisor per model · near-Deep quality · recommended for most sessions"}
                         {tierChoice === "deep" &&

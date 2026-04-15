@@ -6,3 +6,5 @@ __pycache__/
 CLAUDE.md
 frontend/node_modules/
 frontend/.env.local
+docs/*.png
+.claude/worktrees/

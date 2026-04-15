@@ -487,6 +487,10 @@ class IntakeSession:
                 "suggested_options": list[str] | None  # 2–4 chips when present
             }
         """
+        # Allow re-entry after completion (user chose to add more information).
+        self.complete = False
+        self.session_config = None
+
         self.history.append({"role": "user", "content": user_message})
 
         response = call_claude(
@@ -538,7 +542,7 @@ class IntakeSession:
         current = config.get("tier", "deep")
         config["tier"] = TIER_MAP.get(current, "deep")
 
-    def refine(self, user_message: str) -> dict:
+    def refine(self, user_message: str, current_prompt_override: Optional[str] = None) -> dict:
         """
         Post-intake prompt refinement (POST /api/intake/refine).
 
@@ -547,6 +551,9 @@ class IntakeSession:
 
         Second call: passes the user's answer to ``confirm()`` and merges the
         rewritten ``optimized_prompt`` into ``session_config``.
+
+        ``current_prompt_override`` (optional): when starting a new refine, use
+        this text as the baseline prompt instead of ``session_config`` only.
 
         Returns:
             {
@@ -569,7 +576,14 @@ class IntakeSession:
             raise ValueError("Message must not be empty.")
 
         if self.active_refine is None:
-            self.active_refine = RefineSession(str(prompt).strip(), msg)
+            base_prompt = str(prompt).strip()
+            if (
+                current_prompt_override
+                and isinstance(current_prompt_override, str)
+                and current_prompt_override.strip()
+            ):
+                base_prompt = current_prompt_override.strip()
+            self.active_refine = RefineSession(base_prompt, msg)
             pr = self.active_refine.probe()
             opts = pr.get("suggested_options")
             if isinstance(opts, list):
@@ -785,7 +799,7 @@ class RefineSession:
             "Output it inside a ```refined-prompt ... ``` fenced block. "
             "After the block, ask a short confirmation question. "
             "End with: "
-            'INTAKE_OPTIONS: ["Yes — looks good", "I\'d like to adjust something else"]'
+            'INTAKE_OPTIONS: ["Yes — looks good", "Adjust something else"]'
         )
 
         response = call_claude(
@@ -801,7 +815,7 @@ class RefineSession:
         display = sanitize_text(_strip_refined_prompt_block(display))
 
         if options is None:
-            options = ["Yes — looks good", "I'd like to adjust something else"]
+            options = ["Yes — looks good", "Adjust something else"]
 
         return {
             "status":            "refined",
