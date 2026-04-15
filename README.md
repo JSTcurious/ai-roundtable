@@ -1,8 +1,12 @@
-# ai-roundtable ⬡
+# AI-ROUNDTABLE
 
-> A group chat where your contacts are AI models.
+> A thinking environment where four frontier AI models work together to produce a high-quality deliverable.
 
-You `@mention` who you want to speak. Every model in the conversation has the full shared transcript — so when Claude responds after Gemini, it has heard everything. No copy-pasting across tabs. No context switching. A persistent, multi-model conversation where you stay in the chair.
+You arrive with a problem or question. You leave with something you can act on — a report, a plan, an architecture decision, a roadmap.
+
+**The intake is not overhead. It is the product.**
+
+Most AI tools take what you type. ai-roundtable understands what you need — Claude asks a few questions, mirrors back what it heard, and constructs an optimized prompt before any frontier model is invoked. You approve the prompt. Then the roundtable begins.
 
 ---
 
@@ -116,6 +120,42 @@ ai-roundtable/
 
 ---
 
+## v2 Quickstart
+
+### Prerequisites
+
+- Python 3.11+ and [uv](https://github.com/astral-sh/uv)
+- Node.js 18+
+- API keys: Anthropic, Google, OpenAI, Perplexity
+
+### Configure
+
+```bash
+cp .env.example backend/.env
+# Add your API keys to backend/.env
+```
+
+### Run backend
+
+```bash
+cd /path/to/ai-roundtable
+uv run uvicorn backend.main:app --reload
+# Runs on http://localhost:8000
+```
+
+### Run frontend
+
+```bash
+cd frontend
+npm install
+npm start
+# Runs on http://localhost:3000
+```
+
+Open `http://localhost:3000`. Type a question, choose AS-IS PROMPT or REFINED PROMPT, and start the session.
+
+---
+
 ## Origin
 
 I was exploring how management thinking frameworks — the kind used to structure human group decision-making — could be applied to multi-model AI collaboration. Assign each AI agent a distinct cognitive role. Not a function. A thinking mode.
@@ -134,17 +174,17 @@ Prior art timestamped on LinkedIn:
 
 **v1 (current)** — GitHub Models free tier, three providers, @mention routing, shared transcript
 
-**v2 (in build)**
-- Thorough intake — Claude understands what you need before any model is invoked
-- Use case library — 16 curated starting points
-- Four providers — Claude + Gemini + GPT + Perplexity as fact-checker
-- Three tiers — Quick / Smart (advisor pattern) / Deep Thinking
-- Claude as orchestrator — intake, synthesis, Perplexity audit integration
-- Deep mode — cross-critique with specialized lenses per model
-- Markdown export + Google Drive + downstream handoffs to Claude Code and Perplexity
-- React + FastAPI + WebSocket streaming
+**v2 (shipped April 2026)**
+- Thorough intake — Claude understands what you need before any model is invoked; optimized prompt shown for approval
+- Human-in-the-Loop synthesis — Claude surfaces 3-5 observations before synthesizing; chair keeps or overrules each
+- Four providers — Claude (orchestrator) + Gemini + GPT + Perplexity (fact-checker only)
+- Four-stage session progress — PROMPT → TRANSCRIPT → FACT-CHECK → SYNTHESIS with live breadcrumb
+- Three export formats — full session (.md), synthesis only (.md), optimized prompt (.md)
+- Session save and resume — save full transcript + config as .json, reload to continue
+- WebSocket streaming — tokens arrive token-by-token; bidirectional for chair dialogue
+- React + FastAPI + direct APIs — no GitHub Models, no wrappers
 
-**v3** — CognitiveCV cognitive framework agents, PDF/Notion export, session persistence
+**v3** — CognitiveCV cognitive framework agents, PDF/Notion/Google Drive export, Render deployment, Deep mode cross-critique
 
 ---
 
