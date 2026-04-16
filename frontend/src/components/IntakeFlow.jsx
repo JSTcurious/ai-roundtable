@@ -7,6 +7,7 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Header from "./common/Header";
 
 const API_BASE = process.env.REACT_APP_API_URL || "http://localhost:8000";
 
@@ -485,21 +486,9 @@ function IntakeFlow({ initialUserMessage, selectedUseCase, onComplete, onBack })
 
   return (
     <div className="flex h-[100dvh] min-h-0 flex-col bg-[#0d0d0d] text-[#e8e8e8]">
-      <div className="shrink-0 px-4 pt-4 sm:px-6">
-        <div className="mx-auto max-w-3xl lg:max-w-5xl">
-          {typeof onBack === "function" && (
-            <button
-              type="button"
-              onClick={handleBack}
-              className="text-sm text-[#888888] transition-colors hover:text-[#e8e8e8]"
-            >
-              ← Home
-            </button>
-          )}
-        </div>
-      </div>
+      <Header onHome={handleBack} onSaveExit={typeof onBack === "function" ? handleBack : undefined} />
 
-      <div className="mx-auto flex w-full max-w-3xl flex-1 min-h-0 flex-col px-4 pt-3 sm:px-6 lg:max-w-5xl">
+      <div className="mx-auto flex w-full max-w-3xl flex-1 min-h-0 flex-col px-4 pt-4 sm:px-6 lg:max-w-5xl">
         {(bootError || sendError) && (
           <div className="shrink-0 space-y-2 pb-2" role="region" aria-label="Errors">
             {bootError && (
@@ -515,7 +504,7 @@ function IntakeFlow({ initialUserMessage, selectedUseCase, onComplete, onBack })
           </div>
         )}
 
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain">
+        <div className="intake-scroll min-h-0 flex-1 overflow-y-auto overscroll-y-contain">
           <div className="space-y-4 pb-2">
           {starting && <p className="text-sm text-[#888888]">Starting conversation…</p>}
 
@@ -725,6 +714,12 @@ function IntakeFlow({ initialUserMessage, selectedUseCase, onComplete, onBack })
                       disabled={sending}
                       placeholder={showOptionChips ? "Something else..." : "Reply to Claude…"}
                       className="min-h-[2.75rem] min-w-0 flex-1 resize-y rounded-lg border border-[#2a2a2a] bg-[#1e1e1e] px-3 py-2 text-sm text-[#e8e8e8] placeholder:text-[#888888] focus:border-[#6B6B6B] focus:outline-none disabled:opacity-60"
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !e.shiftKey) {
+                          e.preventDefault();
+                          sendMessage();
+                        }
+                      }}
                     />
                     <button
                       type="submit"

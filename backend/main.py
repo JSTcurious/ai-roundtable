@@ -74,6 +74,7 @@ from backend.models.google_client import (
     call_gemini_smart_async,
 )
 from backend.models.openai_client import call_gpt, call_gpt_smart, call_gpt_smart_async
+from backend.models.grok_client import call_grok, call_grok_smart, call_grok_smart_async
 from backend.models.perplexity_client import (
     research as perplexity_research,
     audit as perplexity_audit,
@@ -319,10 +320,12 @@ async def session_run(req: SessionRunRequest):
 
     gemini_history = transcript.get_history_for_model("gemini")
     gpt_history    = transcript.get_history_for_model("gpt")
+    grok_history   = transcript.get_history_for_model("grok")
     gemini_system  = get_round1_system_prompt("gemini")
     gpt_system     = get_round1_system_prompt("gpt")
+    grok_system    = get_round1_system_prompt("grok")
 
-    # ── Parallel: Gemini + GPT + Perplexity pre-research ─────────────────────
+    # ── Parallel: Gemini + GPT + Grok + Perplexity pre-research ──────────────
     if mode == "smart":
         async def _gemini_task() -> str:
             try:
@@ -343,6 +346,16 @@ async def session_run(req: SessionRunRequest):
                 return result["advisor_text"]
             except Exception as exc:
                 return _skip("GPT", exc)
+
+        async def _grok_task() -> str:
+            try:
+                result = await _call_with_retry_async(
+                    lambda: call_grok_smart_async(grok_history, grok_system),
+                    "Grok-smart",
+                )
+                return result["advisor_text"]
+            except Exception as exc:
+                return _skip("Grok", exc)
     else:
         async def _gemini_task() -> str:
             try:
@@ -366,6 +379,17 @@ async def session_run(req: SessionRunRequest):
             except Exception as exc:
                 return _skip("GPT", exc)
 
+        async def _grok_task() -> str:
+            try:
+                r = await asyncio.to_thread(
+                    _call_with_retry,
+                    lambda: call_grok(messages=grok_history, tier=tier, system=grok_system),
+                    "Grok",
+                )
+                return r.choices[0].message.content
+            except Exception as exc:
+                return _skip("Grok", exc)
+
     async def _research_task() -> str:
         try:
             return await asyncio.to_thread(
@@ -376,19 +400,20 @@ async def session_run(req: SessionRunRequest):
         except Exception as exc:
             return f"[Perplexity pre-research unavailable: {exc}]"
 
-    gemini_text, gpt_text, perplexity_pre = await asyncio.gather(
-        _gemini_task(), _gpt_task(), _research_task(),
+    gemini_text, gpt_text, grok_text, perplexity_pre = await asyncio.gather(
+        _gemini_task(), _gpt_task(), _grok_task(), _research_task(),
     )
 
     transcript.add_model_message("Gemini", gemini_text, round="round1")
     transcript.add_model_message("GPT",    gpt_text,    round="round1")
+    transcript.add_model_message("Grok",   grok_text,   round="round1")
 
     # ── Perplexity audit (Phase 2) ────────────────────────────────────────────
     try:
         audit_text = await asyncio.to_thread(
             _call_with_retry,
             lambda: perplexity_audit(
-                {"gemini": gemini_text, "gpt": gpt_text},
+                {"gemini": gemini_text, "gpt": gpt_text, "grok": grok_text},
                 research_text=perplexity_pre,
                 tier=tier,
             ),
@@ -403,6 +428,7 @@ async def session_run(req: SessionRunRequest):
         output_type=output_type,
         gemini=gemini_text,
         gpt=gpt_text,
+        grok=grok_text,
         perplexity=audit_text,
         optimized_prompt=optimized_prompt,
     )
@@ -428,6 +454,7 @@ async def session_run(req: SessionRunRequest):
         "round1": {
             "gemini": gemini_text,
             "gpt":    gpt_text,
+            "grok":   grok_text,
         },
         "audit":     audit_text,
         "synthesis": synthesis_text,
@@ -565,6 +592,14 @@ def _gpt_token_iter(messages, tier, system):
             yield delta
 
 
+def _grok_token_iter(messages, tier, system):
+    """Yield text tokens from a streaming Grok response."""
+    for chunk in call_grok(messages=messages, tier=tier, system=system, stream=True):
+        delta = chunk.choices[0].delta.content
+        if delta:
+            yield delta
+
+
 # ── Smart tier advisor helpers ────────────────────────────────────────────────
 #
 # These run AFTER the executor has already streamed its tokens to the frontend.
@@ -592,6 +627,14 @@ def _gpt_advisor(executor_text: str, request: str) -> str:
     resp = call_gpt(
         messages=[{"role": "user", "content": _ADVISOR_PROMPT.format(request=request, response=executor_text)}],
         tier="deep",  # gpt-5 (or fallback to gpt-4o via call_gpt)
+    )
+    return resp.choices[0].message.content
+
+
+def _grok_advisor(executor_text: str, request: str) -> str:
+    resp = call_grok(
+        messages=[{"role": "user", "content": _ADVISOR_PROMPT.format(request=request, response=executor_text)}],
+        tier="deep",  # grok-3
     )
     return resp.choices[0].message.content
 
@@ -760,6 +803,7 @@ async def _generate_observations(
     prompt: str,
     gemini: str,
     gpt: str,
+    grok: str,
     perplexity: str,
     tier: str,
 ) -> list:
@@ -771,19 +815,20 @@ async def _generate_observations(
     Each observation is already phrased to inform a keep/overrule decision.
     """
     system = (
-        "You are analyzing two AI model responses to identify key observations for synthesis. "
+        "You are analyzing three AI model responses to identify key observations for synthesis. "
         "Respond ONLY with valid JSON in this exact format with no other text:\n"
         "{\"observations\": [\"...\", \"...\"]}\n\n"
         "Each observation must be a single self-contained sentence that:\n"
-        "- States what Gemini and/or GPT said (a point of agreement, disagreement, or key decision)\n"
+        "- States what Gemini, GPT, and/or Grok said (a point of agreement, disagreement, or key decision)\n"
         "- States what you intend to do in the final synthesis\n"
         "- Ends with: 'Do you want to keep this, or overrule?'\n"
         "Identify exactly 3 to 5 observations. No preamble, no markdown, only the JSON object."
     )
     obs_prompt = (
         f"User's request: {prompt}\n\n"
-        f"Gemini's response:\n{gemini[:2500]}\n\n"
-        f"GPT's response:\n{gpt[:2500]}\n\n"
+        f"Gemini's response:\n{gemini[:2000]}\n\n"
+        f"GPT's response:\n{gpt[:2000]}\n\n"
+        f"Grok's response:\n{grok[:2000]}\n\n"
         f"Perplexity fact-check:\n{perplexity[:1000]}"
     )
     try:
@@ -886,8 +931,10 @@ async def session_websocket(websocket: WebSocket):
         # (executor + advisor) off the event loop, then chunk-emit advisor text.
         gemini_history = transcript.get_history_for_model("gemini")
         gpt_history    = transcript.get_history_for_model("gpt")
+        grok_history   = transcript.get_history_for_model("grok")
         gemini_system  = get_round1_system_prompt("gemini")
         gpt_system     = get_round1_system_prompt("gpt")
+        grok_system    = get_round1_system_prompt("grok")
         send_lock      = asyncio.Lock()
 
         async def _research_task() -> str:
@@ -918,13 +965,19 @@ async def session_websocket(websocket: WebSocket):
                     lambda: call_gpt_smart_async(gpt_history, gpt_system),
                     "GPT-smart",
                 ),
+                _call_with_retry_async(
+                    lambda: call_grok_smart_async(grok_history, grok_system),
+                    "Grok-smart",
+                ),
                 return_exceptions=True,
             )
             perplexity_pre = r1_results[0] if isinstance(r1_results[0], str) else ""
-            gem_res = r1_results[1]
-            gpt_res = r1_results[2]
-            gemini_text_body = _smart_round1_body(gem_res, "Gemini")
-            gpt_text_body = _smart_round1_body(gpt_res, "GPT")
+            gem_res  = r1_results[1]
+            gpt_res  = r1_results[2]
+            grok_res = r1_results[3]
+            gemini_text_body = _smart_round1_body(gem_res,  "Gemini")
+            gpt_text_body    = _smart_round1_body(gpt_res,  "GPT")
+            grok_text_body   = _smart_round1_body(grok_res, "Grok")
 
             async def _emit_model_tokens(sender: str, text: str) -> None:
                 body = text or ""
@@ -938,10 +991,12 @@ async def session_websocket(websocket: WebSocket):
 
             await asyncio.gather(
                 _emit_model_tokens("Gemini", gemini_text_body),
-                _emit_model_tokens("GPT", gpt_text_body),
+                _emit_model_tokens("GPT",    gpt_text_body),
+                _emit_model_tokens("Grok",   grok_text_body),
             )
             gemini_text = gemini_text_body
-            gpt_text = gpt_text_body
+            gpt_text    = gpt_text_body
+            grok_text   = grok_text_body
         else:
             results = await asyncio.gather(
                 _stream_model(
@@ -958,17 +1013,27 @@ async def session_websocket(websocket: WebSocket):
                     send_lock=send_lock,
                     commit_to_transcript=False,
                 ),
+                _stream_model(
+                    websocket, "Grok",
+                    lambda: _grok_token_iter(grok_history, tier, grok_system),
+                    transcript=None,
+                    send_lock=send_lock,
+                    commit_to_transcript=False,
+                ),
                 _research_task(),
                 return_exceptions=True,
             )
             gemini_exec = results[0] if isinstance(results[0], str) else f"[Gemini error: {results[0]}]"
-            gpt_exec = results[1] if isinstance(results[1], str) else f"[GPT error: {results[1]}]"
-            perplexity_pre = results[2] if isinstance(results[2], str) else ""
+            gpt_exec    = results[1] if isinstance(results[1], str) else f"[GPT error: {results[1]}]"
+            grok_exec   = results[2] if isinstance(results[2], str) else f"[Grok error: {results[2]}]"
+            perplexity_pre = results[3] if isinstance(results[3], str) else ""
             gemini_text = gemini_exec
-            gpt_text = gpt_exec
+            gpt_text    = gpt_exec
+            grok_text   = grok_exec
 
         transcript.add_model_message("Gemini", gemini_text, round="round1")
         transcript.add_model_message("GPT",    gpt_text,    round="round1")
+        transcript.add_model_message("Grok",   grok_text,   round="round1")
 
         # ── Perplexity audit (Phase 2) ────────────────────────────────────────
         await websocket.send_json({"type": "perplexity_thinking"})
@@ -976,7 +1041,7 @@ async def session_websocket(websocket: WebSocket):
             audit_text = await asyncio.to_thread(
                 _call_with_retry,
                 lambda: perplexity_audit(
-                    {"gemini": gemini_text, "gpt": gpt_text},
+                    {"gemini": gemini_text, "gpt": gpt_text, "grok": grok_text},
                     research_text=perplexity_pre,
                     tier=tier,
                 ),
@@ -993,6 +1058,7 @@ async def session_websocket(websocket: WebSocket):
             prompt=optimized_prompt,
             gemini=gemini_text,
             gpt=gpt_text,
+            grok=grok_text,
             perplexity=audit_text,
             tier=tier,
         )
@@ -1033,6 +1099,7 @@ async def session_websocket(websocket: WebSocket):
             output_type=output_type,
             gemini=gemini_text,
             gpt=gpt_text,
+            grok=grok_text,
             perplexity=audit_text,
             optimized_prompt=optimized_prompt,
         )

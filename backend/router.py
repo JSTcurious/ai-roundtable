@@ -27,6 +27,7 @@ from backend.models.anthropic_client import MODELS as CLAUDE_MODELS
 from backend.models.google_client import MODELS as GEMINI_MODELS
 from backend.models.openai_client import MODELS as GPT_MODELS
 from backend.models.perplexity_client import MODELS as PERPLEXITY_MODELS
+from backend.models.grok_client import MODELS as GROK_MODELS
 
 
 ROUND1_SYSTEM_PROMPTS = {
@@ -41,16 +42,23 @@ first — no other model has spoken yet. Answer directly. \
 Do not prefix your response with your name.""",
 
     "gpt": """You are GPT, participating in a roundtable \
-discussion with Gemini and Claude. Your strength is structure, \
+discussion with Gemini, Grok, and Claude. Your strength is structure, \
 actionability, and breadth. Lead with that. You have the full \
 conversation history including what Gemini said before you. \
 Build on it where relevant. Be direct. Do not prefix your \
 response with your name.""",
 
+    "grok": """You are Grok, participating in a roundtable \
+discussion with Gemini, GPT, and Claude. Your strength is creative \
+synthesis, lateral thinking, and contrarian perspectives. Lead with that. \
+You have the full conversation history including what Gemini and GPT said \
+before you. Challenge assumptions where warranted. Be direct. \
+Do not prefix your response with your name.""",
+
     "claude": """You are Claude, participating in a roundtable \
-discussion with Gemini and GPT. Your strength is reasoning, \
+discussion with Gemini, GPT, and Grok. Your strength is reasoning, \
 synthesis, and natural prose. Lead with that. You have the \
-full conversation history including what Gemini and GPT said \
+full conversation history including what Gemini, GPT, and Grok said \
 before you. Build on their responses where relevant — push back \
 where you disagree. Be direct. Do not prefix your response with \
 your name.""",
@@ -59,13 +67,16 @@ your name.""",
 # v2: synthesis works without a Perplexity audit.
 # The {audit_section} placeholder is populated with a v2.1 notice at runtime.
 SYNTHESIS_PROMPT = """You are the expert chair of this roundtable. \
-You have heard two expert perspectives and have live web research.
+You have heard three expert perspectives and have live web research.
 
 Gemini's analysis:
 {gemini}
 
 GPT's analysis:
 {gpt}
+
+Grok's analysis:
+{grok}
 
 Perplexity live research + audit:
 {perplexity}
@@ -76,7 +87,7 @@ Full context: {optimized_prompt}
 Now produce ONE definitive, integrated final answer.
 
 Rules:
-- Add your own expert perspective — don't just summarize what Gemini and GPT said
+- Add your own expert perspective — don't just summarize what Gemini, GPT, and Grok said
 - Take the strongest insights from each and weave them into a coherent whole
 - Where models disagreed, note it in ONE sentence and give your recommendation
 - Correct anything Perplexity flagged as outdated
@@ -142,6 +153,7 @@ def get_tier_config(tier: str) -> dict:
             "claude":     CLAUDE_MODELS["quick"],
             "gemini":     GEMINI_MODELS["quick"],
             "gpt":        GPT_MODELS["quick"],
+            "grok":       GROK_MODELS["quick"],
             "perplexity": PERPLEXITY_MODELS["quick"],
             "strategy":   "quick",
         }
@@ -155,6 +167,8 @@ def get_tier_config(tier: str) -> dict:
             "gemini_advisor":  GEMINI_MODELS["deep"],
             "gpt_executor":    GPT_MODELS["smart"],
             "gpt_advisor":     GPT_MODELS["deep"],
+            "grok_executor":   GROK_MODELS["smart"],
+            "grok_advisor":    GROK_MODELS["deep"],
             "perplexity":      PERPLEXITY_MODELS["smart"],
             "strategy":        "smart",
         }
@@ -165,6 +179,7 @@ def get_tier_config(tier: str) -> dict:
         "claude":     CLAUDE_MODELS["deep"],
         "gemini":     GEMINI_MODELS["deep"],
         "gpt":        GPT_MODELS["deep"],
+        "grok":       GROK_MODELS["deep"],
         "perplexity": PERPLEXITY_MODELS["deep"],
         "strategy":   "deep_thinking",
     }
@@ -357,6 +372,7 @@ def build_synthesis_prompt(
     output_type: str,
     gemini: str = "",
     gpt: str = "",
+    grok: str = "",
     perplexity: str = "",
     optimized_prompt: str = "",
 ) -> str:
@@ -364,12 +380,13 @@ def build_synthesis_prompt(
     Return the Claude synthesis system prompt with all inputs injected.
 
     Claude does not participate in Round 1 — it synthesises from Gemini,
-    GPT, and Perplexity's live research + audit.
+    GPT, Grok, and Perplexity's live research + audit.
 
     Args:
         output_type:       e.g. "roadmap", "report", "decision", "plan", "brainstorm"
         gemini:            Gemini's Round 1 response text
         gpt:               GPT's Round 1 response text
+        grok:              Grok's Round 1 response text
         perplexity:        Perplexity Phase 2 audit text (includes Phase 1 research)
         optimized_prompt:  the full optimized prompt from intake
     """
@@ -377,6 +394,7 @@ def build_synthesis_prompt(
         output_type=output_type,
         gemini=gemini or "(not available)",
         gpt=gpt or "(not available)",
+        grok=grok or "(not available)",
         perplexity=perplexity or "(not available)",
         optimized_prompt=optimized_prompt or "(not available)",
     )

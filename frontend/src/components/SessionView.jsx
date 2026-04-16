@@ -12,6 +12,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MODEL_HEX } from "../constants/modelColors";
+import Header from "./common/Header";
 import ModelBubble from "./common/ModelBubble";
 import SynthesisPanel from "./SynthesisPanel";
 import TakeFurther from "./TakeFurther";
@@ -47,7 +48,7 @@ function timestamp() {
   return new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
-function buildTranscriptDict(sessionConfig, prompt, geminiR1, gptR1, perplexityContent, synthesisText) {
+function buildTranscriptDict(sessionConfig, prompt, geminiR1, gptR1, grokR1, perplexityContent, synthesisText) {
   const messages = [
     { role: "user", sender: "You", content: prompt, timestamp: timestamp() },
     {
@@ -61,6 +62,13 @@ function buildTranscriptDict(sessionConfig, prompt, geminiR1, gptR1, perplexityC
       role: "assistant",
       sender: "GPT",
       content: gptR1,
+      round: "round1",
+      timestamp: timestamp(),
+    },
+    {
+      role: "assistant",
+      sender: "Grok",
+      content: grokR1,
       round: "round1",
       timestamp: timestamp(),
     },
@@ -201,6 +209,49 @@ function ThinkingDotsBubble({ label, color, uppercase = true, subtitle }) {
 }
 
 /**
+ * Static summary of every chair decision — shown once synthesis begins, persists.
+ * @param {{ index: number, observation_text: string, decision: string, overrule_text: string }[]} props.decisions
+ */
+function ChairDecisionsBlock({ decisions }) {
+  if (!decisions.length) return null;
+  return (
+    <section aria-label="Chair decisions">
+      <div
+        className="rounded-lg px-4 py-4"
+        style={{ background: "#1a1a1a", borderTop: "1px solid #F5A623", borderLeft: "3px solid #F5A623" }}
+      >
+        <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide" style={{ color: "#F5A623" }}>
+          Chair Decisions
+        </h2>
+        <div className="space-y-2">
+          {decisions.map((d) => (
+            <div key={d.index} className="text-sm leading-relaxed">
+              <span className="text-[#888888]">{d.index}.</span>{" "}
+              <span className="text-[#e8e8e8]">
+                {d.observation_text.length > 120
+                  ? d.observation_text.slice(0, 120) + "…"
+                  : d.observation_text}
+              </span>{" "}
+              <span style={{ color: "#F5A623" }}>→</span>{" "}
+              {d.decision === "keep" ? (
+                <span style={{ color: "#4CAF50" }}>KEPT</span>
+              ) : (
+                <>
+                  <span style={{ color: "#F5A623" }}>OVERRULED</span>
+                  {d.overrule_text && (
+                    <span style={{ color: "#888888" }}> &ldquo;{d.overrule_text}&rdquo;</span>
+                  )}
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/**
  * @param {Object} props
  * @param {Object} props.sessionConfig
  * @param {Object | null} [props.resumeTranscript] — saved `{ messages, intake_summary? }`; skips WebSocket and shows static session + export
@@ -219,11 +270,14 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
 
   const [geminiR1, setGeminiR1] = useState("");
   const [gptR1, setGptR1] = useState("");
+  const [grokR1, setGrokR1] = useState("");
   const [geminiR1Complete, setGeminiR1Complete] = useState(false);
   const [gptR1Complete, setGptR1Complete] = useState(false);
-  /** Smart-tier advisor pass — shown under Gemini/GPT bubbles until advisor_complete */
+  const [grokR1Complete, setGrokR1Complete] = useState(false);
+  /** Smart-tier advisor pass — shown under model bubbles until advisor_complete */
   const [geminiAdvisorReviewing, setGeminiAdvisorReviewing] = useState(false);
   const [gptAdvisorReviewing, setGptAdvisorReviewing] = useState(false);
+  const [grokAdvisorReviewing, setGrokAdvisorReviewing] = useState(false);
 
   const [sessionStarted, setSessionStarted] = useState(false);
   /** off | thinking | content */
@@ -244,10 +298,12 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
   const [currentObservation, setCurrentObservation] = useState(null);
   const [overruleMode, setOverruleMode] = useState(false);
   const [overruleInput, setOverruleInput] = useState("");
+  /** [{index, observation_text, decision, overrule_text}] — persists after synthesis */
+  const [chairDecisions, setChairDecisions] = useState([]);
   /** Live WebSocket ref so chair decision can be sent from event handlers. */
   const wsRef = useRef(null);
 
-  const r1CountsRef = useRef({ Gemini: 0, GPT: 0 });
+  const r1CountsRef = useRef({ Gemini: 0, GPT: 0, Grok: 0 });
 
   const phaseRef = useRef(/** @type {StreamPhase} */ ("idle"));
 
@@ -276,6 +332,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
       displayPrompt,
       geminiR1,
       gptR1,
+      grokR1,
       perplexityContent,
       synthesisText
     );
@@ -285,6 +342,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     displayPrompt,
     geminiR1,
     gptR1,
+    grokR1,
     perplexityContent,
     synthesisText,
   ]);
@@ -304,6 +362,11 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
         setGptR1((prev) => prev + token);
         return;
       }
+      if (sender === "Grok") {
+        r1CountsRef.current.Grok += token.length;
+        setGrokR1((prev) => prev + token);
+        return;
+      }
       return;
     }
     if (phase === "synthesis" && sender === "Claude") {
@@ -314,13 +377,9 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
   }, []);
 
   const handleModelComplete = useCallback((sender) => {
-    if (sender === "Gemini") {
-      setGeminiR1Complete(true);
-      return;
-    }
-    if (sender === "GPT") {
-      setGptR1Complete(true);
-    }
+    if (sender === "Gemini") { setGeminiR1Complete(true); return; }
+    if (sender === "GPT")    { setGptR1Complete(true);    return; }
+    if (sender === "Grok")   { setGrokR1Complete(true);   return; }
   }, []);
 
   useEffect(() => {
@@ -328,6 +387,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     if (!msgs?.length || !sessionConfig) return;
     let ge = "";
     let gp = "";
+    let grk = "";
     let audit = "";
     let syn = "";
     for (const m of msgs) {
@@ -335,8 +395,9 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
       const r = m.round;
       const s = m.sender;
       if (r === "round1") {
-        if (s === "Gemini") ge = m.content ?? "";
-        if (s === "GPT") gp = m.content ?? "";
+        if (s === "Gemini") ge  = m.content ?? "";
+        if (s === "GPT")    gp  = m.content ?? "";
+        if (s === "Grok")   grk = m.content ?? "";
       }
       if ((r === "audit" || r === "round1") && s === "Perplexity") {
         audit = m.content ?? audit;
@@ -348,10 +409,13 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     setStreamError(null);
     setGeminiR1(ge);
     setGptR1(gp);
+    setGrokR1(grk);
     setGeminiR1Complete(true);
     setGptR1Complete(true);
+    setGrokR1Complete(true);
     setGeminiAdvisorReviewing(false);
     setGptAdvisorReviewing(false);
+    setGrokAdvisorReviewing(false);
     setSessionStarted(true);
     setPerplexityPhase(audit.trim() ? "content" : "off");
     setPerplexityContent(audit);
@@ -361,7 +425,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     setSynthesisFinal(!!String(syn).trim());
     setSessionComplete(true);
     phaseRef.current = "idle";
-    r1CountsRef.current = { Gemini: ge.length, GPT: gp.length };
+    r1CountsRef.current = { Gemini: ge.length, GPT: gp.length, Grok: grk.length };
   }, [resumeTranscript, sessionConfig]);
 
   useEffect(() => {
@@ -379,16 +443,19 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
 
     phaseRef.current = "idle";
     setStreamPhaseMarker((x) => x + 1);
-    r1CountsRef.current = { Gemini: 0, GPT: 0 };
+    r1CountsRef.current = { Gemini: 0, GPT: 0, Grok: 0 };
     setConfigError(null);
     setTransportError(null);
     setStreamError(null);
     setGeminiR1("");
     setGptR1("");
+    setGrokR1("");
     setGeminiR1Complete(false);
     setGptR1Complete(false);
+    setGrokR1Complete(false);
     setGeminiAdvisorReviewing(false);
     setGptAdvisorReviewing(false);
+    setGrokAdvisorReviewing(false);
     setSessionStarted(false);
     setPerplexityPhase("off");
     setPerplexityContent("");
@@ -397,6 +464,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     setSynthesisStreaming(false);
     setSynthesisFinal(false);
     setSessionComplete(false);
+    setChairDecisions([]);
 
     const url = wsUrlFromApiBase();
     const ws = new WebSocket(url);
@@ -442,13 +510,15 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
         case "advisor_thinking": {
           const advSender = data.sender;
           if (advSender === "Gemini") setGeminiAdvisorReviewing(true);
-          if (advSender === "GPT") setGptAdvisorReviewing(true);
+          if (advSender === "GPT")    setGptAdvisorReviewing(true);
+          if (advSender === "Grok")   setGrokAdvisorReviewing(true);
           break;
         }
         case "advisor_complete": {
           const advDone = data.sender;
           if (advDone === "Gemini") setGeminiAdvisorReviewing(false);
-          if (advDone === "GPT") setGptAdvisorReviewing(false);
+          if (advDone === "GPT")    setGptAdvisorReviewing(false);
+          if (advDone === "Grok")   setGrokAdvisorReviewing(false);
           break;
         }
         case "perplexity_thinking":
@@ -550,10 +620,22 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: "chair_decision", decision, overrule_text: overruleText }));
     }
+    setChairDecisions((prev) => {
+      if (!currentObservation) return prev;
+      return [
+        ...prev,
+        {
+          index: currentObservation.index,
+          observation_text: currentObservation.text,
+          decision,
+          overrule_text: overruleText,
+        },
+      ];
+    });
     setCurrentObservation(null);
     setOverruleMode(false);
     setOverruleInput("");
-  }, []);
+  }, [currentObservation]);
 
   const sessionSettled = synthesisFinal;
 
@@ -651,7 +733,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     // PROMPT — done as soon as session starts (or resume)
     const promptDone = isResume || sessionStarted;
 
-    // TRANSCRIPT — active during round1_parallel, done when perplexity starts or synthesis entered
+    // RESEARCH — active during round1_parallel, done when perplexity starts or synthesis entered
     const transcriptDone = isResume || perplexityPhase !== "off" || synthesisPhaseEntered;
     const transcriptActive = sessionStarted && !transcriptDone;
 
@@ -673,11 +755,14 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     transcriptLive && !configError && promptOk && sessionStarted && !geminiR1Complete && !String(geminiR1).trim();
   const showGptThinking =
     transcriptLive && !configError && promptOk && sessionStarted && !gptR1Complete && !String(gptR1).trim();
+  const showGrokThinking =
+    transcriptLive && !configError && promptOk && sessionStarted && !grokR1Complete && !String(grokR1).trim();
 
   const geminiR1Streaming = sessionStarted && !geminiR1Complete && Boolean(String(geminiR1).length);
-  const gptR1Streaming = sessionStarted && !gptR1Complete && Boolean(String(gptR1).length);
+  const gptR1Streaming    = sessionStarted && !gptR1Complete    && Boolean(String(gptR1).length);
+  const grokR1Streaming   = sessionStarted && !grokR1Complete   && Boolean(String(grokR1).length);
 
-  /** Side-by-side grid only when both seats have thinking, text, or a finished bubble (skip notices don't count). */
+  /** Multi-column grid — only when seat has thinking, text, or finished bubble (skip notices don't count). */
   const geminiRoundActive =
     showGeminiThinking ||
     geminiR1Streaming ||
@@ -688,7 +773,13 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     gptR1Streaming ||
     (Boolean(String(gptR1 || "").trim()) && !isSkipNotice(gptR1)) ||
     (gptR1Complete && !isSkipNotice(gptR1));
-  const round1PairGrid = showTranscriptRoundtable && geminiRoundActive && gptRoundActive;
+  const grokRoundActive =
+    showGrokThinking ||
+    grokR1Streaming ||
+    (Boolean(String(grokR1 || "").trim()) && !isSkipNotice(grokR1)) ||
+    (grokR1Complete && !isSkipNotice(grokR1));
+
+  const round1GridClass = "flex flex-col gap-4";
 
   return (
     <div className="min-h-screen bg-bg text-text-primary">
@@ -728,32 +819,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
         </div>
       )}
 
-      <header className="sticky top-0 z-50 border-b border-border bg-bg">
-        {/* Top bar */}
-        <div className="mx-auto flex h-12 max-w-3xl items-center px-4 sm:px-6">
-          <button
-            type="button"
-            onClick={requestHome}
-            className="w-24 shrink-0 text-left text-sm font-medium uppercase tracking-wide transition-colors hover:underline focus:outline-none"
-            style={{ color: "#F5A623" }}
-          >
-            Home
-          </button>
-          <div className="flex flex-1 items-center justify-center gap-2">
-            <svg viewBox="0 0 24 24" style={{ width: "1.1rem", height: "1.1rem", transform: "rotate(90deg)", color: "#F5A623" }} aria-hidden focusable="false">
-              <polygon fill="currentColor" points="12,1.5 21.5,7.25 21.5,16.75 12,22.5 2.5,16.75 2.5,7.25" />
-            </svg>
-            <span className="text-[1.1rem] font-semibold uppercase tracking-wide" style={{ color: "#F5A623" }}>AI-ROUNDTABLE</span>
-          </div>
-          <button
-            type="button"
-            onClick={requestSaveExit}
-            className="w-24 shrink-0 text-right text-sm font-medium uppercase tracking-wide transition-colors hover:underline focus:outline-none"
-            style={{ color: "#F5A623" }}
-          >
-            Save & Exit
-          </button>
-        </div>
+      <Header onHome={requestHome} onSaveExit={requestSaveExit}>
         {/* Tier + breadcrumb line */}
         <div
           className="mx-auto flex max-w-3xl items-center justify-center gap-1 px-4 pb-2 pt-0.5 text-[11px] sm:px-6"
@@ -768,12 +834,12 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
             {breadcrumbState.promptDone ? "✓" : "○"} PROMPT
           </span>
           <span className="mx-1" style={{ color: "#F5A623" }}>→</span>
-          {/* TRANSCRIPT */}
+          {/* RESEARCH */}
           <span
             className={breadcrumbState.transcriptActive ? "animate-pulse" : ""}
             style={{ color: breadcrumbState.transcriptDone || breadcrumbState.transcriptActive ? "#F5A623" : "#666666" }}
           >
-            {breadcrumbState.transcriptDone ? "✓" : breadcrumbState.transcriptActive ? "●" : "○"} TRANSCRIPT
+            {breadcrumbState.transcriptDone ? "✓" : breadcrumbState.transcriptActive ? "●" : "○"} RESEARCH
           </span>
           <span className="mx-1" style={{ color: "#F5A623" }}>→</span>
           {/* FACT-CHECK */}
@@ -792,7 +858,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
             {breadcrumbState.sDone ? "✓" : breadcrumbState.sActive ? "●" : "○"} {breadcrumbState.sLabel}
           </span>
         </div>
-      </header>
+      </Header>
 
       <div className="mx-auto max-w-3xl space-y-6 px-4 py-6 sm:px-6">
         {configError && (
@@ -812,68 +878,93 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
 
         <section aria-label="Model responses" className="space-y-4">
           <h2 className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-            Transcript
+            Research
           </h2>
 
           {showTranscriptRoundtable && (
             <>
-              <div
-                className={
-                  round1PairGrid
-                    ? "grid grid-cols-2 gap-4"
-                    : "flex flex-col gap-4"
-                }
-              >
-                <div className="min-w-0 space-y-1">
-                  {showGeminiThinking ? (
-                    <ThinkingDotsBubble label="🔵 GEMINI" color={MODEL_HEX.Gemini} />
-                  ) : geminiR1Complete && isSkipNotice(geminiR1) ? (
-                    <p className="text-xs text-[#888888]" role="status">
-                      Gemini is unavailable right now — skipped this round.
-                    </p>
-                  ) : (
-                    <>
-                      <ModelBubble
-                        sender="Gemini"
-                        titleOverride="🔵 GEMINI"
-                        content={bubbleBody(geminiR1, geminiR1Complete)}
-                        isStreaming={geminiR1Streaming}
-                        round="round1"
-                        complete={geminiR1Complete}
-                      />
-                      {geminiAdvisorReviewing ? (
-                        <p className="text-xs text-[#888888]" role="status" aria-live="polite">
-                          ⚖ advisor reviewing...
-                        </p>
-                      ) : null}
-                    </>
-                  )}
-                </div>
-                <div className="min-w-0 space-y-1">
-                  {showGptThinking ? (
-                    <ThinkingDotsBubble label="🟢 GPT" color={MODEL_HEX.GPT} />
-                  ) : gptR1Complete && isSkipNotice(gptR1) ? (
-                    <p className="text-xs text-[#888888]" role="status">
-                      GPT is unavailable right now — skipped this round.
-                    </p>
-                  ) : (
-                    <>
-                      <ModelBubble
-                        sender="GPT"
-                        titleOverride="🟢 GPT"
-                        content={bubbleBody(gptR1, gptR1Complete)}
-                        isStreaming={gptR1Streaming}
-                        round="round1"
-                        complete={gptR1Complete}
-                      />
-                      {gptAdvisorReviewing ? (
-                        <p className="text-xs text-[#888888]" role="status" aria-live="polite">
-                          ⚖ advisor reviewing...
-                        </p>
-                      ) : null}
-                    </>
-                  )}
-                </div>
+              <div className={round1GridClass}>
+                {geminiRoundActive && (
+                  <div className="min-w-0 space-y-1">
+                    {showGeminiThinking ? (
+                      <ThinkingDotsBubble label="🔵 GEMINI" color={MODEL_HEX.Gemini} />
+                    ) : geminiR1Complete && isSkipNotice(geminiR1) ? (
+                      <p className="text-xs text-[#888888]" role="status">
+                        Gemini is unavailable right now — skipped this round.
+                      </p>
+                    ) : (
+                      <>
+                        <ModelBubble
+                          sender="Gemini"
+                          titleOverride="🔵 GEMINI"
+                          content={bubbleBody(geminiR1, geminiR1Complete)}
+                          isStreaming={geminiR1Streaming}
+                          round="round1"
+                          complete={geminiR1Complete}
+                        />
+                        {geminiAdvisorReviewing ? (
+                          <p className="text-xs text-[#888888]" role="status" aria-live="polite">
+                            ⚖ advisor reviewing...
+                          </p>
+                        ) : null}
+                      </>
+                    )}
+                  </div>
+                )}
+                {gptRoundActive && (
+                  <div className="min-w-0 space-y-1">
+                    {showGptThinking ? (
+                      <ThinkingDotsBubble label="🟢 GPT" color={MODEL_HEX.GPT} />
+                    ) : gptR1Complete && isSkipNotice(gptR1) ? (
+                      <p className="text-xs text-[#888888]" role="status">
+                        GPT is unavailable right now — skipped this round.
+                      </p>
+                    ) : (
+                      <>
+                        <ModelBubble
+                          sender="GPT"
+                          titleOverride="🟢 GPT"
+                          content={bubbleBody(gptR1, gptR1Complete)}
+                          isStreaming={gptR1Streaming}
+                          round="round1"
+                          complete={gptR1Complete}
+                        />
+                        {gptAdvisorReviewing ? (
+                          <p className="text-xs text-[#888888]" role="status" aria-live="polite">
+                            ⚖ advisor reviewing...
+                          </p>
+                        ) : null}
+                      </>
+                    )}
+                  </div>
+                )}
+                {grokRoundActive && (
+                  <div className="min-w-0 space-y-1">
+                    {showGrokThinking ? (
+                      <ThinkingDotsBubble label={<><span style={{ fontSize: "1.15em", lineHeight: 1, verticalAlign: "middle" }}>●</span>{" GROK"}</>} color={MODEL_HEX.Grok} />
+                    ) : grokR1Complete && isSkipNotice(grokR1) ? (
+                      <p className="text-xs text-[#888888]" role="status">
+                        Grok is unavailable right now — skipped this round.
+                      </p>
+                    ) : (
+                      <>
+                        <ModelBubble
+                          sender="Grok"
+                          titleOverride={<><span style={{ fontSize: "1.15em", lineHeight: 1, verticalAlign: "middle" }}>●</span>{" GROK"}</>}
+                          content={bubbleBody(grokR1, grokR1Complete)}
+                          isStreaming={grokR1Streaming}
+                          round="round1"
+                          complete={grokR1Complete}
+                        />
+                        {grokAdvisorReviewing ? (
+                          <p className="text-xs text-[#888888]" role="status" aria-live="polite">
+                            ⚖ advisor reviewing...
+                          </p>
+                        ) : null}
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
 
               {perplexityPhase !== "off" && (
@@ -974,6 +1065,10 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
               </div>
             )}
           </section>
+        )}
+
+        {synthesisPhaseEntered && chairDecisions.length > 0 && (
+          <ChairDecisionsBlock decisions={chairDecisions} />
         )}
 
         {(synthesisThinking ||

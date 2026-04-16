@@ -14,13 +14,13 @@ const SCREENS = {
   SESSION: "session",
 };
 
-/** Landing “use as-is” path — skip intake, go straight to SessionView. */
-function buildDirectSessionConfig(userInput) {
+/** Landing "use as-is" path — skip intake, go straight to SessionView. */
+function buildDirectSessionConfig(userInput, tier = "smart") {
   return {
     optimized_prompt: userInput,
     session_title: userInput,
     output_type: "general",
-    tier: "smart",
+    tier,
     intake_summary: "Direct question — no intake conducted",
     open_assumptions: ["No intake conducted — output based on question as typed"],
   };
@@ -40,10 +40,10 @@ function App() {
     setScreen(SCREENS.INTAKE);
   }, []);
 
-  const handleDirectSession = useCallback((text) => {
+  const handleDirectSession = useCallback((text, tier = "smart") => {
     const t = text.trim();
     if (!t) return;
-    setSessionConfig(buildDirectSessionConfig(t));
+    setSessionConfig(buildDirectSessionConfig(t, tier));
     setResumeTranscript(null);
     setInitialIntakeMessage(null);
     setScreen(SCREENS.SESSION);

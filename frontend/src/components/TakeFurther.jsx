@@ -173,14 +173,6 @@ function TakeFurther({ sessionConfig, transcript }) {
         >
           📋 Download prompt (.md)
         </button>
-        <button
-          type="button"
-          disabled={busy !== null}
-          onClick={saveSessionJson}
-          className="w-full rounded-lg border border-border bg-surface px-4 py-3 text-left text-sm text-text-primary transition-colors hover:border-border-focus focus:border-border-focus focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          💾 Save session — resume later (.json)
-        </button>
       </div>
 
       <p className="mt-6 border-t border-border pt-4 text-[11px] leading-snug" style={{ color: "#666666" }}>
