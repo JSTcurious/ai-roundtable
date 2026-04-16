@@ -96,13 +96,14 @@ Streamlit fights every customization attempt. GitHub Models rate limits hit fast
 
 v2 is not a refactor. It is a rebuild with a validated concept.
 
-### The Four Seats
+### The Five Seats
 
 | Seat | Provider | Role |
 |------|----------|------|
 | Claude | Anthropic | Orchestrator — intake conductor + synthesizer |
 | Gemini | Google | Deep reasoner |
 | GPT | OpenAI | Generalist structurer |
+| Grok | xAI | Lateral thinker + live trends |
 | Perplexity | Perplexity AI | Fact-checker only — never opines |
 
 **Why Claude as orchestrator:**
@@ -111,8 +112,8 @@ Claude's strength in reasoning, natural prose, and agentic reliability makes it 
 **Why Perplexity as auditor not panelist:**
 Perplexity doesn't have its own generative model — it routes to frontier models with search infrastructure on top. Its value is real-time web research with citations, not generative opinion. In a roundtable of opinionated thinkers, a dedicated fact-checker who doesn't opine is the most valuable seat of all.
 
-**Why not Grok:**
-Grok's positioning — live X/Twitter data, uncensored personality — is a liability for the target buyer: decision-makers, consultants, PMs stress-testing strategy. Those users need quality thinking, not bold personality.
+**Why Grok:**
+Grok's live X/Twitter data access and lateral thinking disposition add a research dimension that Gemini and GPT lack. As the "contrarian + lateral thinker" seat, Grok surfaces angles the other models are trained to avoid. Added in v2.1.1 as the third research seat alongside Gemini and GPT.
 
 ### Three Tiers — The Advisor Pattern
 
@@ -131,6 +132,7 @@ v2 replaces the binary regular/deep toggle with three tiers:
 | Anthropic | Claude Sonnet | Claude Opus |
 | Google | Gemini Flash | Gemini Pro |
 | OpenAI | GPT-4o | GPT-4o (GPT-5 pending API access) |
+| xAI | grok-3-mini | grok-3 |
 | Perplexity | Sonar | Sonar Pro |
 
 Smart is the default recommended tier. Claude suggests it during intake based on the declared output type. User confirms or overrides.
@@ -213,7 +215,7 @@ WebSocket streaming matters: tokens stream to the UI as they arrive. Production 
 | Microsoft Council | Parallel outputs, judge model synthesizes | Passenger |
 | GitHub Rubber Duck | Second model reviews agent before execution | Passive |
 | Anthropic Advisor Strategy | Executor + advisor within single API call | Infrastructure pattern |
-| **ai-roundtable** | Four providers, thorough intake, shared transcript, fact-checked, full journey visible | **In the chair** |
+| **ai-roundtable** | Five providers, thorough intake, shared transcript, fact-checked, full journey visible | **In the chair** |
 
 **The ithy distinction specifically:**
 ithy gives you a better answer. ai-roundtable gives you one you can trust — because you can see exactly how it was reached, what was assumed, where models disagreed, and what was fact-checked before the synthesis reached you.
@@ -251,4 +253,4 @@ ithy gives you a better answer. ai-roundtable gives you one you can trust — be
 
 ---
 
-*Last updated: April 15, 2026 · v1.0 complete · v2.1 shipped*
+*Last updated: April 15, 2026 · v1.0 complete · v2.1.1 shipped*

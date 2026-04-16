@@ -4,6 +4,41 @@ All notable changes to ai-roundtable are documented here.
 
 ---
 
+## [v2.1.1] — April 15, 2026
+
+### Grok integration, landing page polish
+
+**Grok added as fifth seat**
+- xAI Grok joins Gemini and GPT as a RESEARCH stage model
+- Role: lateral thinker + live trends — contrarian perspective the other models avoid
+- Models: `grok-3-mini` (quick/smart executor), `grok-3` (smart advisor + deep)
+- OpenAI-compatible API client (`backend/models/grok_client.py`) at `https://api.x.ai/v1`
+- Color: `#1DA1F2` — xAI/Twitter blue
+- Requires `GROK_API_KEY` in `.env`
+- Added to `router.py` system prompts and synthesis prompt; `main.py` Round 1 gather
+
+**Breadcrumb: TRANSCRIPT → RESEARCH**
+- Stage 2 renamed from TRANSCRIPT to RESEARCH to better reflect what's happening
+- All references updated in SessionView.jsx and IntakeFlow.jsx header
+
+**CHAIR DECISIONS block**
+- Static summary of all HITL observations + chair decisions renders above SynthesisPanel
+- Gold left border (`#F5A623`), observation text truncated at 120 chars
+- KEPT (green) / OVERRULED (gold) with overrule text in muted grey
+
+**Landing page polish**
+- HOW IT WORKS column removed — single-column centered THE PANEL
+- THE PANEL descriptions updated: Chair — you decide / Orchestrator + synthesizer / Deep reasoner / Structured thinker / Lateral thinker + live trends / Live fact-checker
+- User bullet color changed from orange to `#e8e8e8` — User is not an AI model
+- Input placeholder: "What would you like to ask the experts?"
+- Submit button: gold background (`#F5A623`), dark text (`#0d0d0d`)
+- PROMPT CHOICE explanation line added below toggle (muted, `#666666`)
+- Upload prompt link removed
+- Philosophy box copy updated: five-model framing with color hierarchy
+- JSON download removed from Take This Further panel
+
+---
+
 ## [v2.1.0] — April 15, 2026 · commit dac96e6c
 
 ### HITL synthesis dialogue, gold design system, four-stage breadcrumb
