@@ -1,33 +1,24 @@
 /**
- * Landing — entry screen. Quick vs Refined toggle; submit runs selected path.
+ * Landing — entry screen. Single prompt input; Gemini Flash handles intake automatically.
  */
 
 import React, { useCallback, useState } from "react";
 
 /**
  * @param {Object} props
- * @param {function(string)} props.onSubmitDescription — trimmed text → IntakeFlow (same as → submit)
- * @param {function(string)} props.onDirectSession — trimmed text → SessionView, skip intake
+ * @param {function(string)} props.onSubmitDescription — trimmed prompt text → IntakeFlow
  */
-function LandingPage({ onSubmitDescription, onDirectSession }) {
+function LandingPage({ onSubmitDescription }) {
   const [draft, setDraft] = useState("");
-  /** "refined" = intake first (default); "quick" = straight to roundtable */
-  const [pathMode, setPathMode] = useState("refined");
-  const [directTier, setDirectTier] = useState("smart");
-  const [pendingDirectText, setPendingDirectText] = useState(null);
 
   const handleSubmit = useCallback(
     (e) => {
       e.preventDefault();
       const t = draft.trim();
       if (!t) return;
-      if (pathMode === "quick") {
-        setPendingDirectText(t);
-        return;
-      }
       onSubmitDescription(t);
     },
-    [draft, pathMode, onSubmitDescription]
+    [draft, onSubmitDescription]
   );
 
   const panelRows = [
@@ -43,78 +34,6 @@ function LandingPage({ onSubmitDescription, onDirectSession }) {
       nameColor: "#20808D",
     },
   ];
-
-  /** Interstitial — depth selection after AS-IS submit */
-  if (pendingDirectText !== null) {
-    return (
-      <div className="flex min-h-screen flex-col items-center justify-center bg-[#0d0d0d] px-6 text-[#e8e8e8]">
-        <div className="w-full max-w-md space-y-8">
-          {/* Logo */}
-          <div className="text-center">
-            <h1 className="font-bold tracking-tight" style={{ color: "#F5A623", fontSize: "1.5rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-              AI-ROUNDTABLE
-            </h1>
-          </div>
-
-          {/* Prompt preview */}
-          <div className="rounded-lg border border-[#2a2a2a] bg-[#1e1e1e] px-4 py-3">
-            <p className="mb-1 text-xs font-medium uppercase tracking-wide text-[#888888]">Your prompt</p>
-            <p className="text-sm leading-relaxed text-[#e8e8e8]">{pendingDirectText}</p>
-          </div>
-
-          {/* Tier selector */}
-          <div className="space-y-3">
-            <p className="text-center text-sm font-medium text-[#e8e8e8]">Choose roundtable depth</p>
-            <div className="flex gap-3">
-              {[
-                { id: "quick", label: "⚡ Quick" },
-                { id: "smart", label: "⚖ Smart" },
-                { id: "deep", label: "🔍 Deep" },
-              ].map(({ id, label }) => (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() => setDirectTier(id)}
-                  className={`min-w-0 flex-1 rounded-lg border px-4 py-2.5 text-center text-sm font-medium transition-colors focus:outline-none ${
-                    directTier === id
-                      ? "border-[#6B6B6B] bg-[#2a2a2a] text-[#e8e8e8]"
-                      : "border-[#2a2a2a] bg-[#1e1e1e] text-[#888888] hover:border-[#6B6B6B]"
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-            <p className="text-center text-xs leading-relaxed text-[#666666]">
-              {directTier === "quick" && "Single executor per model · fastest · good for gut checks and brainstorms"}
-              {directTier === "smart" && "Executor + advisor per model · near-Deep quality · recommended for most sessions"}
-              {directTier === "deep" && "Flagship models throughout · maximum depth · best for reports and critical decisions"}
-            </p>
-          </div>
-
-          {/* Actions */}
-          <div className="flex items-center gap-4">
-            <button
-              type="button"
-              onClick={() => setPendingDirectText(null)}
-              className="text-sm text-[#888888] transition-colors hover:text-[#e8e8e8] focus:outline-none"
-            >
-              ← Back
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                if (typeof onDirectSession === "function") onDirectSession(pendingDirectText, directTier);
-              }}
-              className="flex-1 rounded-lg bg-[#e8e8e8] px-6 py-2.5 text-sm font-bold text-[#0d0d0d] transition-opacity hover:opacity-90 focus:outline-none"
-            >
-              Launch roundtable →
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-screen bg-bg text-text-primary">
@@ -160,49 +79,12 @@ function LandingPage({ onSubmitDescription, onDirectSession }) {
                 type="submit"
                 style={{ background: "#F5A623", color: "#0d0d0d" }}
                 className="absolute right-2 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-md font-bold transition-opacity hover:opacity-90 focus:outline-none"
-                aria-label={pathMode === "quick" ? "Start roundtable" : "Continue to intake"}
+                aria-label="Continue to intake"
               >
                 <span className="text-base leading-none" aria-hidden>→</span>
               </button>
             </div>
           </form>
-          {/* Pill toggle */}
-          <div className="mt-3 flex items-center justify-center gap-3 text-[0.8rem]" role="radiogroup" aria-label="Start mode">
-            <span style={{ color: "#888888" }}>PROMPT CHOICE:</span>
-            <div className="inline-flex rounded-full border border-[#2a2a2a] bg-[#1a1a1a] p-0.5">
-              <button
-                type="button"
-                role="radio"
-                aria-checked={pathMode === "quick"}
-                onClick={() => setPathMode("quick")}
-                className="rounded-full px-4 py-1.5 transition-colors focus:outline-none"
-                style={
-                  pathMode === "quick"
-                    ? { background: "#2a2a2a", color: "#e8e8e8", fontWeight: "500" }
-                    : { background: "transparent", color: "#666666" }
-                }
-              >
-                AS-IS
-              </button>
-              <button
-                type="button"
-                role="radio"
-                aria-checked={pathMode === "refined"}
-                onClick={() => setPathMode("refined")}
-                className="rounded-full px-4 py-1.5 transition-colors focus:outline-none"
-                style={
-                  pathMode === "refined"
-                    ? { background: "#2a2a2a", color: "#e8e8e8", fontWeight: "500" }
-                    : { background: "transparent", color: "#666666" }
-                }
-              >
-                REFINE
-              </button>
-            </div>
-          </div>
-          <p className="mt-2 text-center text-xs leading-relaxed" style={{ color: "#666666" }}>
-            AS-IS sends your prompt directly. REFINE lets Claude sharpen it first.
-          </p>
         </div>
 
         {/* 3. Divider */}
