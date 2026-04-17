@@ -30,6 +30,31 @@ from backend.models.perplexity_client import MODELS as PERPLEXITY_MODELS
 from backend.models.grok_client import MODELS as GROK_MODELS
 
 
+# ---------------------------------------------------------------------------
+# Epistemic guardrails — injected into every Round 1 system prompt.
+# Design principle: transparency over suppression. Models may speculate and
+# draw on open-world knowledge; uncertainty must be legible, not prevented.
+# See docs/decisions/001-epistemic-transparency.md for the full rationale.
+# ---------------------------------------------------------------------------
+
+ANTI_HALLUCINATION_BLOCK = """
+## Response Accuracy Guidelines
+
+- Do not fabricate specific facts, statistics, dates, or named entities. If you \
+are uncertain, say so explicitly rather than guessing.
+- When you lack knowledge about something recent or specific, acknowledge the gap \
+rather than filling it with plausible-sounding content.
+- Distinguish clearly between established facts and your own analysis or inference.
+"""
+
+CASCADING_GUARD = """
+- If a previous participant in this conversation stated a specific fact you cannot \
+independently verify, do not treat it as confirmed simply because it appeared in \
+the shared transcript. Attribute it explicitly (e.g., "According to Gemini...") \
+and flag your own confidence level separately from theirs.
+"""
+
+
 ROUND1_SYSTEM_PROMPTS = {
     # Round 1 order: Gemini → GPT → Claude.
     # Each prompt reflects only what that model can actually see in the transcript
@@ -187,17 +212,25 @@ def get_tier_config(tier: str) -> dict:
 
 def get_round1_system_prompt(model_name: str) -> str:
     """
-    Return the Round 1 system prompt for a given model.
+    Return the full Round 1 system prompt for a given model.
+
+    Composes the base role prompt with the shared epistemic guardrail blocks
+    (ANTI_HALLUCINATION_BLOCK, CASCADING_GUARD, CONFIDENCE_CONVENTION) in the
+    required order:
+        1. Role identification
+        2. ANTI_HALLUCINATION_BLOCK
+        3. CASCADING_GUARD
+        4. CONFIDENCE_CONVENTION
 
     Args:
-        model_name: "claude" | "gemini" | "gpt"
+        model_name: "claude" | "gemini" | "gpt" | "grok"
 
     Raises KeyError for unrecognised model names.
     """
-    prompt = ROUND1_SYSTEM_PROMPTS.get(model_name.lower())
-    if prompt is None:
+    base = ROUND1_SYSTEM_PROMPTS.get(model_name.lower())
+    if base is None:
         raise KeyError(f"No Round 1 system prompt for model: {model_name!r}")
-    return prompt
+    return base + ANTI_HALLUCINATION_BLOCK + CASCADING_GUARD + CONFIDENCE_CONVENTION
 
 
 USE_CASE_LIBRARY = {
