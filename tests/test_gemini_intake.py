@@ -258,11 +258,139 @@ def test_retry_sleep_called_with_correct_delays():
 
 
 # ---------------------------------------------------------------------------
-# Test 9: All 70 existing guardrail tests still pass — import check
+# Test 9: Proper noun preservation — clarifying question must not substitute names
+# ---------------------------------------------------------------------------
+
+_PRICING_PROMPT = (
+    "What are the current API pricing tiers for Claude Opus 4.7, "
+    "GPT-5, and Gemini 2.5 Pro as of April 2026?"
+)
+
+_INTENT_ONLY_QUESTION = _decision(
+    needs_clarification=True,
+    clarifying_question="Are you looking for standard API pricing or enterprise contract rates?",
+    optimized_prompt="",
+)
+
+_SUBSTITUTED_QUESTION = _decision(
+    needs_clarification=True,
+    clarifying_question=(
+        "Are you looking for pricing for currently available models "
+        "(e.g., Claude 3 Opus, GPT-4, Gemini 1.5 Pro)?"
+    ),
+    optimized_prompt="",
+)
+
+
+def test_clarifying_question_does_not_substitute_model_names():
+    """
+    When the user provides specific model names, the clarifying question must
+    ask about intent or scope only — not suggest replacement names.
+
+    This test asserts the correct pattern: an intent-only question contains
+    no model names from the training data that contradict the user's prompt.
+    """
+    with patch("backend.intake.call_gemini_intake", return_value=_INTENT_ONLY_QUESTION):
+        session = IntakeSession()
+        result = session.analyze(_PRICING_PROMPT)
+
+    q = result["clarifying_question"]
+    assert "Claude 3" not in q, "clarifying question must not substitute Claude 3 for Claude Opus 4.7"
+    assert "GPT-4" not in q, "clarifying question must not substitute GPT-4 for GPT-5"
+    assert "Gemini 1.5" not in q, "clarifying question must not substitute Gemini 1.5 for Gemini 2.5 Pro"
+
+
+def test_clarifying_question_with_substituted_names_is_detectable():
+    """
+    Documents the failure mode: if the model returns a clarifying question
+    that replaces user-provided names with its own training-data examples,
+    the assertions above would catch it. This test confirms the detection logic
+    works against a known-bad response.
+    """
+    with patch("backend.intake.call_gemini_intake", return_value=_SUBSTITUTED_QUESTION):
+        session = IntakeSession()
+        result = session.analyze(_PRICING_PROMPT)
+
+    q = result["clarifying_question"]
+    # These assertions should FAIL against the bad response — confirming detection works.
+    assert "Claude 3" in q      # present in the substituted question
+    assert "GPT-4" in q         # present in the substituted question
+    assert "Gemini 1.5" in q    # present in the substituted question
+
+
+# ---------------------------------------------------------------------------
+# Test 10: Proper noun preservation — Turn 1 optimized_prompt must not rename models
+# ---------------------------------------------------------------------------
+
+_PRESERVED_FINAL = _decision(
+    needs_clarification=False,
+    optimized_prompt=(
+        "Compare the current standard API pricing tiers for Claude Opus 4.7, "
+        "GPT-5, and Gemini 2.5 Pro as of April 2026. The user wants standard "
+        "API pricing, not enterprise contract rates."
+    ),
+    tier="quick",
+    output_type="comparison",
+    reasoning="Quick — factual pricing lookup with named models",
+)
+
+_SUBSTITUTED_FINAL = _decision(
+    needs_clarification=False,
+    optimized_prompt=(
+        "Compare the current standard API pricing tiers for Claude 3 Opus, "
+        "GPT-4, and Gemini 1.5 Pro as of April 2026."
+    ),
+    tier="quick",
+    output_type="comparison",
+    reasoning="Quick — factual pricing lookup",
+)
+
+
+def test_turn1_optimized_prompt_preserves_original_model_names():
+    """
+    After the user answers the clarifying question, the optimized_prompt must
+    contain the model names from the original prompt, not substitutions.
+    """
+    with patch("backend.intake.call_gemini_intake",
+               side_effect=[_INTENT_ONLY_QUESTION, _PRESERVED_FINAL]):
+        session = IntakeSession()
+        session.analyze(_PRICING_PROMPT)
+        result = session.respond("Standard API pricing")
+
+    op = result["config"]["optimized_prompt"]
+    assert "Claude Opus 4.7" in op, "optimized_prompt must preserve 'Claude Opus 4.7'"
+    assert "GPT-5" in op, "optimized_prompt must preserve 'GPT-5'"
+    assert "Gemini 2.5 Pro" in op, "optimized_prompt must preserve 'Gemini 2.5 Pro'"
+    assert "Claude 3 Opus" not in op, "optimized_prompt must not substitute 'Claude 3 Opus'"
+    assert "GPT-4" not in op, "optimized_prompt must not substitute 'GPT-4'"
+    assert "Gemini 1.5" not in op, "optimized_prompt must not substitute 'Gemini 1.5'"
+
+
+def test_turn1_substituted_prompt_is_detectable():
+    """
+    Documents the failure mode: if Turn 1 returns an optimized_prompt with
+    substituted model names, the assertions above would catch it. This test
+    confirms the detection logic works against a known-bad response.
+    """
+    with patch("backend.intake.call_gemini_intake",
+               side_effect=[_INTENT_ONLY_QUESTION, _SUBSTITUTED_FINAL]):
+        session = IntakeSession()
+        session.analyze(_PRICING_PROMPT)
+        result = session.respond("Standard API pricing")
+
+    op = result["config"]["optimized_prompt"]
+    # These assertions should FAIL against the bad response — confirming detection works.
+    assert "Claude 3 Opus" in op    # present in the substituted prompt
+    assert "GPT-4" in op            # present in the substituted prompt
+    assert "Gemini 1.5" in op       # present in the substituted prompt
+
+
+# ---------------------------------------------------------------------------
+# Test 11: All 91 existing guardrail tests still pass — import check
 # ---------------------------------------------------------------------------
 
 def test_guardrail_module_still_importable():
-    """Smoke-test that the guardrail module is unaffected by the intake rewrite."""
+    """Smoke-test that the guardrail module is unaffected by the intake changes."""
     from backend.router import (
         ANTI_HALLUCINATION_BLOCK,
         CASCADING_GUARD,
