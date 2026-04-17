@@ -1,21 +1,23 @@
 """
-backend/models/openai_client.py
+backend/models/grok_client.py
 
-GPT client for ai-roundtable v2 — OpenAI direct API.
+Grok client for ai-roundtable v2 — xAI direct API (OpenAI-compatible).
 
-GPT's role in the roundtable:
-    - Round 1: structure, actionability, breadth
+Grok's role in the roundtable:
+    - Round 1: creative synthesis, lateral thinking, contrarian perspective
 
 Tiers:
-    quick   — gpt-4o
-    smart   — executor: gpt-4o → advisor: gpt-4o (gpt-5 when available)
-    deep    — gpt-5
+    quick   — grok-3-mini
+    smart   — executor: grok-3-mini → advisor: grok-3
+    deep    — grok-3
 
 Functions:
-    call_gpt(messages, tier, system, stream)
+    call_grok(messages, tier, system, stream)
         — primary call function used by Round 1
-    call_gpt_smart(messages, system)
+    call_grok_smart(messages, system)
         — two-call executor + advisor pattern for Smart tier
+    call_grok_smart_async(messages, system)
+        — async wrapper for smart tier
     ping()
         — smoke test: confirm API key and connectivity
 """
@@ -28,21 +30,24 @@ from openai import OpenAI
 
 _client = None
 
+
 def _get_client() -> OpenAI:
     global _client
     if _client is None:
-        _client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        _client = OpenAI(
+            api_key=os.getenv("GROK_API_KEY"),
+            base_url="https://api.x.ai/v1",
+        )
     return _client
 
+
 MODELS = {
-    "quick": "gpt-4o",
-    "smart": "gpt-4o",   # executor model for smart tier
-    "deep":  "gpt-4o",
+    "quick": "grok-3-mini",
+    "smart": "grok-3-mini",   # executor model for smart tier
+    "deep":  "grok-3",
 }
 
-# gpt-5 as advisor; fall back to gpt-4o if not yet available on this account
-_ADVISOR_MODEL = "gpt-4o"
-_ADVISOR_MODEL_FALLBACK = "gpt-4o"
+_ADVISOR_MODEL = "grok-3"
 
 _ADVISOR_PROMPT = (
     "Review this response and produce an improved final version.\n\n"
@@ -53,18 +58,18 @@ _ADVISOR_PROMPT = (
 )
 
 
-def call_gpt(
+def call_grok(
     messages: list,
     tier: str = "quick",
     system: str = None,
     stream: bool = False,
 ):
     """
-    Call GPT with the given messages and tier.
+    Call Grok with the given messages and tier.
 
     Args:
         messages: list of {"role": str, "content": str} dicts
-        tier:     "quick" | "deep"
+        tier:     "quick" | "smart" | "deep"
         system:   optional system prompt string — prepended as a system message
         stream:   if True, returns a streaming response
 
@@ -87,27 +92,22 @@ def call_gpt(
     )
 
 
-def call_gpt_smart(messages: list, system: str = None) -> dict:
+def call_grok_smart(messages: list, system: str = None) -> dict:
     """
     Two-call executor + advisor pattern for Smart tier.
 
-    1. gpt-4o (executor) produces an initial response.
-    2. gpt-5 (advisor) reviews it and returns an improved version.
-       Falls back to gpt-4o advisor if gpt-5 is unavailable.
-
-    Args:
-        messages: list of {"role": str, "content": str} dicts
-        system:   optional system prompt — prepended as system message
+    1. grok-3-mini (executor) produces an initial response.
+    2. grok-3 (advisor) reviews it and returns an improved version.
 
     Returns:
         {
             "executor_text":   str,
             "advisor_text":    str,   # use this as the final response
-            "executor_tokens": int,   # prompt + completion
+            "executor_tokens": int,
             "advisor_tokens":  int,
         }
     """
-    exec_resp = call_gpt(messages=messages, tier="smart", system=system)
+    exec_resp = call_grok(messages=messages, tier="smart", system=system)
     exec_text = exec_resp.choices[0].message.content
 
     last_user = next(
@@ -118,21 +118,11 @@ def call_gpt_smart(messages: list, system: str = None) -> dict:
         "content": _ADVISOR_PROMPT.format(request=last_user, response=exec_text),
     }]
 
-    try:
-        adv_resp = _get_client().chat.completions.create(
-            model=_ADVISOR_MODEL,
-            max_completion_tokens=4096,
-            messages=advisor_messages,
-        )
-    except Exception as e:
-        if "404" in str(e) or "model" in str(e).lower():
-            adv_resp = _get_client().chat.completions.create(
-                model=_ADVISOR_MODEL_FALLBACK,
-                max_completion_tokens=4096,
-                messages=advisor_messages,
-            )
-        else:
-            raise
+    adv_resp = _get_client().chat.completions.create(
+        model=_ADVISOR_MODEL,
+        max_completion_tokens=4096,
+        messages=advisor_messages,
+    )
     adv_text = adv_resp.choices[0].message.content
 
     return {
@@ -143,12 +133,12 @@ def call_gpt_smart(messages: list, system: str = None) -> dict:
     }
 
 
-async def call_gpt_smart_async(messages: list, system=None) -> dict:
+async def call_grok_smart_async(messages: list, system=None) -> dict:
     """Async wrapper for smart tier — runs executor then advisor without blocking the event loop."""
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
         None,
-        partial(call_gpt_smart, messages, system=system),
+        partial(call_grok_smart, messages, system=system),
     )
 
 
@@ -161,7 +151,7 @@ def ping() -> dict:
         {"ok": False, "error": str}
     """
     try:
-        response = call_gpt(
+        response = call_grok(
             messages=[{"role": "user", "content": "Say 'pong' and nothing else."}],
             tier="quick",
         )
@@ -174,6 +164,6 @@ def ping() -> dict:
 if __name__ == "__main__":
     result = ping()
     if result["ok"]:
-        print(f"✓ GPT connected — {result['model']}: {result['response']!r}")
+        print(f"✓ Grok connected — {result['model']}: {result['response']!r}")
     else:
-        print(f"✗ GPT connection failed: {result['error']}")
+        print(f"✗ Grok connection failed: {result['error']}")

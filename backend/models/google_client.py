@@ -24,10 +24,13 @@ Functions:
 
 import asyncio
 import os
+import time
 from functools import partial
 
 from google import genai
 from google.genai import types
+
+from backend.models.intake_decision import IntakeDecision
 
 _client = None
 
@@ -42,6 +45,129 @@ MODELS = {
     "smart": "gemini-2.5-flash",   # executor model for smart tier
     "deep":  "gemini-2.5-pro",
 }
+
+# Intake uses a separate model constant so it can be pinned or overridden independently
+# of the round-1 research models. Reuses GOOGLE_API_KEY — no new credentials needed.
+INTAKE_MODEL = os.getenv("GEMINI_INTAKE_MODEL", "gemini-2.5-flash")
+
+GEMINI_INTAKE_SYSTEM = """
+You are an intake analyst for an AI research roundtable. Your job is to
+analyze a user's prompt and make two decisions:
+
+1. CLARIFICATION: Does the prompt have enough context to produce a
+   high-quality research session?
+
+   - If the user's intent is ambiguous or a critical piece of context is
+     missing, set needs_clarification to true and provide ONE focused
+     clarifying question. Do not ask multiple questions.
+   - If the prompt is clear enough to proceed, set needs_clarification
+     to false and optimize the prompt directly.
+
+2. PROPER NOUN PRESERVATION (critical rule):
+
+   When the user provides specific proper nouns — model names, product
+   names, version numbers, company names, or any named entity — treat
+   them as correct and authoritative. Never substitute your own examples
+   or alternatives.
+
+   WRONG: User says "Claude Opus 4.7" → you ask "do you mean Claude 3 Opus?"
+   RIGHT: User says "Claude Opus 4.7" → you use "Claude Opus 4.7" exactly
+
+   WRONG: User says "GPT-5" → your clarifying question lists "GPT-4" as
+          an example of what they might mean
+   RIGHT: User says "GPT-5" → you use "GPT-5" exactly in all outputs
+
+   If you are uncertain whether a named entity exists, do NOT ask the user
+   to confirm using your own alternatives. Instead, ask about their INTENT
+   or SCOPE only — never suggest replacement names.
+
+   Clarifying question about INTENT (acceptable):
+     "Are you looking for standard API pricing or enterprise contract rates?"
+
+   Clarifying question that substitutes names (never do this):
+     "Are you asking about Claude 3 Opus, or a newer model?"
+
+3. TIER ASSIGNMENT: What research depth does this prompt require?
+
+   - quick : factual lookups, simple comparisons, gut checks.
+             Single-dimension questions with known answers.
+   - smart : analysis, recommendations, technical evaluations.
+             Requires weighing tradeoffs or synthesizing multiple sources.
+   - deep  : architecture decisions, strategic plans, critical reports.
+             High stakes, significant ambiguity, or complex dependencies.
+
+   Assign tier based on complexity and stakes — not prompt length.
+   A short prompt can require deep research.
+
+Always return valid JSON matching the schema exactly. No prose outside the
+JSON object.
+"""
+
+
+def _is_503(exc: Exception) -> bool:
+    """Return True if the exception is a Gemini 503 UNAVAILABLE error."""
+    msg = str(exc).lower()
+    return "503" in msg or "unavailable" in msg
+
+
+def _call_gemini_intake_once(prompt: str) -> IntakeDecision:
+    """Single attempt against INTAKE_MODEL — no retry logic."""
+    config = types.GenerateContentConfig(
+        response_mime_type="application/json",
+        response_schema=IntakeDecision,
+        system_instruction=GEMINI_INTAKE_SYSTEM,
+    )
+    response = _get_client().models.generate_content(
+        model=INTAKE_MODEL,
+        contents=[types.Content(role="user", parts=[types.Part(text=prompt)])],
+        config=config,
+    )
+    try:
+        return IntakeDecision.model_validate_json(response.text)
+    except Exception as e:
+        raise ValueError(
+            f"Gemini intake schema validation failed: {e}. Raw response: {response.text!r}"
+        )
+
+
+def call_gemini_intake(prompt: str) -> IntakeDecision:
+    """
+    Analyze a user's intake prompt with Gemini Flash and return a structured decision.
+
+    Uses response_schema to enforce typed JSON output — no free-form parsing required.
+
+    Retry policy:
+      - 503 UNAVAILABLE only: 3 attempts with exponential backoff (2 s → 4 s → raises).
+      - All other errors raise immediately — no retry.
+
+    Args:
+        prompt: The user's raw prompt, or a combined clarification turn string.
+
+    Returns:
+        IntakeDecision with tier, optimized_prompt, and optional clarifying_question.
+
+    Raises:
+        ValueError:   if the API response fails schema validation (no retry).
+        RuntimeError: if Gemini returns 503 on all 3 attempts.
+        Exception:    on any other API error (raised immediately).
+    """
+    last_exc = None
+    delays = [2, 4]  # seconds between attempts 1→2 and 2→3
+
+    for attempt in range(3):
+        try:
+            return _call_gemini_intake_once(prompt)
+        except Exception as exc:
+            if _is_503(exc):
+                last_exc = exc
+                if attempt < len(delays):
+                    time.sleep(delays[attempt])
+                continue
+            raise  # non-503 errors raise immediately
+
+    raise RuntimeError(
+        "Gemini intake unavailable after 3 attempts — please try again in a moment."
+    ) from last_exc
 
 _ADVISOR_PROMPT = (
     "Review this response and produce an improved final version.\n\n"

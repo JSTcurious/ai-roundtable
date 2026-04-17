@@ -1,7 +1,7 @@
 # Architecture — ai-roundtable
 
 > What was built, why it was built this way, and what was deliberately left out.
-> v1 decisions are complete. v2 decisions are locked and in build.
+> v1 decisions are complete. v2 shipped April 2026.
 
 ---
 
@@ -96,13 +96,14 @@ Streamlit fights every customization attempt. GitHub Models rate limits hit fast
 
 v2 is not a refactor. It is a rebuild with a validated concept.
 
-### The Four Seats
+### The Five Seats
 
 | Seat | Provider | Role |
 |------|----------|------|
 | Claude | Anthropic | Orchestrator — intake conductor + synthesizer |
 | Gemini | Google | Deep reasoner |
 | GPT | OpenAI | Generalist structurer |
+| Grok | xAI | Lateral thinker + live trends |
 | Perplexity | Perplexity AI | Fact-checker only — never opines |
 
 **Why Claude as orchestrator:**
@@ -111,8 +112,8 @@ Claude's strength in reasoning, natural prose, and agentic reliability makes it 
 **Why Perplexity as auditor not panelist:**
 Perplexity doesn't have its own generative model — it routes to frontier models with search infrastructure on top. Its value is real-time web research with citations, not generative opinion. In a roundtable of opinionated thinkers, a dedicated fact-checker who doesn't opine is the most valuable seat of all.
 
-**Why not Grok:**
-Grok's positioning — live X/Twitter data, uncensored personality — is a liability for the target buyer: decision-makers, consultants, PMs stress-testing strategy. Those users need quality thinking, not bold personality.
+**Why Grok:**
+Grok's live X/Twitter data access and lateral thinking disposition add a research dimension that Gemini and GPT lack. As the "contrarian + lateral thinker" seat, Grok surfaces angles the other models are trained to avoid. Added in v2.1.1 as the third research seat alongside Gemini and GPT.
 
 ### Three Tiers — The Advisor Pattern
 
@@ -130,7 +131,8 @@ v2 replaces the binary regular/deep toggle with three tiers:
 |----------|----------|---------|
 | Anthropic | Claude Sonnet | Claude Opus |
 | Google | Gemini Flash | Gemini Pro |
-| OpenAI | GPT-4o | GPT-5 |
+| OpenAI | GPT-4o | GPT-4o (GPT-5 pending API access) |
+| xAI | grok-3-mini | grok-3 |
 | Perplexity | Sonar | Sonar Pro |
 
 Smart is the default recommended tier. Claude suggests it during intake based on the declared output type. User confirms or overrides.
@@ -160,15 +162,31 @@ Auto-selecting models without user confirmation — rejected. The human stays in
 
 **Sequential in Round 1. Always.**
 
-When GPT responds after Claude and Gemini, it has their responses in its history. The transcript compounds. Parallel calls would break this.
+Gemini responds first, then GPT with Gemini's answer already in its history. The transcript compounds. Parallel calls would break this. Note: Claude is not a Round 1 respondent — it is the synthesis orchestrator only.
 
-**Perplexity runs parallel to Round 1, not after.**
+**Perplexity audits Gemini + GPT responses after Round 1.**
 
-Perplexity audits the other three models' responses as they arrive. Running it parallel minimizes latency while preserving the audit function.
+Perplexity receives the completed Gemini and GPT responses and returns fact-check findings with citations before Claude synthesizes.
+
+**HITL Chair Dialogue — between Perplexity and synthesis.**
+
+After the Perplexity audit completes, Claude generates 3-5 observations about the session (quick tier, structured JSON). Each observation is sent to the frontend via `synthesis_observation`. The WebSocket pauses synthesis and waits for a `chair_decision` frame for each observation:
+
+```
+{ type: "chair_decision", decision: "keep" | "overrule", overrule_text?: string }
+```
+
+All overrule decisions are appended to the Claude synthesis system prompt verbatim before the synthesis call. If observation generation fails, the loop is skipped silently and synthesis proceeds.
 
 **Claude synthesizes last — with everything.**
 
-Claude's synthesis receives all three Round 1 responses, the Perplexity audit, and in deep mode the cross-critique round. The synthesis is not a summary — it incorporates the strongest reasoning, corrects factual errors, surfaces model disagreements, and produces a structured answer matching the declared output type.
+Claude's synthesis receives Gemini + GPT Round 1 responses, the Perplexity audit, and any chair overrule decisions. The synthesis is not a summary — it incorporates the strongest reasoning, corrects factual errors, surfaces model disagreements, and produces a structured answer matching the declared output type.
+
+**WebSocket is bidirectional.**
+
+Server → client: `token`, `model_complete`, `perplexity_thinking`, `perplexity_complete`, `synthesis_observation`, `synthesis_thinking`, `synthesis_token`, `synthesis_complete`, `session_complete`, `error`, `pong`.
+
+Client → server: `chair_decision`, `ping`.
 
 ### The Export — Markdown as Universal Intermediary
 
@@ -197,7 +215,7 @@ WebSocket streaming matters: tokens stream to the UI as they arrive. Production 
 | Microsoft Council | Parallel outputs, judge model synthesizes | Passenger |
 | GitHub Rubber Duck | Second model reviews agent before execution | Passive |
 | Anthropic Advisor Strategy | Executor + advisor within single API call | Infrastructure pattern |
-| **ai-roundtable** | Four providers, thorough intake, shared transcript, fact-checked, full journey visible | **In the chair** |
+| **ai-roundtable** | Five providers, thorough intake, shared transcript, fact-checked, full journey visible | **In the chair** |
 
 **The ithy distinction specifically:**
 ithy gives you a better answer. ai-roundtable gives you one you can trust — because you can see exactly how it was reached, what was assumed, where models disagreed, and what was fact-checked before the synthesis reached you.
@@ -222,8 +240,10 @@ ithy gives you a better answer. ai-roundtable gives you one you can trust — be
 
 - Long conversations will hit context limits — v3: sliding window or summarization
 - Advisor strategy beta status — if Anthropic's API changes, Smart tier falls back to Deep Thinking models
-- Google Drive OAuth adds setup friction for self-hosted users
+- GPT advisor tier uses `gpt-4o` — update to `gpt-5` when API access confirmed
+- Google Drive export not yet implemented — v3
 - Concurrent users at scale need Redis for session state
+- No Render deployment yet — v3
 
 ### AI vs. Engineer — v2
 
@@ -233,4 +253,4 @@ ithy gives you a better answer. ai-roundtable gives you one you can trust — be
 
 ---
 
-*Last updated: April 10, 2026 · v1.0 complete · v2 in build*
+*Last updated: April 15, 2026 · v1.0 complete · v2.1.1 shipped*

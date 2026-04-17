@@ -40,11 +40,14 @@ class Exporter:
             config:     session_config dict from IntakeSession
             mode:       "full"      — entire session
                         "synthesis" — session title, prompt, synthesis, footer only
+                        "prompt"    — optimized prompt only
 
         Returns a markdown string ready for download or display.
         """
         if mode == "synthesis":
             return self._synthesis_doc(transcript, config)
+        if mode == "prompt":
+            return self._prompt_doc(transcript, config)
         return self._full_doc(transcript, config)
 
     def download(self, markdown: str, filename: str) -> bytes:
@@ -92,9 +95,9 @@ class Exporter:
 
         # ── Header ────────────────────────────────────────────────────────────
         lines += [
-            f"# {title}",
-            f"*ai-roundtable · {output_type} · {tier} · {date}*",
-            f"*Putting the best frontier minds to work.*",
+            "# ai-roundtable — Full Session",
+            f"*{title}*",
+            f"*{output_type} · {tier} · {date}*",
             "",
             "---",
             "",
@@ -189,9 +192,9 @@ class Exporter:
 
         # ── Header ────────────────────────────────────────────────────────────
         lines += [
-            f"# {title}",
-            f"*ai-roundtable · {date}*",
-            f"*Putting the best frontier minds to work.*",
+            "# ai-roundtable — Synthesis",
+            f"*{title}*",
+            f"*{date}*",
             "",
             "---",
             "",
@@ -223,6 +226,27 @@ class Exporter:
         # ── Footer ────────────────────────────────────────────────────────────
         lines += self._footer()
 
+        return "\n".join(lines)
+
+    def _prompt_doc(self, transcript: Transcript, config: dict) -> str:
+        """Build the optimized-prompt-only markdown document."""
+        date = datetime.now().strftime("%B %d, %Y")
+        title = config.get("session_title", "ai-roundtable Session")
+        optimized_prompt = config.get("optimized_prompt", "")
+
+        lines = [
+            "# ai-roundtable — Optimized Prompt",
+            f"*{title}*",
+            f"*{date}*",
+            "",
+            "---",
+            "",
+            optimized_prompt,
+            "",
+            "---",
+            "",
+        ]
+        lines += self._footer()
         return "\n".join(lines)
 
     def _strip_headings(self, text: str) -> str:

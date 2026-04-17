@@ -12,6 +12,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MODEL_HEX } from "../constants/modelColors";
+import Header from "./common/Header";
 import ModelBubble from "./common/ModelBubble";
 import SynthesisPanel from "./SynthesisPanel";
 import TakeFurther from "./TakeFurther";
@@ -47,7 +48,7 @@ function timestamp() {
   return new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
-function buildTranscriptDict(sessionConfig, prompt, geminiR1, gptR1, perplexityContent, synthesisText) {
+function buildTranscriptDict(sessionConfig, prompt, geminiR1, gptR1, grokR1, claudeR1, perplexityContent, synthesisText) {
   const messages = [
     { role: "user", sender: "You", content: prompt, timestamp: timestamp() },
     {
@@ -61,6 +62,20 @@ function buildTranscriptDict(sessionConfig, prompt, geminiR1, gptR1, perplexityC
       role: "assistant",
       sender: "GPT",
       content: gptR1,
+      round: "round1",
+      timestamp: timestamp(),
+    },
+    {
+      role: "assistant",
+      sender: "Grok",
+      content: grokR1,
+      round: "round1",
+      timestamp: timestamp(),
+    },
+    {
+      role: "assistant",
+      sender: "Claude",
+      content: claudeR1,
       round: "round1",
       timestamp: timestamp(),
     },
@@ -102,9 +117,9 @@ function downloadJsonFile(payload, filename) {
 
 function formatTierBadge(tier) {
   const raw = (tier || "smart").toString().toLowerCase().replace(/-/g, "_");
-  if (raw === "deep_thinking" || raw === "deep") return "Deep";
-  if (raw === "quick") return "Quick";
-  return "Smart";
+  if (raw === "deep_thinking" || raw === "deep") return "DEEP MODE";
+  if (raw === "quick") return "QUICK MODE";
+  return "SMART MODE";
 }
 
 const WAIT_HEX = "#888888";
@@ -159,6 +174,12 @@ function bubbleBody(text, modelComplete) {
   return text;
 }
 
+/** True when model text is a backend skip/unavailable notice, not real content. */
+function isSkipNotice(text) {
+  const t = (text || "").trim();
+  return t.startsWith("[") && t.endsWith("]");
+}
+
 /**
  * Pre-token “thinking” row — same footprint as a model bubble; dots pulse in `color`.
  * @param {Object} props
@@ -166,11 +187,11 @@ function bubbleBody(text, modelComplete) {
  * @param {string} props.color — seat hex
  * @param {boolean} [props.uppercase]
  */
-function ThinkingDotsBubble({ label, color, uppercase = true }) {
+function ThinkingDotsBubble({ label, color, uppercase = true, subtitle }) {
   return (
     <div
-      className="session-thinking-bubble flex max-h-[280px] max-w-[min(100%,40rem)] flex-col overflow-hidden rounded-lg border border-border bg-[#161616] px-4 py-3"
-      style={{ borderLeftWidth: 3, borderLeftStyle: "solid", borderLeftColor: color }}
+      className="session-thinking-bubble flex w-full min-w-0 flex-col rounded-lg border border-border bg-[#161616] p-4"
+      style={{ borderLeft: `3px solid ${color}` }}
       role="status"
       aria-live="polite"
       aria-busy="true"
@@ -187,6 +208,9 @@ function ThinkingDotsBubble({ label, color, uppercase = true }) {
         <span className="session-thinking-dot" style={{ backgroundColor: color }} />
         <span className="session-thinking-dot" style={{ backgroundColor: color }} />
       </div>
+      {subtitle && (
+        <p className="mt-1 text-xs text-text-secondary">{subtitle}</p>
+      )}
     </div>
   );
 }
@@ -210,11 +234,16 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
 
   const [geminiR1, setGeminiR1] = useState("");
   const [gptR1, setGptR1] = useState("");
+  const [grokR1, setGrokR1] = useState("");
+  const [claudeR1, setClaudeR1] = useState("");
   const [geminiR1Complete, setGeminiR1Complete] = useState(false);
   const [gptR1Complete, setGptR1Complete] = useState(false);
-  /** Smart-tier advisor pass — shown under Gemini/GPT bubbles until advisor_complete */
+  const [grokR1Complete, setGrokR1Complete] = useState(false);
+  const [claudeR1Complete, setClaudeR1Complete] = useState(false);
+  /** Smart-tier advisor pass — shown under model bubbles until advisor_complete */
   const [geminiAdvisorReviewing, setGeminiAdvisorReviewing] = useState(false);
   const [gptAdvisorReviewing, setGptAdvisorReviewing] = useState(false);
+  const [grokAdvisorReviewing, setGrokAdvisorReviewing] = useState(false);
 
   const [sessionStarted, setSessionStarted] = useState(false);
   /** off | thinking | content */
@@ -230,30 +259,16 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
 
   const [leaveIntent, setLeaveIntent] = useState(null);
 
-  const r1CountsRef = useRef({ Gemini: 0, GPT: 0 });
+  // ── Synthesis annotations — read-only, shown collapsed after synthesis ────
+  const [annotations, setAnnotations] = useState([]);
+  const [annotationsOpen, setAnnotationsOpen] = useState(false);
+
+  const r1CountsRef = useRef({ Gemini: 0, GPT: 0, Grok: 0, Claude: 0 });
 
   const phaseRef = useRef(/** @type {StreamPhase} */ ("idle"));
 
   /** Bumps re-render when handlers only update `phaseRef` (streaming flags). */
   const [, setStreamPhaseMarker] = useState(0);
-
-  const bubbleScrollRefs = useRef(
-    /** @type {{ Gemini: HTMLDivElement | null; GPT: HTMLDivElement | null }} */ ({
-      Gemini: null,
-      GPT: null,
-    })
-  );
-
-  const scrollR1BubbleToTop = useCallback((sender) => {
-    if (sender !== "Gemini" && sender !== "GPT") return;
-    const run = () => {
-      const el = bubbleScrollRefs.current[sender];
-      if (el) el.scrollTop = 0;
-    };
-    requestAnimationFrame(() => {
-      requestAnimationFrame(run);
-    });
-  }, []);
 
   const displayPrompt = useMemo(() => {
     const fromConfig = sessionConfig?.optimized_prompt?.trim();
@@ -277,6 +292,8 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
       displayPrompt,
       geminiR1,
       gptR1,
+      grokR1,
+      claudeR1,
       perplexityContent,
       synthesisText
     );
@@ -286,6 +303,8 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     displayPrompt,
     geminiR1,
     gptR1,
+    grokR1,
+    claudeR1,
     perplexityContent,
     synthesisText,
   ]);
@@ -305,6 +324,16 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
         setGptR1((prev) => prev + token);
         return;
       }
+      if (sender === "Grok") {
+        r1CountsRef.current.Grok += token.length;
+        setGrokR1((prev) => prev + token);
+        return;
+      }
+      if (sender === "Claude") {
+        r1CountsRef.current.Claude += token.length;
+        setClaudeR1((prev) => prev + token);
+        return;
+      }
       return;
     }
     if (phase === "synthesis" && sender === "Claude") {
@@ -314,26 +343,20 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     }
   }, []);
 
-  const handleModelComplete = useCallback(
-    (sender) => {
-      if (sender === "Gemini") {
-        setGeminiR1Complete(true);
-        scrollR1BubbleToTop("Gemini");
-        return;
-      }
-      if (sender === "GPT") {
-        setGptR1Complete(true);
-        scrollR1BubbleToTop("GPT");
-      }
-    },
-    [scrollR1BubbleToTop]
-  );
+  const handleModelComplete = useCallback((sender) => {
+    if (sender === "Gemini") { setGeminiR1Complete(true); return; }
+    if (sender === "GPT")    { setGptR1Complete(true);    return; }
+    if (sender === "Grok")   { setGrokR1Complete(true);   return; }
+    if (sender === "Claude") { setClaudeR1Complete(true); return; }
+  }, []);
 
   useEffect(() => {
     const msgs = resumeTranscript?.messages;
     if (!msgs?.length || !sessionConfig) return;
     let ge = "";
     let gp = "";
+    let grk = "";
+    let cla = "";
     let audit = "";
     let syn = "";
     for (const m of msgs) {
@@ -341,8 +364,10 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
       const r = m.round;
       const s = m.sender;
       if (r === "round1") {
-        if (s === "Gemini") ge = m.content ?? "";
-        if (s === "GPT") gp = m.content ?? "";
+        if (s === "Gemini") ge  = m.content ?? "";
+        if (s === "GPT")    gp  = m.content ?? "";
+        if (s === "Grok")   grk = m.content ?? "";
+        if (s === "Claude") cla = m.content ?? "";
       }
       if ((r === "audit" || r === "round1") && s === "Perplexity") {
         audit = m.content ?? audit;
@@ -354,10 +379,15 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     setStreamError(null);
     setGeminiR1(ge);
     setGptR1(gp);
+    setGrokR1(grk);
+    setClaudeR1(cla);
     setGeminiR1Complete(true);
     setGptR1Complete(true);
+    setGrokR1Complete(true);
+    setClaudeR1Complete(true);
     setGeminiAdvisorReviewing(false);
     setGptAdvisorReviewing(false);
+    setGrokAdvisorReviewing(false);
     setSessionStarted(true);
     setPerplexityPhase(audit.trim() ? "content" : "off");
     setPerplexityContent(audit);
@@ -367,7 +397,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     setSynthesisFinal(!!String(syn).trim());
     setSessionComplete(true);
     phaseRef.current = "idle";
-    r1CountsRef.current = { Gemini: ge.length, GPT: gp.length };
+    r1CountsRef.current = { Gemini: ge.length, GPT: gp.length, Grok: grk.length, Claude: cla.length };
   }, [resumeTranscript, sessionConfig]);
 
   useEffect(() => {
@@ -385,16 +415,21 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
 
     phaseRef.current = "idle";
     setStreamPhaseMarker((x) => x + 1);
-    r1CountsRef.current = { Gemini: 0, GPT: 0 };
+    r1CountsRef.current = { Gemini: 0, GPT: 0, Grok: 0, Claude: 0 };
     setConfigError(null);
     setTransportError(null);
     setStreamError(null);
     setGeminiR1("");
     setGptR1("");
+    setGrokR1("");
+    setClaudeR1("");
     setGeminiR1Complete(false);
     setGptR1Complete(false);
+    setGrokR1Complete(false);
+    setClaudeR1Complete(false);
     setGeminiAdvisorReviewing(false);
     setGptAdvisorReviewing(false);
+    setGrokAdvisorReviewing(false);
     setSessionStarted(false);
     setPerplexityPhase("off");
     setPerplexityContent("");
@@ -403,6 +438,8 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     setSynthesisStreaming(false);
     setSynthesisFinal(false);
     setSessionComplete(false);
+    setAnnotations([]);
+    setAnnotationsOpen(false);
 
     const url = wsUrlFromApiBase();
     const ws = new WebSocket(url);
@@ -447,13 +484,15 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
         case "advisor_thinking": {
           const advSender = data.sender;
           if (advSender === "Gemini") setGeminiAdvisorReviewing(true);
-          if (advSender === "GPT") setGptAdvisorReviewing(true);
+          if (advSender === "GPT")    setGptAdvisorReviewing(true);
+          if (advSender === "Grok")   setGrokAdvisorReviewing(true);
           break;
         }
         case "advisor_complete": {
           const advDone = data.sender;
           if (advDone === "Gemini") setGeminiAdvisorReviewing(false);
-          if (advDone === "GPT") setGptAdvisorReviewing(false);
+          if (advDone === "GPT")    setGptAdvisorReviewing(false);
+          if (advDone === "Grok")   setGrokAdvisorReviewing(false);
           break;
         }
         case "perplexity_thinking":
@@ -478,6 +517,9 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
           phaseRef.current = "idle";
           setStreamPhaseMarker((n) => n + 1);
           onSynthesisCompleteRef.current?.(data.content ?? "");
+          break;
+        case "synthesis_annotations":
+          setAnnotations(data.annotations || []);
           break;
         case "session_complete":
           completedNormallyRef.current = true;
@@ -630,15 +672,65 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     configError,
   ]);
 
+  const breadcrumbState = useMemo(() => {
+    // PROMPT — done as soon as session starts (or resume)
+    const promptDone = isResume || sessionStarted;
+
+    // RESEARCH — active during round1_parallel, done when perplexity starts or synthesis entered
+    const transcriptDone = isResume || perplexityPhase !== "off" || synthesisPhaseEntered;
+    const transcriptActive = sessionStarted && !transcriptDone;
+
+    // FACT-CHECK — active during perplexity thinking, done when content received
+    const factDone = isResume || perplexityPhase === "content" || (synthesisPhaseEntered && perplexityPhase !== "thinking");
+    const factActive = perplexityPhase === "thinking";
+
+    // SYNTHESIS — active during observations + synthesis thinking/streaming, done when final
+    const sDone = isResume || synthesisFinal;
+    const sActive = synthesisPhaseEntered && !synthesisFinal;
+    const sLabel = synthesisThinking || synthesisStreaming ? "SYNTHESIZING..." : "SYNTHESIS";
+
+    return { promptDone, transcriptDone, transcriptActive, factDone, factActive, sDone, sActive, sLabel };
+  }, [isResume, sessionStarted, synthesisPhaseEntered, perplexityPhase, synthesisThinking, synthesisStreaming, synthesisFinal]);
+
   const showTranscriptRoundtable = isResume || sessionStarted;
 
   const showGeminiThinking =
     transcriptLive && !configError && promptOk && sessionStarted && !geminiR1Complete && !String(geminiR1).trim();
   const showGptThinking =
     transcriptLive && !configError && promptOk && sessionStarted && !gptR1Complete && !String(gptR1).trim();
+  const showGrokThinking =
+    transcriptLive && !configError && promptOk && sessionStarted && !grokR1Complete && !String(grokR1).trim();
+  const showClaudeR1Thinking =
+    transcriptLive && !configError && promptOk && sessionStarted && !claudeR1Complete && !String(claudeR1).trim();
 
-  const geminiR1Streaming = sessionStarted && !geminiR1Complete && Boolean(String(geminiR1).length);
-  const gptR1Streaming = sessionStarted && !gptR1Complete && Boolean(String(gptR1).length);
+  const geminiR1Streaming  = sessionStarted && !geminiR1Complete  && Boolean(String(geminiR1).length);
+  const gptR1Streaming     = sessionStarted && !gptR1Complete     && Boolean(String(gptR1).length);
+  const grokR1Streaming    = sessionStarted && !grokR1Complete    && Boolean(String(grokR1).length);
+  const claudeR1Streaming  = sessionStarted && !claudeR1Complete  && Boolean(String(claudeR1).length);
+
+  /** Multi-column grid — only when seat has thinking, text, or finished bubble (skip notices don't count). */
+  const geminiRoundActive =
+    showGeminiThinking ||
+    geminiR1Streaming ||
+    (Boolean(String(geminiR1 || "").trim()) && !isSkipNotice(geminiR1)) ||
+    (geminiR1Complete && !isSkipNotice(geminiR1));
+  const gptRoundActive =
+    showGptThinking ||
+    gptR1Streaming ||
+    (Boolean(String(gptR1 || "").trim()) && !isSkipNotice(gptR1)) ||
+    (gptR1Complete && !isSkipNotice(gptR1));
+  const grokRoundActive =
+    showGrokThinking ||
+    grokR1Streaming ||
+    (Boolean(String(grokR1 || "").trim()) && !isSkipNotice(grokR1)) ||
+    (grokR1Complete && !isSkipNotice(grokR1));
+  const claudeR1RoundActive =
+    showClaudeR1Thinking ||
+    claudeR1Streaming ||
+    (Boolean(String(claudeR1 || "").trim()) && !isSkipNotice(claudeR1)) ||
+    (claudeR1Complete && !isSkipNotice(claudeR1));
+
+  const round1GridClass = "flex flex-col gap-4";
 
   return (
     <div className="min-h-screen bg-bg text-text-primary">
@@ -678,34 +770,46 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
         </div>
       )}
 
-      <header className="border-b border-border px-4 py-3 sm:px-6">
-        <div className="mx-auto flex max-w-3xl items-center gap-3">
-          <button
-            type="button"
-            onClick={requestHome}
-            className="shrink-0 rounded-lg px-2 py-1.5 text-left text-sm text-text-primary transition-colors hover:text-claude focus:outline-none focus:ring-1 focus:ring-border-focus"
+      <Header onHome={requestHome} onSaveExit={requestSaveExit}>
+        {/* Tier + breadcrumb line */}
+        <div
+          className="mx-auto flex max-w-3xl items-center justify-center gap-1 px-4 pb-2 pt-0.5 text-[11px] sm:px-6"
+          style={{ color: "#666666" }}
+        >
+          <span className="font-semibold uppercase tracking-wide" style={{ color: "#F5A623" }}>
+            {"<"} {formatTierBadge(sessionConfig?.tier)} {">"}
+          </span>
+          <span className="mx-1.5" style={{ color: "#F5A623" }}>·</span>
+          {/* PROMPT */}
+          <span style={{ color: breadcrumbState.promptDone ? "#F5A623" : "#666666" }}>
+            {breadcrumbState.promptDone ? "✓" : "○"} PROMPT
+          </span>
+          <span className="mx-1" style={{ color: "#F5A623" }}>→</span>
+          {/* RESEARCH */}
+          <span
+            className={breadcrumbState.transcriptActive ? "animate-pulse" : ""}
+            style={{ color: breadcrumbState.transcriptDone || breadcrumbState.transcriptActive ? "#F5A623" : "#666666" }}
           >
-            ← Home
-          </button>
-          <div className="flex min-w-0 flex-1 items-center justify-center gap-2">
-            <span className="truncate text-sm font-semibold text-text-primary">⬡ ai-roundtable</span>
-            <span className="shrink-0 rounded border border-border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-text-secondary">
-              {formatTierBadge(sessionConfig?.tier)}
-            </span>
-          </div>
-          <button
-            type="button"
-            onClick={requestSaveExit}
-            className="shrink-0 rounded-lg px-2 py-1.5 text-sm text-text-primary transition-colors hover:text-claude focus:outline-none focus:ring-1 focus:ring-border-focus"
+            {breadcrumbState.transcriptDone ? "✓" : breadcrumbState.transcriptActive ? "●" : "○"} RESEARCH
+          </span>
+          <span className="mx-1" style={{ color: "#F5A623" }}>→</span>
+          {/* FACT-CHECK */}
+          <span
+            className={breadcrumbState.factActive ? "animate-pulse" : ""}
+            style={{ color: breadcrumbState.factDone || breadcrumbState.factActive ? "#F5A623" : "#666666" }}
           >
-            💾 Save & Exit
-          </button>
+            {breadcrumbState.factDone ? "✓" : breadcrumbState.factActive ? "●" : "○"} FACT-CHECK
+          </span>
+          <span className="mx-1" style={{ color: "#F5A623" }}>→</span>
+          {/* SYNTHESIS */}
+          <span
+            className={breadcrumbState.sActive ? "animate-pulse" : ""}
+            style={{ color: breadcrumbState.sDone || breadcrumbState.sActive ? "#F5A623" : "#666666" }}
+          >
+            {breadcrumbState.sDone ? "✓" : breadcrumbState.sActive ? "●" : "○"} {breadcrumbState.sLabel}
+          </span>
         </div>
-        <SessionProgressBar stages={progressStagesFixed} />
-        {sessionConfig?.session_title && (
-          <p className="mx-auto mt-1 max-w-3xl truncate text-center text-xs text-text-secondary">{sessionConfig.session_title}</p>
-        )}
-      </header>
+      </Header>
 
       <div className="mx-auto max-w-3xl space-y-6 px-4 py-6 sm:px-6">
         {configError && (
@@ -716,84 +820,146 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
 
         <section aria-label="Session prompt">
           <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-secondary">
-            Your prompt
+            Prompt
           </h2>
-          <div className="rounded-lg border border-border bg-surface px-4 py-3 text-sm leading-relaxed text-text-primary whitespace-pre-wrap">
+          <div className="bubble-scroll max-h-[200px] rounded-lg border border-border bg-surface px-4 py-3 text-sm leading-relaxed text-text-primary whitespace-pre-wrap">
             {displayPrompt || "—"}
           </div>
         </section>
 
         <section aria-label="Model responses" className="space-y-4">
           <h2 className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-            Transcript
+            Research
           </h2>
 
           {showTranscriptRoundtable && (
             <>
-              <div className="space-y-4">
-                {showGeminiThinking ? (
-                  <ThinkingDotsBubble label="GEMINI" color={MODEL_HEX.Gemini} />
-                ) : (
-                  <div>
-                    <ModelBubble
-                      sender="Gemini"
-                      content={bubbleBody(geminiR1, geminiR1Complete)}
-                      isStreaming={geminiR1Streaming}
-                      round="round1"
-                      complete={geminiR1Complete}
-                      scrollContainerRef={(el) => {
-                        bubbleScrollRefs.current.Gemini = el;
-                      }}
-                    />
-                    {geminiAdvisorReviewing ? (
-                      <p className="mt-1 text-xs text-[#888888]" role="status" aria-live="polite">
-                        ⚖ advisor reviewing...
+              <div className={round1GridClass}>
+                {geminiRoundActive && (
+                  <div className="min-w-0 space-y-1">
+                    {showGeminiThinking ? (
+                      <ThinkingDotsBubble label="🔵 GEMINI" color={MODEL_HEX.Gemini} />
+                    ) : geminiR1Complete && isSkipNotice(geminiR1) ? (
+                      <p className="text-xs text-[#888888]" role="status">
+                        Gemini is unavailable right now — skipped this round.
                       </p>
-                    ) : null}
+                    ) : (
+                      <>
+                        <ModelBubble
+                          sender="Gemini"
+                          titleOverride="🔵 GEMINI"
+                          content={bubbleBody(geminiR1, geminiR1Complete)}
+                          isStreaming={geminiR1Streaming}
+                          round="round1"
+                          complete={geminiR1Complete}
+                        />
+                        {geminiAdvisorReviewing ? (
+                          <p className="text-xs text-[#888888]" role="status" aria-live="polite">
+                            ⚖ advisor reviewing...
+                          </p>
+                        ) : null}
+                      </>
+                    )}
                   </div>
                 )}
-
-                {showGptThinking ? (
-                  <ThinkingDotsBubble label="GPT" color={MODEL_HEX.GPT} />
-                ) : (
-                  <div>
-                    <ModelBubble
-                      sender="GPT"
-                      content={bubbleBody(gptR1, gptR1Complete)}
-                      isStreaming={gptR1Streaming}
-                      round="round1"
-                      complete={gptR1Complete}
-                      scrollContainerRef={(el) => {
-                        bubbleScrollRefs.current.GPT = el;
-                      }}
-                    />
-                    {gptAdvisorReviewing ? (
-                      <p className="mt-1 text-xs text-[#888888]" role="status" aria-live="polite">
-                        ⚖ advisor reviewing...
+                {gptRoundActive && (
+                  <div className="min-w-0 space-y-1">
+                    {showGptThinking ? (
+                      <ThinkingDotsBubble label="🟢 GPT" color={MODEL_HEX.GPT} />
+                    ) : gptR1Complete && isSkipNotice(gptR1) ? (
+                      <p className="text-xs text-[#888888]" role="status">
+                        GPT is unavailable right now — skipped this round.
                       </p>
-                    ) : null}
+                    ) : (
+                      <>
+                        <ModelBubble
+                          sender="GPT"
+                          titleOverride="🟢 GPT"
+                          content={bubbleBody(gptR1, gptR1Complete)}
+                          isStreaming={gptR1Streaming}
+                          round="round1"
+                          complete={gptR1Complete}
+                        />
+                        {gptAdvisorReviewing ? (
+                          <p className="text-xs text-[#888888]" role="status" aria-live="polite">
+                            ⚖ advisor reviewing...
+                          </p>
+                        ) : null}
+                      </>
+                    )}
+                  </div>
+                )}
+                {grokRoundActive && (
+                  <div className="min-w-0 space-y-1">
+                    {showGrokThinking ? (
+                      <ThinkingDotsBubble label={<><span style={{ fontSize: "1.15em", lineHeight: 1, verticalAlign: "middle" }}>●</span>{" GROK"}</>} color={MODEL_HEX.Grok} />
+                    ) : grokR1Complete && isSkipNotice(grokR1) ? (
+                      <p className="text-xs text-[#888888]" role="status">
+                        Grok is unavailable right now — skipped this round.
+                      </p>
+                    ) : (
+                      <>
+                        <ModelBubble
+                          sender="Grok"
+                          titleOverride={<><span style={{ fontSize: "1.15em", lineHeight: 1, verticalAlign: "middle" }}>●</span>{" GROK"}</>}
+                          content={bubbleBody(grokR1, grokR1Complete)}
+                          isStreaming={grokR1Streaming}
+                          round="round1"
+                          complete={grokR1Complete}
+                        />
+                        {grokAdvisorReviewing ? (
+                          <p className="text-xs text-[#888888]" role="status" aria-live="polite">
+                            ⚖ advisor reviewing...
+                          </p>
+                        ) : null}
+                      </>
+                    )}
+                  </div>
+                )}
+                {claudeR1RoundActive && (
+                  <div className="min-w-0 space-y-1">
+                    {showClaudeR1Thinking ? (
+                      <ThinkingDotsBubble label="🟠 CLAUDE" color={MODEL_HEX.Claude} />
+                    ) : claudeR1Complete && isSkipNotice(claudeR1) ? (
+                      <p className="text-xs text-[#888888]" role="status">
+                        Claude is unavailable right now — skipped this round.
+                      </p>
+                    ) : (
+                      <ModelBubble
+                        sender="Claude"
+                        titleOverride="🟠 CLAUDE"
+                        content={bubbleBody(claudeR1, claudeR1Complete)}
+                        isStreaming={claudeR1Streaming}
+                        round="round1"
+                        complete={claudeR1Complete}
+                      />
+                    )}
                   </div>
                 )}
               </div>
 
-              {perplexityPhase === "thinking" && (
-                <ThinkingDotsBubble
-                  label="🔎 PERPLEXITY · auditing + live research"
-                  color={MODEL_HEX.Perplexity}
-                  uppercase={false}
-                />
-              )}
-
-              {perplexityPhase === "content" && String(perplexityContent).trim() && (
-                <ModelBubble
-                  sender="Perplexity"
-                  content={perplexityContent}
-                  isStreaming={false}
-                  round="audit"
-                  complete
-                  titleOverride="🔎 PERPLEXITY · fact-check"
-                  scrollContainerRef={undefined}
-                />
+              {perplexityPhase !== "off" && (
+                <div className="w-full min-w-0 space-y-4">
+                  <h2 className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
+                    Fact-Check
+                  </h2>
+                  {perplexityPhase === "thinking" && (
+                    <ThinkingDotsBubble
+                      label="🔎 PERPLEXITY"
+                      color={MODEL_HEX.Perplexity}
+                    />
+                  )}
+                  {perplexityPhase === "content" && String(perplexityContent).trim() && (
+                    <ModelBubble
+                      sender="Perplexity"
+                      content={perplexityContent}
+                      isStreaming={false}
+                      round="audit"
+                      complete
+                      titleOverride="🔎 PERPLEXITY"
+                    />
+                  )}
+                </div>
               )}
             </>
           )}
@@ -815,9 +981,9 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
           <section aria-label="Synthesis" className="space-y-4">
             {synthesisThinking && !synthesisFinal && !String(synthesisText).trim() && (
               <ThinkingDotsBubble
-                label="🟠 CLAUDE · synthesizing"
+                label="🟠 CLAUDE"
                 color={MODEL_HEX.Claude}
-                uppercase={false}
+                subtitle="Synthesizing your roundtable..."
               />
             )}
             {(synthesisStreaming || synthesisFinal || synthesisText.length > 0) && (
@@ -826,6 +992,29 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
                 isStreaming={synthesisStreaming && !synthesisFinal}
                 complete={synthesisFinal}
               />
+            )}
+            {sessionComplete && annotations.length > 0 && (
+              <div className="rounded-lg border border-border bg-[#161616]" style={{ borderLeft: "3px solid #2a2a2a" }}>
+                <button
+                  type="button"
+                  onClick={() => setAnnotationsOpen((o) => !o)}
+                  className="flex w-full items-center gap-2 px-4 py-3 text-left text-xs text-text-secondary transition-colors hover:text-text-primary focus:outline-none"
+                  aria-expanded={annotationsOpen}
+                >
+                  <span aria-hidden style={{ display: "inline-block", transform: annotationsOpen ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.15s" }}>▾</span>
+                  How Claude synthesized this
+                </button>
+                {annotationsOpen && (
+                  <ul className="space-y-1.5 px-4 pb-4 pt-1">
+                    {annotations.map((a, i) => (
+                      <li key={i} className="flex gap-2 text-xs leading-relaxed text-text-secondary">
+                        <span className="shrink-0 text-[#444444]">•</span>
+                        <span>{a}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
             )}
           </section>
         )}
