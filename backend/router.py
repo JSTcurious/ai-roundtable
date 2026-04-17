@@ -154,14 +154,16 @@ synthesis, and natural prose. Lead with that. You have the \
 full conversation history including what Gemini, GPT, and Grok said \
 before you. Build on their responses where relevant — push back \
 where you disagree. Be direct. Do not prefix your response with \
-your name.""",
+your name. Note: you will also serve as the synthesis chair after \
+this round — treat your round-1 response as independent research, \
+not a preview of your synthesis.""",
 }
 
 # Synthesis prompt is split into role + task so the epistemic guardrail blocks
 # can be injected between them. build_synthesis_prompt() composes the full string.
 _SYNTHESIS_ROLE = (
     "You are the expert chair of this roundtable. "
-    "You have heard three expert perspectives and have live web research."
+    "You have heard four expert perspectives and have live web research."
 )
 
 _SYNTHESIS_TASK_TEMPLATE = """
