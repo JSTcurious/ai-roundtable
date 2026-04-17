@@ -67,6 +67,13 @@ When making factual claims, tag them using exactly these markers:
 Use the tag inline, immediately before the claim. Example:
   "[LIKELY] Gemini Embedding 2 supports 3072 dimensions, but verify against current docs."
 
+Bad (do not do this):
+  "Claude Opus 4.7 does not exist."
+
+Good:
+  "[UNCERTAIN] I'm not aware of Claude Opus 4.7 — it may be newer than my \
+training data, or a misnomer for Claude 3 Opus."
+
 Do not substitute other phrasings. These tags are parsed downstream.
 """
 

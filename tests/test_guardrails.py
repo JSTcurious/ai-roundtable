@@ -43,6 +43,10 @@ def test_confidence_convention_defines_all_tags():
         assert tag in CONFIDENCE_CONVENTION, f"CONFIDENCE_CONVENTION missing tag: {tag}"
 
 
+def test_confidence_convention_has_counter_example():
+    assert "Bad (do not do this)" in CONFIDENCE_CONVENTION
+
+
 # ---------------------------------------------------------------------------
 # Composed prompt — every model gets all three blocks.
 # ---------------------------------------------------------------------------
