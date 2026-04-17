@@ -146,10 +146,12 @@ _SYNTHESIS_MARKER = "Synthesizing Other Models' Responses"
 # Helper — a synthesis prompt with dummy inputs for structure testing.
 _SAMPLE_SYNTHESIS = build_synthesis_prompt(
     output_type="report",
-    gemini="gemini response",
-    gpt="gpt response",
-    grok="grok response",
-    perplexity="perplexity audit",
+    perplexity_findings="perplexity live research content",
+    round1_responses={
+        "gemini": "gemini response",
+        "gpt": "gpt response",
+        "grok": "grok response",
+    },
     optimized_prompt="user prompt",
 )
 
@@ -232,5 +234,43 @@ def test_synthesis_skepticism_precedes_trust_hierarchy():
 
 def test_synthesis_trust_hierarchy_precedes_task_instructions():
     trust_pos = _SAMPLE_SYNTHESIS.find(_TRUST_HIERARCHY_MARKER)
-    task_pos = _SAMPLE_SYNTHESIS.find("Gemini's analysis")
+    task_pos = _SAMPLE_SYNTHESIS.find("VERIFIED LIVE RESEARCH")
     assert trust_pos < task_pos, "SYNTHESIS_TRUST_HIERARCHY must precede task instructions"
+
+
+# ---------------------------------------------------------------------------
+# Structural separation — Perplexity block precedes round-1 block in task.
+# ---------------------------------------------------------------------------
+
+def test_synthesis_task_has_verified_live_research_header():
+    assert "VERIFIED LIVE RESEARCH" in _SAMPLE_SYNTHESIS
+
+
+def test_synthesis_task_has_round1_header():
+    assert "Round-1 Model Responses (apply CASCADING_GUARD to these)" in _SAMPLE_SYNTHESIS
+
+
+def test_synthesis_perplexity_block_precedes_round1_block():
+    perplexity_pos = _SAMPLE_SYNTHESIS.find("VERIFIED LIVE RESEARCH")
+    round1_pos = _SAMPLE_SYNTHESIS.find("Round-1 Model Responses")
+    assert perplexity_pos < round1_pos, (
+        "VERIFIED LIVE RESEARCH block must appear before Round-1 Model Responses block"
+    )
+
+
+def test_synthesis_perplexity_content_in_verified_block():
+    """Perplexity findings land inside the VERIFIED block, before the round-1 block."""
+    perplexity_pos = _SAMPLE_SYNTHESIS.find("perplexity live research content")
+    round1_pos = _SAMPLE_SYNTHESIS.find("Round-1 Model Responses")
+    assert 0 < perplexity_pos < round1_pos, (
+        "Perplexity findings must appear inside VERIFIED LIVE RESEARCH, before round-1 responses"
+    )
+
+
+def test_synthesis_round1_content_after_round1_header():
+    """Round-1 model responses land after their header, not in the Perplexity block."""
+    round1_pos = _SAMPLE_SYNTHESIS.find("Round-1 Model Responses")
+    gemini_pos = _SAMPLE_SYNTHESIS.find("gemini response")
+    assert round1_pos < gemini_pos, (
+        "Round-1 model response text must appear after Round-1 Model Responses header"
+    )

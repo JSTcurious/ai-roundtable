@@ -165,35 +165,46 @@ _SYNTHESIS_ROLE = (
 )
 
 _SYNTHESIS_TASK_TEMPLATE = """
-Gemini's analysis:
-{gemini}
+## VERIFIED LIVE RESEARCH
+The following data was retrieved by Perplexity via live web search conducted
+during this session. Treat it as authoritative. It is not a model's opinion
+or training data — it is current factual data with citations.
 
-GPT's analysis:
-{gpt}
-
-Grok's analysis:
-{grok}
-
-Perplexity live research + audit:
 {perplexity}
 
-The user's request: {output_type}
-Full context: {optimized_prompt}
+---
 
-Now produce ONE definitive, integrated final answer.
+## Round-1 Model Responses (apply CASCADING_GUARD to these)
+{round1_block}
 
-Rules:
-- Add your own expert perspective — don't just summarize what Gemini, GPT, and Grok said
+---
+
+## Your Task
+Synthesize the above into a response to: "{optimized_prompt}"
+
+Lead with the VERIFIED LIVE RESEARCH data. When round-1 models refused
+or lacked current data, state that explicitly and use the live research
+as your primary source. Do not substitute your training data for
+verified live research.
+
+Additional rules:
+- Add your own expert perspective — don't just summarize what the round-1 models said
 - Take the strongest insights from each and weave them into a coherent whole
 - Where models disagreed, note it in ONE sentence and give your recommendation
-- Correct anything Perplexity flagged as outdated
-- Incorporate current information from Perplexity's live research
 - End with 3 concrete next steps the user can take starting this week
 - Write as THE expert giving one definitive answer, not as a moderator summarizing others
 - Match output format: {output_type}
 - Do NOT use comparison tables
 - Do NOT list what each model said separately
 """
+
+
+def _format_round1_responses(responses: dict) -> str:
+    """Format round-1 model responses as a labeled block for the synthesis task."""
+    lines = []
+    for model, text in responses.items():
+        lines.append(f"{model.capitalize()}'s analysis:\n{text or '(not available)'}")
+    return "\n\n".join(lines) if lines else "(no round-1 responses available)"
 
 
 # Maps tier names as they may arrive from the frontend or session_config
@@ -474,32 +485,43 @@ def get_use_case(use_case_id: str) -> Optional[dict]:
 
 def build_synthesis_prompt(
     output_type: str,
+    perplexity_findings: str = "",
+    round1_responses: dict = None,
+    optimized_prompt: str = "",
+    # Legacy positional args kept for backwards compatibility with existing tests.
+    # Callers should migrate to keyword args above.
     gemini: str = "",
     gpt: str = "",
     grok: str = "",
     perplexity: str = "",
-    optimized_prompt: str = "",
 ) -> str:
     """
     Return the Claude synthesis system prompt with all inputs injected.
 
-    Claude does not participate in Round 1 — it synthesises from Gemini,
-    GPT, Grok, and Perplexity's live research + audit.
+    Perplexity findings are injected as a structurally distinct, authoritative
+    block BEFORE round-1 responses so Claude cannot conflate them. Round-1
+    responses are grouped under an explicit CASCADING_GUARD label.
 
     Args:
-        output_type:       e.g. "roadmap", "report", "decision", "plan", "brainstorm"
-        gemini:            Gemini's Round 1 response text
-        gpt:               GPT's Round 1 response text
-        grok:              Grok's Round 1 response text
-        perplexity:        Perplexity Phase 2 audit text (includes Phase 1 research)
-        optimized_prompt:  the full optimized prompt from intake
+        output_type:         e.g. "roadmap", "report", "decision", "plan", "brainstorm"
+        perplexity_findings: Perplexity live web research + audit (grounded, cited)
+        round1_responses:    dict of {model_name: response_text} for Gemini, GPT, Grok
+        optimized_prompt:    the full optimized prompt from intake
+        gemini, gpt, grok, perplexity: legacy flat args; used if round1_responses is None
     """
+    if round1_responses is None:
+        # Legacy call path — construct dict from flat args
+        round1_responses = {
+            "gemini": gemini,
+            "gpt": gpt,
+            "grok": grok,
+        }
+        perplexity_findings = perplexity_findings or perplexity
+
     task = _SYNTHESIS_TASK_TEMPLATE.format(
         output_type=output_type,
-        gemini=gemini or "(not available)",
-        gpt=gpt or "(not available)",
-        grok=grok or "(not available)",
-        perplexity=perplexity or "(not available)",
+        perplexity=perplexity_findings or "(not available)",
+        round1_block=_format_round1_responses(round1_responses),
         optimized_prompt=optimized_prompt or "(not available)",
     )
     return (
