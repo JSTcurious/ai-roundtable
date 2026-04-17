@@ -48,9 +48,7 @@ MODELS = {
 
 # Intake uses a separate model constant so it can be pinned or overridden independently
 # of the round-1 research models. Reuses GOOGLE_API_KEY — no new credentials needed.
-# Fallback order: env var → preview-05-20 → gemini-2.5-flash (stable, no date suffix)
-INTAKE_MODEL = os.getenv("GEMINI_INTAKE_MODEL", "gemini-2.5-flash-preview-05-20")
-_INTAKE_MODEL_FALLBACK = "gemini-2.5-flash"
+INTAKE_MODEL = os.getenv("GEMINI_INTAKE_MODEL", "gemini-2.5-flash")
 
 GEMINI_INTAKE_SYSTEM = """
 You are an intake analyst for an AI research roundtable. Your job is to
