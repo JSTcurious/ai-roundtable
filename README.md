@@ -37,6 +37,27 @@ Claude:  [synthesizes the full conversation]
 
 ---
 
+## Epistemic Design Decision
+
+ai-roundtable uses **epistemic transparency, not epistemic suppression**.
+
+Models are not restricted to a grounding corpus. They may speculate, disagree,
+and draw on open-world knowledge. The anti-hallucination instructions make
+uncertainty legible rather than preventing it.
+
+Confidence qualifiers (`[VERIFIED]`, `[LIKELY]`, `[UNCERTAIN]`, `[DEFER]`) are
+instructed conventions enforced via system prompts — not guarantees. Users
+should treat all model outputs as perspectives to be weighed, not facts to be
+accepted.
+
+When a model joins partway through a conversation, it receives an explicit
+instruction to treat the prior transcript as unverified. This prevents
+cascading hallucinations from being silently inherited.
+
+*See [ADR 001 — Epistemic Transparency](docs/decisions/001-epistemic-transparency.md) for the full rationale.*
+
+---
+
 ## v1 Features
 
 - `@mention` routing — call one, two, or all three models per prompt
