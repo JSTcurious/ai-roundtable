@@ -56,6 +56,9 @@ cascading hallucinations from being silently inherited.
 
 *See [ADR 001 — Epistemic Transparency](docs/decisions/001-epistemic-transparency.md) for the full rationale.*
 
+See [`docs/transcripts/`](./docs/transcripts/) for real-world examples of
+guardrail behavior against specific test prompts.
+
 ---
 
 ## v1 Features
