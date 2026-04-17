@@ -24,9 +24,11 @@ Functions:
 
 import asyncio
 import os
+import time
 from functools import partial
 
 from google import genai
+from google.api_core.exceptions import ServiceUnavailable
 from google.genai import types
 
 from backend.models.intake_decision import IntakeDecision
@@ -81,12 +83,21 @@ JSON object.
 """
 
 
+_INTAKE_MAX_RETRIES = 3
+_INTAKE_RETRY_BASE_SECONDS = 2
+
+
 def call_gemini_intake(prompt: str) -> IntakeDecision:
     """
     Analyze a user's intake prompt with Gemini Flash and return a structured decision.
 
     Uses response_schema to enforce typed JSON output — no free-form parsing required.
-    Tries INTAKE_MODEL first; falls back to _INTAKE_MODEL_FALLBACK on API error.
+
+    Retry policy:
+      - 503 UNAVAILABLE only: up to _INTAKE_MAX_RETRIES attempts with exponential
+        backoff starting at _INTAKE_RETRY_BASE_SECONDS (2 s → 4 s → raises).
+      - Other API errors: try _INTAKE_MODEL_FALLBACK once, then propagate.
+      - Schema validation errors (ValueError): re-raise immediately, no retry.
 
     Args:
         prompt: The user's raw prompt, or a combined clarification turn string.
@@ -95,8 +106,9 @@ def call_gemini_intake(prompt: str) -> IntakeDecision:
         IntakeDecision with tier, optimized_prompt, and optional clarifying_question.
 
     Raises:
-        ValueError: if the API response fails schema validation.
-        Exception:  on API error from both primary and fallback models.
+        ValueError:   if the API response fails schema validation.
+        RuntimeError: if Gemini returns 503 on all _INTAKE_MAX_RETRIES attempts.
+        Exception:    on any other API error after the fallback model also fails.
     """
     config = types.GenerateContentConfig(
         response_mime_type="application/json",
@@ -105,32 +117,40 @@ def call_gemini_intake(prompt: str) -> IntakeDecision:
     )
     contents = [types.Content(role="user", parts=[types.Part(text=prompt)])]
 
-    models_to_try = [INTAKE_MODEL]
-    if INTAKE_MODEL != _INTAKE_MODEL_FALLBACK:
-        models_to_try.append(_INTAKE_MODEL_FALLBACK)
-
-    last_exc = None
-    for model_name in models_to_try:
+    def _call_one(model_name: str) -> IntakeDecision:
+        response = _get_client().models.generate_content(
+            model=model_name, contents=contents, config=config,
+        )
         try:
-            response = _get_client().models.generate_content(
-                model=model_name,
-                contents=contents,
-                config=config,
-            )
-            try:
-                return IntakeDecision.model_validate_json(response.text)
-            except Exception as e:
-                raise ValueError(
-                    f"Gemini intake schema validation failed ({model_name}): {e}. "
-                    f"Raw response: {response.text!r}"
-                )
-        except ValueError:
-            raise  # schema errors are not retried — re-raise immediately
+            return IntakeDecision.model_validate_json(response.text)
         except Exception as e:
-            last_exc = e
-            continue
+            raise ValueError(
+                f"Gemini intake schema validation failed ({model_name}): {e}. "
+                f"Raw response: {response.text!r}"
+            )
 
-    raise last_exc
+    def _call_with_model_fallback() -> IntakeDecision:
+        """Try primary model; on non-503 API error, try fallback. 503 propagates."""
+        try:
+            return _call_one(INTAKE_MODEL)
+        except (ValueError, ServiceUnavailable):
+            raise  # schema errors and 503s are handled by the caller
+        except Exception:
+            if INTAKE_MODEL != _INTAKE_MODEL_FALLBACK:
+                return _call_one(_INTAKE_MODEL_FALLBACK)
+            raise
+
+    for attempt in range(1, _INTAKE_MAX_RETRIES + 1):
+        try:
+            return _call_with_model_fallback()
+        except ServiceUnavailable:
+            if attempt < _INTAKE_MAX_RETRIES:
+                delay = _INTAKE_RETRY_BASE_SECONDS * (2 ** (attempt - 1))
+                time.sleep(delay)
+            else:
+                raise RuntimeError(
+                    "Gemini intake unavailable after 3 retries — try again in a moment."
+                )
 
 _ADVISOR_PROMPT = (
     "Review this response and produce an improved final version.\n\n"
