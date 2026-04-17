@@ -88,4 +88,4 @@ Tag adoption is currently 0%. This is tracked as an open issue.
 ## Related
 
 - [ADR 001 — Epistemic Transparency](../decisions/001-epistemic-transparency.md)
-- GitHub issue: Confidence qualifier tag adoption gap (link once filed)
+- GitHub issue: [feat: confidence qualifier tag adoption is 0% in round-1 responses](https://github.com/JSTcurious/ai-roundtable/issues/1)
