@@ -274,3 +274,60 @@ def test_synthesis_round1_content_after_round1_header():
     assert round1_pos < gemini_pos, (
         "Round-1 model response text must appear after Round-1 Model Responses header"
     )
+
+
+# ---------------------------------------------------------------------------
+# Four-model round-1 — Claude added as research participant.
+# ---------------------------------------------------------------------------
+
+_FOUR_MODEL_SYNTHESIS = build_synthesis_prompt(
+    output_type="report",
+    perplexity_findings="perplexity live research content",
+    round1_responses={
+        "gemini": "gemini response",
+        "gpt": "gpt response",
+        "grok": "grok response",
+        "claude": "claude round1 response",
+    },
+    optimized_prompt="user prompt",
+)
+
+
+def test_format_round1_handles_four_models():
+    """_format_round1_responses accepts a four-model dict without error."""
+    from backend.router import _format_round1_responses
+    result = _format_round1_responses({
+        "gemini": "g",
+        "gpt": "p",
+        "grok": "gr",
+        "claude": "cl",
+    })
+    assert "Gemini" in result
+    assert "Gpt" in result or "GPT" in result or "gpt" in result.lower()
+    assert "Claude" in result
+
+
+def test_synthesis_prompt_contains_claude_round1_response():
+    """When Claude's round-1 response is passed, it appears in the synthesis prompt."""
+    assert "claude round1 response" in _FOUR_MODEL_SYNTHESIS
+
+
+def test_synthesis_prompt_contains_all_four_models():
+    """All four model responses appear in the synthesis prompt."""
+    assert "gemini response" in _FOUR_MODEL_SYNTHESIS
+    assert "gpt response" in _FOUR_MODEL_SYNTHESIS
+    assert "grok response" in _FOUR_MODEL_SYNTHESIS
+    assert "claude round1 response" in _FOUR_MODEL_SYNTHESIS
+
+
+def test_claude_round1_system_prompt_has_independence_note():
+    """Claude's round-1 system prompt contains the independence note."""
+    prompt = get_round1_system_prompt("claude")
+    assert "independent research" in prompt
+    assert "not a preview of your synthesis" in prompt
+
+
+def test_synthesis_role_says_four_perspectives():
+    """Synthesis role description references four expert perspectives."""
+    from backend.router import _SYNTHESIS_ROLE
+    assert "four" in _SYNTHESIS_ROLE
