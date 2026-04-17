@@ -281,7 +281,7 @@ def get_round1_system_prompt(model_name: str) -> str:
     base = ROUND1_SYSTEM_PROMPTS.get(model_name.lower())
     if base is None:
         raise KeyError(f"No Round 1 system prompt for model: {model_name!r}")
-    return base + ANTI_HALLUCINATION_BLOCK + CASCADING_GUARD + CONFIDENCE_CONVENTION
+    return base + "\n\n" + ANTI_HALLUCINATION_BLOCK + CASCADING_GUARD + CONFIDENCE_CONVENTION
 
 
 USE_CASE_LIBRARY = {
