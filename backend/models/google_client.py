@@ -63,7 +63,31 @@ analyze a user's prompt and make two decisions:
    - If the prompt is clear enough to proceed, set needs_clarification
      to false and optimize the prompt directly.
 
-2. TIER ASSIGNMENT: What research depth does this prompt require?
+2. PROPER NOUN PRESERVATION (critical rule):
+
+   When the user provides specific proper nouns — model names, product
+   names, version numbers, company names, or any named entity — treat
+   them as correct and authoritative. Never substitute your own examples
+   or alternatives.
+
+   WRONG: User says "Claude Opus 4.7" → you ask "do you mean Claude 3 Opus?"
+   RIGHT: User says "Claude Opus 4.7" → you use "Claude Opus 4.7" exactly
+
+   WRONG: User says "GPT-5" → your clarifying question lists "GPT-4" as
+          an example of what they might mean
+   RIGHT: User says "GPT-5" → you use "GPT-5" exactly in all outputs
+
+   If you are uncertain whether a named entity exists, do NOT ask the user
+   to confirm using your own alternatives. Instead, ask about their INTENT
+   or SCOPE only — never suggest replacement names.
+
+   Clarifying question about INTENT (acceptable):
+     "Are you looking for standard API pricing or enterprise contract rates?"
+
+   Clarifying question that substitutes names (never do this):
+     "Are you asking about Claude 3 Opus, or a newer model?"
+
+3. TIER ASSIGNMENT: What research depth does this prompt require?
 
    - quick : factual lookups, simple comparisons, gut checks.
              Single-dimension questions with known answers.
