@@ -18,7 +18,7 @@ Functions:
 import re
 from typing import Any, Optional
 
-from backend.models.google_client import call_gemini_intake
+from backend.models.openai_client import call_gpt4o_mini_intake
 from backend.models.intake_decision import IntakeDecision
 
 # Unicode bidi overrides, directional formatting, and other invisible control characters.
@@ -112,7 +112,7 @@ class IntakeSession:
                 "config": dict,
             }
         """
-        decision = call_gemini_intake(prompt)
+        decision = call_gpt4o_mini_intake(prompt)
 
         if decision.needs_clarification:
             self._original_prompt = prompt
@@ -165,7 +165,7 @@ class IntakeSession:
             "Incorporate the user's clarification answer to add context and specificity, "
             "but keep the original proper nouns intact."
         )
-        decision = call_gemini_intake(combined)
+        decision = call_gpt4o_mini_intake(combined)
         self.complete = True
         self.session_config = _decision_to_config(decision)
         return {

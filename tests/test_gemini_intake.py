@@ -1,7 +1,7 @@
 """
 tests/test_gemini_intake.py
 
-Tests for Gemini Flash-powered intake. call_gemini_intake() is mocked —
+Tests for intake session logic. call_gpt4o_mini_intake() is mocked —
 no real API calls are made.
 
 Run with:
@@ -57,7 +57,7 @@ FINAL_DECISION = _decision(
 # ---------------------------------------------------------------------------
 
 def test_clear_prompt_completes_in_one_turn():
-    with patch("backend.intake.call_gemini_intake", return_value=CLEAR_DECISION):
+    with patch("backend.intake.call_gpt4o_mini_intake", return_value=CLEAR_DECISION):
         session = IntakeSession()
         result = session.analyze("How do I design a RAG pipeline?")
 
@@ -74,7 +74,7 @@ def test_clear_prompt_completes_in_one_turn():
 # ---------------------------------------------------------------------------
 
 def test_ambiguous_prompt_returns_clarifying_question():
-    with patch("backend.intake.call_gemini_intake", return_value=AMBIGUOUS_DECISION):
+    with patch("backend.intake.call_gpt4o_mini_intake", return_value=AMBIGUOUS_DECISION):
         session = IntakeSession()
         result = session.analyze("I need help with my project")
 
@@ -90,7 +90,7 @@ def test_ambiguous_prompt_returns_clarifying_question():
 # ---------------------------------------------------------------------------
 
 def test_clarification_answer_completes_session():
-    with patch("backend.intake.call_gemini_intake", side_effect=[AMBIGUOUS_DECISION, FINAL_DECISION]):
+    with patch("backend.intake.call_gpt4o_mini_intake", side_effect=[AMBIGUOUS_DECISION, FINAL_DECISION]):
         session = IntakeSession()
         r1 = session.analyze("I need help with my project")
         assert r1["status"] == "clarifying"
@@ -110,7 +110,7 @@ def test_clarification_answer_completes_session():
 @pytest.mark.parametrize("tier", ["quick", "smart", "deep"])
 def test_tier_is_valid_literal(tier):
     decision = _decision(tier=tier)
-    with patch("backend.intake.call_gemini_intake", return_value=decision):
+    with patch("backend.intake.call_gpt4o_mini_intake", return_value=decision):
         session = IntakeSession()
         result = session.analyze("Test prompt")
     assert result["config"]["tier"] == tier
@@ -132,7 +132,7 @@ def test_invalid_tier_raises_validation_error():
 # ---------------------------------------------------------------------------
 
 def test_second_respond_returns_existing_config_without_api_call():
-    with patch("backend.intake.call_gemini_intake", side_effect=[AMBIGUOUS_DECISION, FINAL_DECISION]) as mock_api:
+    with patch("backend.intake.call_gpt4o_mini_intake", side_effect=[AMBIGUOUS_DECISION, FINAL_DECISION]) as mock_api:
         session = IntakeSession()
         session.analyze("Ambiguous prompt")
         session.respond("First answer")
@@ -193,18 +193,18 @@ def test_unknown_session_returns_404():
 
 
 # ---------------------------------------------------------------------------
-# Test 8: Retry logic — 503 handling in call_gemini_intake()
+# Test 8: Retry logic — rate limit / transient error handling in call_gpt4o_mini_intake()
 # ---------------------------------------------------------------------------
 
 def test_503_on_first_attempt_succeeds_on_second():
     """503 on attempt 1, success on attempt 2 → returns IntakeDecision."""
-    from backend.models.google_client import call_gemini_intake
+    from backend.models.openai_client import call_gpt4o_mini_intake
 
     error_503 = Exception("503 Service Unavailable")
-    with patch("backend.models.google_client._call_gemini_intake_once",
+    with patch("backend.models.openai_client._call_gpt4o_mini_intake_once",
                side_effect=[error_503, CLEAR_DECISION]) as mock_call, \
-         patch("backend.models.google_client.time.sleep") as mock_sleep:
-        result = call_gemini_intake("test prompt")
+         patch("backend.models.openai_client.time.sleep") as mock_sleep:
+        result = call_gpt4o_mini_intake("test prompt")
 
     assert result == CLEAR_DECISION
     assert mock_call.call_count == 2
@@ -213,29 +213,29 @@ def test_503_on_first_attempt_succeeds_on_second():
 
 def test_503_all_three_attempts_raises_runtime_error():
     """503 on all 3 attempts → RuntimeError with the exact user-facing message."""
-    from backend.models.google_client import call_gemini_intake
+    from backend.models.openai_client import call_gpt4o_mini_intake
 
     error_503 = Exception("503 Service Unavailable")
-    with patch("backend.models.google_client._call_gemini_intake_once",
+    with patch("backend.models.openai_client._call_gpt4o_mini_intake_once",
                side_effect=[error_503, error_503, error_503]), \
-         patch("backend.models.google_client.time.sleep"):
+         patch("backend.models.openai_client.time.sleep"):
         with pytest.raises(RuntimeError) as exc_info:
-            call_gemini_intake("test prompt")
+            call_gpt4o_mini_intake("test prompt")
 
     assert "unavailable after 3 attempts" in str(exc_info.value)
     assert "please try again in a moment" in str(exc_info.value)
 
 
 def test_non_503_raises_immediately_without_retry():
-    """404 (or any non-503) on the first attempt → raises immediately, no sleep."""
-    from backend.models.google_client import call_gemini_intake
+    """404 (or any non-retriable error) on the first attempt → raises immediately, no sleep."""
+    from backend.models.openai_client import call_gpt4o_mini_intake
 
     error_404 = Exception("404 model not found")
-    with patch("backend.models.google_client._call_gemini_intake_once",
+    with patch("backend.models.openai_client._call_gpt4o_mini_intake_once",
                side_effect=error_404) as mock_call, \
-         patch("backend.models.google_client.time.sleep") as mock_sleep:
+         patch("backend.models.openai_client.time.sleep") as mock_sleep:
         with pytest.raises(Exception, match="404"):
-            call_gemini_intake("test prompt")
+            call_gpt4o_mini_intake("test prompt")
 
     assert mock_call.call_count == 1   # single attempt only
     mock_sleep.assert_not_called()
@@ -243,14 +243,14 @@ def test_non_503_raises_immediately_without_retry():
 
 def test_retry_sleep_called_with_correct_delays():
     """Exponential backoff: sleep(2) after attempt 1, sleep(4) after attempt 2, no sleep after 3."""
-    from backend.models.google_client import call_gemini_intake
+    from backend.models.openai_client import call_gpt4o_mini_intake
 
     error_503 = Exception("unavailable")
-    with patch("backend.models.google_client._call_gemini_intake_once",
+    with patch("backend.models.openai_client._call_gpt4o_mini_intake_once",
                side_effect=[error_503, error_503, error_503]), \
-         patch("backend.models.google_client.time.sleep") as mock_sleep:
+         patch("backend.models.openai_client.time.sleep") as mock_sleep:
         with pytest.raises(RuntimeError):
-            call_gemini_intake("test prompt")
+            call_gpt4o_mini_intake("test prompt")
 
     assert mock_sleep.call_count == 2
     mock_sleep.assert_any_call(2)
@@ -290,7 +290,7 @@ def test_clarifying_question_does_not_substitute_model_names():
     This test asserts the correct pattern: an intent-only question contains
     no model names from the training data that contradict the user's prompt.
     """
-    with patch("backend.intake.call_gemini_intake", return_value=_INTENT_ONLY_QUESTION):
+    with patch("backend.intake.call_gpt4o_mini_intake", return_value=_INTENT_ONLY_QUESTION):
         session = IntakeSession()
         result = session.analyze(_PRICING_PROMPT)
 
@@ -307,7 +307,7 @@ def test_clarifying_question_with_substituted_names_is_detectable():
     the assertions above would catch it. This test confirms the detection logic
     works against a known-bad response.
     """
-    with patch("backend.intake.call_gemini_intake", return_value=_SUBSTITUTED_QUESTION):
+    with patch("backend.intake.call_gpt4o_mini_intake", return_value=_SUBSTITUTED_QUESTION):
         session = IntakeSession()
         result = session.analyze(_PRICING_PROMPT)
 
@@ -351,7 +351,7 @@ def test_turn1_optimized_prompt_preserves_original_model_names():
     After the user answers the clarifying question, the optimized_prompt must
     contain the model names from the original prompt, not substitutions.
     """
-    with patch("backend.intake.call_gemini_intake",
+    with patch("backend.intake.call_gpt4o_mini_intake",
                side_effect=[_INTENT_ONLY_QUESTION, _PRESERVED_FINAL]):
         session = IntakeSession()
         session.analyze(_PRICING_PROMPT)
@@ -372,7 +372,7 @@ def test_turn1_substituted_prompt_is_detectable():
     substituted model names, the assertions above would catch it. This test
     confirms the detection logic works against a known-bad response.
     """
-    with patch("backend.intake.call_gemini_intake",
+    with patch("backend.intake.call_gpt4o_mini_intake",
                side_effect=[_INTENT_ONLY_QUESTION, _SUBSTITUTED_FINAL]):
         session = IntakeSession()
         session.analyze(_PRICING_PROMPT)
