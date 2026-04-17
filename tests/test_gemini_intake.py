@@ -193,7 +193,72 @@ def test_unknown_session_returns_404():
 
 
 # ---------------------------------------------------------------------------
-# Test 8: All 70 existing guardrail tests still pass — import check
+# Test 8: Retry logic — 503 handling in call_gemini_intake()
+# ---------------------------------------------------------------------------
+
+def test_503_on_first_attempt_succeeds_on_second():
+    """503 on attempt 1, success on attempt 2 → returns IntakeDecision."""
+    from backend.models.google_client import call_gemini_intake
+
+    error_503 = Exception("503 Service Unavailable")
+    with patch("backend.models.google_client._call_gemini_intake_once",
+               side_effect=[error_503, CLEAR_DECISION]) as mock_call, \
+         patch("backend.models.google_client.time.sleep") as mock_sleep:
+        result = call_gemini_intake("test prompt")
+
+    assert result == CLEAR_DECISION
+    assert mock_call.call_count == 2
+    mock_sleep.assert_called_once_with(2)  # first delay only
+
+
+def test_503_all_three_attempts_raises_runtime_error():
+    """503 on all 3 attempts → RuntimeError with the exact user-facing message."""
+    from backend.models.google_client import call_gemini_intake
+
+    error_503 = Exception("503 Service Unavailable")
+    with patch("backend.models.google_client._call_gemini_intake_once",
+               side_effect=[error_503, error_503, error_503]), \
+         patch("backend.models.google_client.time.sleep"):
+        with pytest.raises(RuntimeError) as exc_info:
+            call_gemini_intake("test prompt")
+
+    assert "unavailable after 3 attempts" in str(exc_info.value)
+    assert "please try again in a moment" in str(exc_info.value)
+
+
+def test_non_503_raises_immediately_without_retry():
+    """404 (or any non-503) on the first attempt → raises immediately, no sleep."""
+    from backend.models.google_client import call_gemini_intake
+
+    error_404 = Exception("404 model not found")
+    with patch("backend.models.google_client._call_gemini_intake_once",
+               side_effect=error_404) as mock_call, \
+         patch("backend.models.google_client.time.sleep") as mock_sleep:
+        with pytest.raises(Exception, match="404"):
+            call_gemini_intake("test prompt")
+
+    assert mock_call.call_count == 1   # single attempt only
+    mock_sleep.assert_not_called()
+
+
+def test_retry_sleep_called_with_correct_delays():
+    """Exponential backoff: sleep(2) after attempt 1, sleep(4) after attempt 2, no sleep after 3."""
+    from backend.models.google_client import call_gemini_intake
+
+    error_503 = Exception("unavailable")
+    with patch("backend.models.google_client._call_gemini_intake_once",
+               side_effect=[error_503, error_503, error_503]), \
+         patch("backend.models.google_client.time.sleep") as mock_sleep:
+        with pytest.raises(RuntimeError):
+            call_gemini_intake("test prompt")
+
+    assert mock_sleep.call_count == 2
+    mock_sleep.assert_any_call(2)
+    mock_sleep.assert_any_call(4)
+
+
+# ---------------------------------------------------------------------------
+# Test 9: All 70 existing guardrail tests still pass — import check
 # ---------------------------------------------------------------------------
 
 def test_guardrail_module_still_importable():

@@ -28,7 +28,6 @@ import time
 from functools import partial
 
 from google import genai
-from google.api_core.exceptions import ServiceUnavailable
 from google.genai import types
 
 from backend.models.intake_decision import IntakeDecision
@@ -83,8 +82,30 @@ JSON object.
 """
 
 
-_INTAKE_MAX_RETRIES = 3
-_INTAKE_RETRY_BASE_SECONDS = 2
+def _is_503(exc: Exception) -> bool:
+    """Return True if the exception is a Gemini 503 UNAVAILABLE error."""
+    msg = str(exc).lower()
+    return "503" in msg or "unavailable" in msg
+
+
+def _call_gemini_intake_once(prompt: str) -> IntakeDecision:
+    """Single attempt against INTAKE_MODEL — no retry logic."""
+    config = types.GenerateContentConfig(
+        response_mime_type="application/json",
+        response_schema=IntakeDecision,
+        system_instruction=GEMINI_INTAKE_SYSTEM,
+    )
+    response = _get_client().models.generate_content(
+        model=INTAKE_MODEL,
+        contents=[types.Content(role="user", parts=[types.Part(text=prompt)])],
+        config=config,
+    )
+    try:
+        return IntakeDecision.model_validate_json(response.text)
+    except Exception as e:
+        raise ValueError(
+            f"Gemini intake schema validation failed: {e}. Raw response: {response.text!r}"
+        )
 
 
 def call_gemini_intake(prompt: str) -> IntakeDecision:
@@ -94,10 +115,8 @@ def call_gemini_intake(prompt: str) -> IntakeDecision:
     Uses response_schema to enforce typed JSON output — no free-form parsing required.
 
     Retry policy:
-      - 503 UNAVAILABLE only: up to _INTAKE_MAX_RETRIES attempts with exponential
-        backoff starting at _INTAKE_RETRY_BASE_SECONDS (2 s → 4 s → raises).
-      - Other API errors: try _INTAKE_MODEL_FALLBACK once, then propagate.
-      - Schema validation errors (ValueError): re-raise immediately, no retry.
+      - 503 UNAVAILABLE only: 3 attempts with exponential backoff (2 s → 4 s → raises).
+      - All other errors raise immediately — no retry.
 
     Args:
         prompt: The user's raw prompt, or a combined clarification turn string.
@@ -106,51 +125,27 @@ def call_gemini_intake(prompt: str) -> IntakeDecision:
         IntakeDecision with tier, optimized_prompt, and optional clarifying_question.
 
     Raises:
-        ValueError:   if the API response fails schema validation.
-        RuntimeError: if Gemini returns 503 on all _INTAKE_MAX_RETRIES attempts.
-        Exception:    on any other API error after the fallback model also fails.
+        ValueError:   if the API response fails schema validation (no retry).
+        RuntimeError: if Gemini returns 503 on all 3 attempts.
+        Exception:    on any other API error (raised immediately).
     """
-    config = types.GenerateContentConfig(
-        response_mime_type="application/json",
-        response_schema=IntakeDecision,
-        system_instruction=GEMINI_INTAKE_SYSTEM,
-    )
-    contents = [types.Content(role="user", parts=[types.Part(text=prompt)])]
+    last_exc = None
+    delays = [2, 4]  # seconds between attempts 1→2 and 2→3
 
-    def _call_one(model_name: str) -> IntakeDecision:
-        response = _get_client().models.generate_content(
-            model=model_name, contents=contents, config=config,
-        )
+    for attempt in range(3):
         try:
-            return IntakeDecision.model_validate_json(response.text)
-        except Exception as e:
-            raise ValueError(
-                f"Gemini intake schema validation failed ({model_name}): {e}. "
-                f"Raw response: {response.text!r}"
-            )
+            return _call_gemini_intake_once(prompt)
+        except Exception as exc:
+            if _is_503(exc):
+                last_exc = exc
+                if attempt < len(delays):
+                    time.sleep(delays[attempt])
+                continue
+            raise  # non-503 errors raise immediately
 
-    def _call_with_model_fallback() -> IntakeDecision:
-        """Try primary model; on non-503 API error, try fallback. 503 propagates."""
-        try:
-            return _call_one(INTAKE_MODEL)
-        except (ValueError, ServiceUnavailable):
-            raise  # schema errors and 503s are handled by the caller
-        except Exception:
-            if INTAKE_MODEL != _INTAKE_MODEL_FALLBACK:
-                return _call_one(_INTAKE_MODEL_FALLBACK)
-            raise
-
-    for attempt in range(1, _INTAKE_MAX_RETRIES + 1):
-        try:
-            return _call_with_model_fallback()
-        except ServiceUnavailable:
-            if attempt < _INTAKE_MAX_RETRIES:
-                delay = _INTAKE_RETRY_BASE_SECONDS * (2 ** (attempt - 1))
-                time.sleep(delay)
-            else:
-                raise RuntimeError(
-                    "Gemini intake unavailable after 3 retries — try again in a moment."
-                )
+    raise RuntimeError(
+        "Gemini intake unavailable after 3 attempts — please try again in a moment."
+    ) from last_exc
 
 _ADVISOR_PROMPT = (
     "Review this response and produce an improved final version.\n\n"

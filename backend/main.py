@@ -184,6 +184,13 @@ async def intake_start(req: IntakeStartRequest):
     _intake_sessions[session_id] = session
     try:
         result = await asyncio.to_thread(session.analyze, req.prompt)
+    except RuntimeError as e:
+        if "unavailable after 3 attempts" in str(e):
+            raise HTTPException(
+                status_code=503,
+                detail="Intake service temporarily unavailable — please try again in a moment.",
+            )
+        raise
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Gemini intake error: {e}")
     return {"session_id": session_id, **result}
