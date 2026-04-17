@@ -16,6 +16,7 @@ from backend.router import (
     CASCADING_GUARD,
     CONFIDENCE_CONVENTION,
     SYNTHESIS_SKEPTICISM,
+    SYNTHESIS_TRUST_HIERARCHY,
     build_synthesis_prompt,
     get_round1_system_prompt,
 )
@@ -170,9 +171,33 @@ def test_synthesis_skepticism_absent_from_round1(model):
 
 
 # ---------------------------------------------------------------------------
+# SYNTHESIS_TRUST_HIERARCHY — present in synthesis prompt, absent from round-1.
+# ---------------------------------------------------------------------------
+
+_TRUST_HIERARCHY_MARKER = "Source Trust Hierarchy"
+
+
+def test_synthesis_trust_hierarchy_constant_has_marker():
+    assert _TRUST_HIERARCHY_MARKER in SYNTHESIS_TRUST_HIERARCHY
+
+
+def test_synthesis_prompt_contains_trust_hierarchy():
+    assert _TRUST_HIERARCHY_MARKER in _SAMPLE_SYNTHESIS
+
+
+@pytest.mark.parametrize("model", ROUND1_MODELS)
+def test_synthesis_trust_hierarchy_absent_from_round1(model):
+    prompt = get_round1_system_prompt(model)
+    assert _TRUST_HIERARCHY_MARKER not in prompt, (
+        f"{model}: SYNTHESIS_TRUST_HIERARCHY must not appear in round-1 prompts"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Synthesis prompt block ordering:
 # role → ANTI_HALLUCINATION_BLOCK → CASCADING_GUARD →
-# CONFIDENCE_CONVENTION → SYNTHESIS_SKEPTICISM → task instructions
+# CONFIDENCE_CONVENTION → SYNTHESIS_SKEPTICISM → SYNTHESIS_TRUST_HIERARCHY
+# → task instructions
 # ---------------------------------------------------------------------------
 
 def test_synthesis_role_precedes_anti_hallucination():
@@ -199,7 +224,13 @@ def test_synthesis_confidence_convention_precedes_skepticism():
     assert confidence_pos < skepticism_pos, "CONFIDENCE_CONVENTION must precede SYNTHESIS_SKEPTICISM"
 
 
-def test_synthesis_skepticism_precedes_task_instructions():
+def test_synthesis_skepticism_precedes_trust_hierarchy():
     skepticism_pos = _SAMPLE_SYNTHESIS.find(_SYNTHESIS_MARKER)
+    trust_pos = _SAMPLE_SYNTHESIS.find(_TRUST_HIERARCHY_MARKER)
+    assert skepticism_pos < trust_pos, "SYNTHESIS_SKEPTICISM must precede SYNTHESIS_TRUST_HIERARCHY"
+
+
+def test_synthesis_trust_hierarchy_precedes_task_instructions():
+    trust_pos = _SAMPLE_SYNTHESIS.find(_TRUST_HIERARCHY_MARKER)
     task_pos = _SAMPLE_SYNTHESIS.find("Gemini's analysis")
-    assert skepticism_pos < task_pos, "SYNTHESIS_SKEPTICISM must precede task instructions"
+    assert trust_pos < task_pos, "SYNTHESIS_TRUST_HIERARCHY must precede task instructions"

@@ -102,6 +102,26 @@ Apply the Response Accuracy Guidelines and Confidence Qualifiers to your synthes
 output.
 """
 
+SYNTHESIS_TRUST_HIERARCHY = """
+## Source Trust Hierarchy
+
+Apply different skepticism levels to different sources:
+
+1. Perplexity Audit — treat as GROUNDED. Contains live web citations.
+   Do NOT apply CASCADING_GUARD to Perplexity findings.
+   Do NOT fall back to your own training data when Perplexity has
+   provided current facts.
+
+2. Round-1 model responses — apply CASCADING_GUARD. Unverified,
+   potentially stale.
+
+If both round-1 models refused to answer but Perplexity has current data:
+   Use Perplexity findings as the basis for synthesis.
+   State explicitly which models refused and why Perplexity is being
+   used as the primary source.
+   Do not substitute your own training data for Perplexity's live research.
+"""
+
 
 ROUND1_SYSTEM_PROMPTS = {
     # Round 1 order: Gemini → GPT → Claude.
@@ -488,5 +508,6 @@ def build_synthesis_prompt(
         + CASCADING_GUARD
         + CONFIDENCE_CONVENTION
         + SYNTHESIS_SKEPTICISM
+        + SYNTHESIS_TRUST_HIERARCHY
         + task
     )
