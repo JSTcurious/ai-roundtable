@@ -47,14 +47,13 @@ def _load_env():
 
 _load_env()
 
-from anthropic import APIStatusError as AnthropicAPIStatusError
 from fastapi import FastAPI, HTTPException, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from starlette.websockets import WebSocketDisconnect
 
-from backend.intake import IntakeSession, OPENING_SUGGESTED_OPTIONS
+from backend.intake import IntakeSession
 from backend.transcript import Transcript
 from backend.router import (
     get_tier_config,
@@ -96,21 +95,20 @@ _intake_sessions: dict[str, IntakeSession] = {}
 
 # ── Request / Response models ─────────────────────────────────────────────────
 
+class IntakeStartRequest(BaseModel):
+    prompt: str
+
+    @field_validator("prompt")
+    @classmethod
+    def prompt_not_empty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("prompt must not be empty")
+        return v
+
+
 class IntakeRespondRequest(BaseModel):
     session_id: str
-    message: str
-
-
-class IntakeRefineRequest(BaseModel):
-    session_id: str
-    message: Optional[str] = None  # legacy: same as user_feedback or probe_answer
-    current_prompt: Optional[str] = None
-    user_feedback: Optional[str] = None
-    probe_answer: Optional[str] = None
-
-
-class IntakeRefineCancelRequest(BaseModel):
-    session_id: str
+    answer: str
 
 
 class SessionRunRequest(BaseModel):
@@ -165,102 +163,56 @@ async def get_use_case_by_id(use_case_id: str):
 # ── Intake endpoints ──────────────────────────────────────────────────────────
 
 @app.post("/api/intake/start")
-async def intake_start():
+async def intake_start(req: IntakeStartRequest):
     """
-    Start a new intake conversation.
+    Start a new intake session and immediately analyze the user's prompt.
 
-    Creates an IntakeSession, calls start(), and returns the opening message
-    with a session_id the frontend uses for all subsequent /intake/respond calls.
+    Gemini Flash classifies the prompt, assigns a tier, and either:
+    - returns a clarifying question (status: "clarifying"), or
+    - returns a complete session config (status: "complete")
 
     Returns:
-        { "session_id": str, "message": str }
+        {
+            "session_id":          str,
+            "status":              "clarifying" | "complete",
+            "clarifying_question": str | None,
+            "config":              dict | None,
+        }
     """
     session_id = str(uuid.uuid4())
     session = IntakeSession()
-    opening = session.start()
     _intake_sessions[session_id] = session
-    return {
-        "session_id": session_id,
-        "message": opening,
-        "suggested_options": list(OPENING_SUGGESTED_OPTIONS),
-    }
+    try:
+        result = await asyncio.to_thread(session.analyze, req.prompt)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Gemini intake error: {e}")
+    return {"session_id": session_id, **result}
 
 
 @app.post("/api/intake/respond")
 async def intake_respond(req: IntakeRespondRequest):
     """
-    Send a user message to the intake conductor.
+    Send the user's answer to the clarifying question.
 
-    Returns Claude's next question or the completed session config.
+    This endpoint is only called after status: "clarifying". Turn 1 always
+    completes the session — no further questions are asked.
 
     Returns:
         {
             "session_id": str,
-            "status":     "ongoing" | "complete",
-            "message":    str,
-            "config":     dict | None,
-            "suggested_options": list[str] | None,  # 2–4 chips when Claude included intake-ui
+            "status":     "complete",
+            "config":     dict,
         }
     """
     session = _intake_sessions.get(req.session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Intake session not found.")
-
     try:
-        result = session.respond(req.message)
-    except AnthropicAPIStatusError as e:
-        if e.status_code == 529:
-            raise HTTPException(status_code=503, detail="Claude is temporarily overloaded — please wait a moment and try again.")
-        raise HTTPException(status_code=502, detail=f"Anthropic API error: {e.message}")
+        result = await asyncio.to_thread(session.respond, req.answer)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Gemini intake error: {e}")
     return {"session_id": req.session_id, **result}
 
-
-# ── Prompt refinement (post-intake) ───────────────────────────────────────────
-
-@app.post("/api/intake/refine")
-async def intake_refine(req: IntakeRefineRequest):
-    """
-    Refine the optimized prompt after intake completes.
-
-    First ``message`` starts a probe (``status``: ``probing``). The next message
-    completes the rewrite (``status``: ``refined``) and returns the full
-    ``session_config`` with an updated ``optimized_prompt``.
-    """
-    session = _intake_sessions.get(req.session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="Intake session not found.")
-    if not session.complete or not session.session_config:
-        raise HTTPException(status_code=400, detail="Complete intake before refining the prompt.")
-    pa = (req.probe_answer or "").strip() if req.probe_answer else ""
-    fb = (req.user_feedback or "").strip() if req.user_feedback else ""
-    legacy = (req.message or "").strip() if req.message else ""
-    if pa:
-        payload = pa
-    elif fb:
-        payload = fb
-    elif legacy:
-        payload = legacy
-    else:
-        raise HTTPException(
-            status_code=400,
-            detail="Provide probe_answer, user_feedback, or message.",
-        )
-    cp = (req.current_prompt or "").strip() if req.current_prompt else None
-    try:
-        result = await asyncio.to_thread(session.refine, payload, cp)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    return {"session_id": req.session_id, **result}
-
-
-@app.post("/api/intake/refine/cancel")
-async def intake_refine_cancel(req: IntakeRefineCancelRequest):
-    """Drop an in-progress refine so a new cycle can start from a clean state."""
-    session = _intake_sessions.get(req.session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="Intake session not found.")
-    session.clear_refine()
-    return {"session_id": req.session_id, "ok": True}
 
 
 # ── Core session loop ─────────────────────────────────────────────────────────
