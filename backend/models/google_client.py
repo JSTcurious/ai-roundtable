@@ -29,6 +29,8 @@ from functools import partial
 from google import genai
 from google.genai import types
 
+from backend.models.intake_decision import IntakeDecision
+
 _client = None
 
 def _get_client() -> genai.Client:
@@ -42,6 +44,73 @@ MODELS = {
     "smart": "gemini-2.5-flash",   # executor model for smart tier
     "deep":  "gemini-2.5-pro",
 }
+
+# Intake uses a separate model constant so it can be pinned or overridden independently
+# of the round-1 research models. Reuses GOOGLE_API_KEY — no new credentials needed.
+INTAKE_MODEL = os.getenv("GEMINI_INTAKE_MODEL", "gemini-2.5-flash-preview-04-17")
+
+GEMINI_INTAKE_SYSTEM = """
+You are an intake analyst for an AI research roundtable. Your job is to
+analyze a user's prompt and make two decisions:
+
+1. CLARIFICATION: Does the prompt have enough context to produce a
+   high-quality research session?
+
+   - If the user's intent is ambiguous or a critical piece of context is
+     missing, set needs_clarification to true and provide ONE focused
+     clarifying question. Do not ask multiple questions.
+   - If the prompt is clear enough to proceed, set needs_clarification
+     to false and optimize the prompt directly.
+
+2. TIER ASSIGNMENT: What research depth does this prompt require?
+
+   - quick : factual lookups, simple comparisons, gut checks.
+             Single-dimension questions with known answers.
+   - smart : analysis, recommendations, technical evaluations.
+             Requires weighing tradeoffs or synthesizing multiple sources.
+   - deep  : architecture decisions, strategic plans, critical reports.
+             High stakes, significant ambiguity, or complex dependencies.
+
+   Assign tier based on complexity and stakes — not prompt length.
+   A short prompt can require deep research.
+
+Always return valid JSON matching the schema exactly. No prose outside the
+JSON object.
+"""
+
+
+def call_gemini_intake(prompt: str) -> IntakeDecision:
+    """
+    Analyze a user's intake prompt with Gemini Flash and return a structured decision.
+
+    Uses response_schema to enforce typed JSON output — no free-form parsing required.
+
+    Args:
+        prompt: The user's raw prompt, or a combined clarification turn string.
+
+    Returns:
+        IntakeDecision with tier, optimized_prompt, and optional clarifying_question.
+
+    Raises:
+        ValueError: if the API response fails schema validation.
+        Exception:  on API error (propagated from google-genai client).
+    """
+    config = types.GenerateContentConfig(
+        response_mime_type="application/json",
+        response_schema=IntakeDecision,
+        system_instruction=GEMINI_INTAKE_SYSTEM,
+    )
+    response = _get_client().models.generate_content(
+        model=INTAKE_MODEL,
+        contents=[types.Content(role="user", parts=[types.Part(text=prompt)])],
+        config=config,
+    )
+    try:
+        return IntakeDecision.model_validate_json(response.text)
+    except Exception as e:
+        raise ValueError(
+            f"Gemini intake schema validation failed: {e}. Raw response: {response.text!r}"
+        )
 
 _ADVISOR_PROMPT = (
     "Review this response and produce an improved final version.\n\n"
