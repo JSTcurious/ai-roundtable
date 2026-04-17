@@ -15,3 +15,4 @@ These are used for:
 ## Index
 
 - [001 — Claude Opus 4.7 context window (fabrication caught at synthesis)](./001-claude-opus-4-7-fabrication.md)
+- [002 — Q1 2026 AI model releases (synthesis failure — CASCADING_GUARD misapplied to Perplexity)](./002-q1-2026-ai-releases.md)
