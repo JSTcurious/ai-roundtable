@@ -331,3 +331,79 @@ def test_synthesis_role_says_four_perspectives():
     """Synthesis role description references four expert perspectives."""
     from backend.router import _SYNTHESIS_ROLE
     assert "four" in _SYNTHESIS_ROLE
+
+
+# ---------------------------------------------------------------------------
+# SYNTHESIS_TRUST_HIERARCHY — updated Perplexity-wins rule.
+# ---------------------------------------------------------------------------
+
+def test_synthesis_trust_hierarchy_has_perplexity_wins_rule():
+    """SYNTHESIS_TRUST_HIERARCHY must contain the explicit PERPLEXITY WINS instruction."""
+    assert "PERPLEXITY WINS" in SYNTHESIS_TRUST_HIERARCHY
+
+
+def test_synthesis_trust_hierarchy_has_all_three_tier_labels():
+    """SYNTHESIS_TRUST_HIERARCHY must define all three tiers explicitly."""
+    assert "Tier 1" in SYNTHESIS_TRUST_HIERARCHY
+    assert "Tier 2" in SYNTHESIS_TRUST_HIERARCHY
+    assert "Tier 3" in SYNTHESIS_TRUST_HIERARCHY
+
+
+def test_synthesis_trust_hierarchy_has_decision_rule():
+    """SYNTHESIS_TRUST_HIERARCHY must contain the Decision Rule section."""
+    assert "Decision Rule" in SYNTHESIS_TRUST_HIERARCHY
+
+
+def test_synthesis_trust_hierarchy_names_verifiable_facts():
+    """SYNTHESIS_TRUST_HIERARCHY must enumerate what counts as a verifiable fact."""
+    assert "prices" in SYNTHESIS_TRUST_HIERARCHY
+    assert "deprecation status" in SYNTHESIS_TRUST_HIERARCHY
+
+
+def test_synthesis_trust_hierarchy_has_explicit_contradiction_instruction():
+    """SYNTHESIS_TRUST_HIERARCHY must instruct synthesis to state contradictions explicitly."""
+    assert "state the" in SYNTHESIS_TRUST_HIERARCHY
+    assert "contradiction explicitly" in SYNTHESIS_TRUST_HIERARCHY
+
+
+# ---------------------------------------------------------------------------
+# _SYNTHESIS_TASK_TEMPLATE — contradiction resolution step present.
+# ---------------------------------------------------------------------------
+
+def test_synthesis_task_template_has_contradiction_resolution_section():
+    """_SYNTHESIS_TASK_TEMPLATE must contain the Contradiction resolution section."""
+    from backend.router import _SYNTHESIS_TASK_TEMPLATE
+    assert "Contradiction resolution" in _SYNTHESIS_TASK_TEMPLATE
+
+
+def test_synthesis_task_template_contradiction_mandates_perplexity_figure():
+    """The contradiction resolution step must direct synthesis to use Perplexity's figure."""
+    from backend.router import _SYNTHESIS_TASK_TEMPLATE
+    assert "Use Perplexity's figure" in _SYNTHESIS_TASK_TEMPLATE
+
+
+def test_synthesis_task_template_contradiction_forbids_blending():
+    """The contradiction resolution step must forbid silently blending conflicting figures."""
+    from backend.router import _SYNTHESIS_TASK_TEMPLATE
+    assert "silently average or blend" in _SYNTHESIS_TASK_TEMPLATE
+
+
+# ---------------------------------------------------------------------------
+# Composed synthesis prompt — trust hierarchy and contradiction resolution present.
+# ---------------------------------------------------------------------------
+
+def test_composed_synthesis_contains_perplexity_wins():
+    """The full composed synthesis prompt must include the PERPLEXITY WINS rule."""
+    assert "PERPLEXITY WINS" in _SAMPLE_SYNTHESIS
+
+
+def test_composed_synthesis_contains_contradiction_resolution():
+    """The full composed synthesis prompt must include the Contradiction resolution section."""
+    assert "Contradiction resolution" in _SAMPLE_SYNTHESIS
+
+
+def test_composed_synthesis_contains_all_three_tier_labels():
+    """The full composed synthesis prompt must include all three tier labels."""
+    assert "Tier 1" in _SAMPLE_SYNTHESIS
+    assert "Tier 2" in _SAMPLE_SYNTHESIS
+    assert "Tier 3" in _SAMPLE_SYNTHESIS
