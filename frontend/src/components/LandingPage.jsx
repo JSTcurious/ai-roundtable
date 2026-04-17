@@ -52,10 +52,9 @@ function LandingPage({ onSubmitDescription }) {
             style={{ background: "#1a1a1a", padding: "16px" }}
           >
             <p style={{ color: "#cccccc", fontSize: "0.85rem", lineHeight: "1.8" }}>Five models. One perspective that&rsquo;s yours.</p>
-            <p style={{ color: "#888888", fontSize: "0.85rem", lineHeight: "1.8", marginTop: "0.5rem" }}>Gemini and GPT research independently — no groupthink.</p>
-            <p style={{ color: "#888888", fontSize: "0.85rem", lineHeight: "1.8" }}>Grok brings lateral thinking and real-time signals.</p>
+            <p style={{ color: "#888888", fontSize: "0.85rem", lineHeight: "1.8", marginTop: "0.5rem" }}>Gemini, GPT, Grok, and Claude research independently — no groupthink.</p>
             <p style={{ color: "#888888", fontSize: "0.85rem", lineHeight: "1.8" }}>Perplexity fact-checks everything against live web data.</p>
-            <p style={{ color: "#888888", fontSize: "0.85rem", lineHeight: "1.8" }}>Claude consults you before synthesizing — you keep it or overrule it.</p>
+            <p style={{ color: "#888888", fontSize: "0.85rem", lineHeight: "1.8" }}>Claude synthesizes all four — you see exactly how.</p>
             <p style={{ color: "#aaaaaa", fontSize: "0.85rem", lineHeight: "1.8", marginTop: "0.5rem" }}>The final answer is yours.</p>
           </div>
         </header>
