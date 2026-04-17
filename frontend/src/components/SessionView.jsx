@@ -48,7 +48,7 @@ function timestamp() {
   return new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
-function buildTranscriptDict(sessionConfig, prompt, geminiR1, gptR1, grokR1, perplexityContent, synthesisText) {
+function buildTranscriptDict(sessionConfig, prompt, geminiR1, gptR1, grokR1, claudeR1, perplexityContent, synthesisText) {
   const messages = [
     { role: "user", sender: "You", content: prompt, timestamp: timestamp() },
     {
@@ -69,6 +69,13 @@ function buildTranscriptDict(sessionConfig, prompt, geminiR1, gptR1, grokR1, per
       role: "assistant",
       sender: "Grok",
       content: grokR1,
+      round: "round1",
+      timestamp: timestamp(),
+    },
+    {
+      role: "assistant",
+      sender: "Claude",
+      content: claudeR1,
       round: "round1",
       timestamp: timestamp(),
     },
@@ -209,49 +216,6 @@ function ThinkingDotsBubble({ label, color, uppercase = true, subtitle }) {
 }
 
 /**
- * Static summary of every chair decision — shown once synthesis begins, persists.
- * @param {{ index: number, observation_text: string, decision: string, overrule_text: string }[]} props.decisions
- */
-function ChairDecisionsBlock({ decisions }) {
-  if (!decisions.length) return null;
-  return (
-    <section aria-label="Chair decisions">
-      <div
-        className="rounded-lg px-4 py-4"
-        style={{ background: "#1a1a1a", borderTop: "1px solid #F5A623", borderLeft: "3px solid #F5A623" }}
-      >
-        <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide" style={{ color: "#F5A623" }}>
-          Chair Decisions
-        </h2>
-        <div className="space-y-2">
-          {decisions.map((d) => (
-            <div key={d.index} className="text-sm leading-relaxed">
-              <span className="text-[#888888]">{d.index}.</span>{" "}
-              <span className="text-[#e8e8e8]">
-                {d.observation_text.length > 120
-                  ? d.observation_text.slice(0, 120) + "…"
-                  : d.observation_text}
-              </span>{" "}
-              <span style={{ color: "#F5A623" }}>→</span>{" "}
-              {d.decision === "keep" ? (
-                <span style={{ color: "#4CAF50" }}>KEPT</span>
-              ) : (
-                <>
-                  <span style={{ color: "#F5A623" }}>OVERRULED</span>
-                  {d.overrule_text && (
-                    <span style={{ color: "#888888" }}> &ldquo;{d.overrule_text}&rdquo;</span>
-                  )}
-                </>
-              )}
-            </div>
-          ))}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-/**
  * @param {Object} props
  * @param {Object} props.sessionConfig
  * @param {Object | null} [props.resumeTranscript] — saved `{ messages, intake_summary? }`; skips WebSocket and shows static session + export
@@ -271,9 +235,11 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
   const [geminiR1, setGeminiR1] = useState("");
   const [gptR1, setGptR1] = useState("");
   const [grokR1, setGrokR1] = useState("");
+  const [claudeR1, setClaudeR1] = useState("");
   const [geminiR1Complete, setGeminiR1Complete] = useState(false);
   const [gptR1Complete, setGptR1Complete] = useState(false);
   const [grokR1Complete, setGrokR1Complete] = useState(false);
+  const [claudeR1Complete, setClaudeR1Complete] = useState(false);
   /** Smart-tier advisor pass — shown under model bubbles until advisor_complete */
   const [geminiAdvisorReviewing, setGeminiAdvisorReviewing] = useState(false);
   const [gptAdvisorReviewing, setGptAdvisorReviewing] = useState(false);
@@ -293,17 +259,11 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
 
   const [leaveIntent, setLeaveIntent] = useState(null);
 
-  // ── Chair dialogue state ───────────────────────────────────────────────────
-  /** {text: string, index: number, total: number} | null */
-  const [currentObservation, setCurrentObservation] = useState(null);
-  const [overruleMode, setOverruleMode] = useState(false);
-  const [overruleInput, setOverruleInput] = useState("");
-  /** [{index, observation_text, decision, overrule_text}] — persists after synthesis */
-  const [chairDecisions, setChairDecisions] = useState([]);
-  /** Live WebSocket ref so chair decision can be sent from event handlers. */
-  const wsRef = useRef(null);
+  // ── Synthesis annotations — read-only, shown collapsed after synthesis ────
+  const [annotations, setAnnotations] = useState([]);
+  const [annotationsOpen, setAnnotationsOpen] = useState(false);
 
-  const r1CountsRef = useRef({ Gemini: 0, GPT: 0, Grok: 0 });
+  const r1CountsRef = useRef({ Gemini: 0, GPT: 0, Grok: 0, Claude: 0 });
 
   const phaseRef = useRef(/** @type {StreamPhase} */ ("idle"));
 
@@ -333,6 +293,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
       geminiR1,
       gptR1,
       grokR1,
+      claudeR1,
       perplexityContent,
       synthesisText
     );
@@ -343,6 +304,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     geminiR1,
     gptR1,
     grokR1,
+    claudeR1,
     perplexityContent,
     synthesisText,
   ]);
@@ -367,6 +329,11 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
         setGrokR1((prev) => prev + token);
         return;
       }
+      if (sender === "Claude") {
+        r1CountsRef.current.Claude += token.length;
+        setClaudeR1((prev) => prev + token);
+        return;
+      }
       return;
     }
     if (phase === "synthesis" && sender === "Claude") {
@@ -380,6 +347,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     if (sender === "Gemini") { setGeminiR1Complete(true); return; }
     if (sender === "GPT")    { setGptR1Complete(true);    return; }
     if (sender === "Grok")   { setGrokR1Complete(true);   return; }
+    if (sender === "Claude") { setClaudeR1Complete(true); return; }
   }, []);
 
   useEffect(() => {
@@ -388,6 +356,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     let ge = "";
     let gp = "";
     let grk = "";
+    let cla = "";
     let audit = "";
     let syn = "";
     for (const m of msgs) {
@@ -398,6 +367,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
         if (s === "Gemini") ge  = m.content ?? "";
         if (s === "GPT")    gp  = m.content ?? "";
         if (s === "Grok")   grk = m.content ?? "";
+        if (s === "Claude") cla = m.content ?? "";
       }
       if ((r === "audit" || r === "round1") && s === "Perplexity") {
         audit = m.content ?? audit;
@@ -410,9 +380,11 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     setGeminiR1(ge);
     setGptR1(gp);
     setGrokR1(grk);
+    setClaudeR1(cla);
     setGeminiR1Complete(true);
     setGptR1Complete(true);
     setGrokR1Complete(true);
+    setClaudeR1Complete(true);
     setGeminiAdvisorReviewing(false);
     setGptAdvisorReviewing(false);
     setGrokAdvisorReviewing(false);
@@ -425,7 +397,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     setSynthesisFinal(!!String(syn).trim());
     setSessionComplete(true);
     phaseRef.current = "idle";
-    r1CountsRef.current = { Gemini: ge.length, GPT: gp.length, Grok: grk.length };
+    r1CountsRef.current = { Gemini: ge.length, GPT: gp.length, Grok: grk.length, Claude: cla.length };
   }, [resumeTranscript, sessionConfig]);
 
   useEffect(() => {
@@ -443,16 +415,18 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
 
     phaseRef.current = "idle";
     setStreamPhaseMarker((x) => x + 1);
-    r1CountsRef.current = { Gemini: 0, GPT: 0, Grok: 0 };
+    r1CountsRef.current = { Gemini: 0, GPT: 0, Grok: 0, Claude: 0 };
     setConfigError(null);
     setTransportError(null);
     setStreamError(null);
     setGeminiR1("");
     setGptR1("");
     setGrokR1("");
+    setClaudeR1("");
     setGeminiR1Complete(false);
     setGptR1Complete(false);
     setGrokR1Complete(false);
+    setClaudeR1Complete(false);
     setGeminiAdvisorReviewing(false);
     setGptAdvisorReviewing(false);
     setGrokAdvisorReviewing(false);
@@ -464,11 +438,11 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     setSynthesisStreaming(false);
     setSynthesisFinal(false);
     setSessionComplete(false);
-    setChairDecisions([]);
+    setAnnotations([]);
+    setAnnotationsOpen(false);
 
     const url = wsUrlFromApiBase();
     const ws = new WebSocket(url);
-    wsRef.current = ws;
 
     let pingIntervalId = 0;
 
@@ -530,18 +504,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
           setPerplexityContent(data.content ?? "");
           setPerplexityPhase("content");
           break;
-        case "synthesis_observation":
-          setCurrentObservation({
-            text: data.observation_text,
-            index: data.observation_index,
-            total: data.total_observations,
-          });
-          break;
         case "synthesis_thinking":
-          // Observation dialogue is done — clear any lingering observation state.
-          setCurrentObservation(null);
-          setOverruleMode(false);
-          setOverruleInput("");
           setSynthesisThinking(true);
           phaseRef.current = "synthesis";
           setStreamPhaseMarker((n) => n + 1);
@@ -554,6 +517,9 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
           phaseRef.current = "idle";
           setStreamPhaseMarker((n) => n + 1);
           onSynthesisCompleteRef.current?.(data.content ?? "");
+          break;
+        case "synthesis_annotations":
+          setAnnotations(data.annotations || []);
           break;
         case "session_complete":
           completedNormallyRef.current = true;
@@ -604,7 +570,6 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
 
     return () => {
       cancelled = true;
-      wsRef.current = null;
       window.clearTimeout(connectTimeoutId);
       if (pingIntervalId) window.clearInterval(pingIntervalId);
       ws.onmessage = null;
@@ -614,28 +579,6 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
       }
     };
   }, [sessionConfig, displayPrompt, resumeTranscript, appendToken, handleModelComplete]);
-
-  const sendChairDecision = useCallback((decision, overruleText = "") => {
-    const ws = wsRef.current;
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: "chair_decision", decision, overrule_text: overruleText }));
-    }
-    setChairDecisions((prev) => {
-      if (!currentObservation) return prev;
-      return [
-        ...prev,
-        {
-          index: currentObservation.index,
-          observation_text: currentObservation.text,
-          decision,
-          overrule_text: overruleText,
-        },
-      ];
-    });
-    setCurrentObservation(null);
-    setOverruleMode(false);
-    setOverruleInput("");
-  }, [currentObservation]);
 
   const sessionSettled = synthesisFinal;
 
@@ -757,10 +700,13 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     transcriptLive && !configError && promptOk && sessionStarted && !gptR1Complete && !String(gptR1).trim();
   const showGrokThinking =
     transcriptLive && !configError && promptOk && sessionStarted && !grokR1Complete && !String(grokR1).trim();
+  const showClaudeR1Thinking =
+    transcriptLive && !configError && promptOk && sessionStarted && !claudeR1Complete && !String(claudeR1).trim();
 
-  const geminiR1Streaming = sessionStarted && !geminiR1Complete && Boolean(String(geminiR1).length);
-  const gptR1Streaming    = sessionStarted && !gptR1Complete    && Boolean(String(gptR1).length);
-  const grokR1Streaming   = sessionStarted && !grokR1Complete   && Boolean(String(grokR1).length);
+  const geminiR1Streaming  = sessionStarted && !geminiR1Complete  && Boolean(String(geminiR1).length);
+  const gptR1Streaming     = sessionStarted && !gptR1Complete     && Boolean(String(gptR1).length);
+  const grokR1Streaming    = sessionStarted && !grokR1Complete    && Boolean(String(grokR1).length);
+  const claudeR1Streaming  = sessionStarted && !claudeR1Complete  && Boolean(String(claudeR1).length);
 
   /** Multi-column grid — only when seat has thinking, text, or finished bubble (skip notices don't count). */
   const geminiRoundActive =
@@ -778,6 +724,11 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     grokR1Streaming ||
     (Boolean(String(grokR1 || "").trim()) && !isSkipNotice(grokR1)) ||
     (grokR1Complete && !isSkipNotice(grokR1));
+  const claudeR1RoundActive =
+    showClaudeR1Thinking ||
+    claudeR1Streaming ||
+    (Boolean(String(claudeR1 || "").trim()) && !isSkipNotice(claudeR1)) ||
+    (claudeR1Complete && !isSkipNotice(claudeR1));
 
   const round1GridClass = "flex flex-col gap-4";
 
@@ -965,6 +916,26 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
                     )}
                   </div>
                 )}
+                {claudeR1RoundActive && (
+                  <div className="min-w-0 space-y-1">
+                    {showClaudeR1Thinking ? (
+                      <ThinkingDotsBubble label="🟠 CLAUDE" color={MODEL_HEX.Claude} />
+                    ) : claudeR1Complete && isSkipNotice(claudeR1) ? (
+                      <p className="text-xs text-[#888888]" role="status">
+                        Claude is unavailable right now — skipped this round.
+                      </p>
+                    ) : (
+                      <ModelBubble
+                        sender="Claude"
+                        titleOverride="🟠 CLAUDE"
+                        content={bubbleBody(claudeR1, claudeR1Complete)}
+                        isStreaming={claudeR1Streaming}
+                        round="round1"
+                        complete={claudeR1Complete}
+                      />
+                    )}
+                  </div>
+                )}
               </div>
 
               {perplexityPhase !== "off" && (
@@ -1003,74 +974,6 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
           )}
         </section>
 
-        {currentObservation && (
-          <section aria-label="Chair review" className="space-y-3">
-            <p className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-              Observation {currentObservation.index} of {currentObservation.total}
-            </p>
-            <div
-              className="flex w-full min-w-0 flex-col rounded-lg border border-border bg-[#161616] p-4"
-              style={{ borderLeft: "3px solid #E8712A" }}
-            >
-              <div className="mb-2 text-xs font-semibold uppercase tracking-wide" style={{ color: "#E8712A" }}>
-                🟠 Claude
-              </div>
-              <p className="text-[0.9375rem] leading-relaxed text-text-primary">
-                {currentObservation.text}
-              </p>
-            </div>
-            {!overruleMode ? (
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => sendChairDecision("keep")}
-                  className="rounded-lg bg-[#e8e8e8] px-5 py-2.5 text-sm font-bold text-[#0d0d0d] transition-opacity hover:opacity-90 focus:outline-none"
-                >
-                  Keep it
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setOverruleMode(true)}
-                  className="rounded-lg border border-[#6B6B6B] bg-transparent px-4 py-2.5 text-sm font-medium text-text-primary transition-colors hover:border-[#888888] focus:outline-none"
-                >
-                  Overrule
-                </button>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                <textarea
-                  rows={2}
-                  value={overruleInput}
-                  onChange={(e) => setOverruleInput(e.target.value)}
-                  placeholder="What should Claude do instead?"
-                  className="w-full resize-y rounded-lg border border-border bg-surface px-3 py-2 text-sm text-text-primary placeholder:text-text-secondary focus:border-border-focus focus:outline-none"
-                />
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    disabled={!overruleInput.trim()}
-                    onClick={() => sendChairDecision("overrule", overruleInput)}
-                    className="rounded-lg bg-[#e8e8e8] px-5 py-2.5 text-sm font-bold text-[#0d0d0d] transition-opacity hover:opacity-90 focus:outline-none disabled:opacity-40"
-                  >
-                    Submit overrule
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => { setOverruleMode(false); setOverruleInput(""); }}
-                    className="rounded-lg border border-border px-4 py-2.5 text-sm text-text-secondary transition-colors hover:border-border-focus focus:outline-none"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            )}
-          </section>
-        )}
-
-        {synthesisPhaseEntered && chairDecisions.length > 0 && (
-          <ChairDecisionsBlock decisions={chairDecisions} />
-        )}
-
         {(synthesisThinking ||
           synthesisStreaming ||
           synthesisFinal ||
@@ -1089,6 +992,29 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
                 isStreaming={synthesisStreaming && !synthesisFinal}
                 complete={synthesisFinal}
               />
+            )}
+            {sessionComplete && annotations.length > 0 && (
+              <div className="rounded-lg border border-border bg-[#161616]" style={{ borderLeft: "3px solid #2a2a2a" }}>
+                <button
+                  type="button"
+                  onClick={() => setAnnotationsOpen((o) => !o)}
+                  className="flex w-full items-center gap-2 px-4 py-3 text-left text-xs text-text-secondary transition-colors hover:text-text-primary focus:outline-none"
+                  aria-expanded={annotationsOpen}
+                >
+                  <span aria-hidden style={{ display: "inline-block", transform: annotationsOpen ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.15s" }}>▾</span>
+                  How Claude synthesized this
+                </button>
+                {annotationsOpen && (
+                  <ul className="space-y-1.5 px-4 pb-4 pt-1">
+                    {annotations.map((a, i) => (
+                      <li key={i} className="flex gap-2 text-xs leading-relaxed text-text-secondary">
+                        <span className="shrink-0 text-[#444444]">•</span>
+                        <span>{a}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
             )}
           </section>
         )}
