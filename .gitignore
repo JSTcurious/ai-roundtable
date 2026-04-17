@@ -9,3 +9,5 @@ frontend/.env.local
 docs/*.png
 .claude/worktrees/
 experiments/synthesizer_eval/results/
+experiments/intake_eval/results/
+experiments/cost-report-*.md
