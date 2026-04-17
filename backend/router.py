@@ -105,21 +105,44 @@ output.
 SYNTHESIS_TRUST_HIERARCHY = """
 ## Source Trust Hierarchy
 
-Apply different skepticism levels to different sources:
+Apply different skepticism levels to different sources, in this strict order:
 
-1. Perplexity Audit — treat as GROUNDED. Contains live web citations.
-   Do NOT apply CASCADING_GUARD to Perplexity findings.
-   Do NOT fall back to your own training data when Perplexity has
-   provided current facts.
+### Tier 1 — Perplexity Audit (GROUNDED, highest trust)
+Perplexity retrieved this data via live web search during this session.
+It contains current, cited facts.
 
-2. Round-1 model responses — apply CASCADING_GUARD. Unverified,
-   potentially stale.
+Rules:
+- Do NOT apply CASCADING_GUARD to Perplexity findings
+- When Perplexity contradicts a round-1 model on a verifiable fact,
+  PERPLEXITY WINS. Always.
+- Verifiable facts include: prices, dates, version numbers, model names,
+  deprecation status, release dates, availability, API specifications
+- When using Perplexity data that contradicts a round-1 model, state the
+  contradiction explicitly:
+  "Perplexity's live research shows X — this contradicts [Model]'s claim
+  of Y, which appears to be outdated."
+- If Perplexity states a model is deprecated, retired, or superseded:
+  do NOT present that model's data as current. Present the successor.
 
-If both round-1 models refused to answer but Perplexity has current data:
-   Use Perplexity findings as the basis for synthesis.
-   State explicitly which models refused and why Perplexity is being
-   used as the primary source.
-   Do not substitute your own training data for Perplexity's live research.
+### Tier 2 — Round-1 model responses (UNVERIFIED, apply CASCADING_GUARD)
+Round-1 models have training data cutoffs. Their facts may be stale.
+Apply skepticism. Attribute claims to their source.
+Round-1 model confidence in prose does NOT make a claim more reliable.
+A confident wrong answer is still wrong.
+
+### Tier 3 — Your own training data (LOWEST priority for current facts)
+Use only when Perplexity has no data on a specific point AND no round-1
+model addressed it. Never use your training data to override Perplexity.
+
+## Decision Rule
+
+When sources conflict on a verifiable fact:
+  Perplexity > Round-1 models > Your training data
+
+When sources conflict on analysis or opinion:
+  Use judgment — multiple perspectives are valid.
+
+The decision rule applies to facts only, not to analytical judgments.
 """
 
 
@@ -184,20 +207,25 @@ or training data — it is current factual data with citations.
 ## Your Task
 Synthesize the above into a response to: "{optimized_prompt}"
 
-Lead with the VERIFIED LIVE RESEARCH data. When round-1 models refused
-or lacked current data, state that explicitly and use the live research
-as your primary source. Do not substitute your training data for
-verified live research.
+### Contradiction resolution (mandatory):
+Before writing your synthesis, scan for contradictions between Perplexity
+and round-1 models on verifiable facts. For each contradiction found:
+1. Use Perplexity's figure — not the round-1 model's figure
+2. State the contradiction in one sentence
+3. Do not silently average or blend conflicting figures
 
-Additional rules:
-- Add your own expert perspective — don't just summarize what the round-1 models said
+### Content rules:
+- Lead with the VERIFIED LIVE RESEARCH data when it addresses the question
+- When round-1 models refused or provided stale data, say so explicitly
+  and use Perplexity as the primary source
+- Do not substitute your training data for verified live research
+- Add your own expert perspective — don't just summarize round-1 responses
 - Take the strongest insights from each and weave them into a coherent whole
-- Where models disagreed, note it in ONE sentence and give your recommendation
+- Where models disagreed on analysis (not facts), note it briefly and give
+  your recommendation
 - End with 3 concrete next steps the user can take starting this week
-- Write as THE expert giving one definitive answer, not as a moderator summarizing others
-- Match output format: {output_type}
-- Do NOT use comparison tables
-- Do NOT list what each model said separately
+
+Output type expected: {output_type}
 """
 
 
