@@ -16,3 +16,6 @@ These are used for:
 
 - [001 — Claude Opus 4.7 context window (fabrication caught at synthesis)](./001-claude-opus-4-7-fabrication.md)
 - [002 — Q1 2026 AI model releases (synthesis failure — CASCADING_GUARD misapplied to Perplexity)](./002-q1-2026-ai-releases.md)
+- [009 — DPO vs PPO comparative analysis (intake happy path — no clarification, tier=smart)](./009-dpo-ppo-comparative-analysis.md)
+- [010 — AI engineering project plan (clarifying turn — ambiguous prompt resolved in one exchange)](./010-ai-engineering-project-plan.md)
+- [011 — ISO-NE installed capacity (tier=quick, SYNTHESIS_TRUST_HIERARCHY regression pass)](./011-isone-installed-capacity.md)
