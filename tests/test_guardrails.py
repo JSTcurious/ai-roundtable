@@ -15,6 +15,8 @@ from backend.router import (
     ANTI_HALLUCINATION_BLOCK,
     CASCADING_GUARD,
     CONFIDENCE_CONVENTION,
+    SYNTHESIS_SKEPTICISM,
+    build_synthesis_prompt,
     get_round1_system_prompt,
 )
 
@@ -119,3 +121,72 @@ def test_confidence_convention_after_cascading_guard(model):
 def test_unknown_model_raises():
     with pytest.raises(KeyError):
         get_round1_system_prompt("llama")
+
+
+# ---------------------------------------------------------------------------
+# SYNTHESIS_SKEPTICISM — present in synthesis prompt, absent from round-1.
+# ---------------------------------------------------------------------------
+
+_SYNTHESIS_MARKER = "Synthesizing Other Models' Responses"
+
+# Helper — a synthesis prompt with dummy inputs for structure testing.
+_SAMPLE_SYNTHESIS = build_synthesis_prompt(
+    output_type="report",
+    gemini="gemini response",
+    gpt="gpt response",
+    grok="grok response",
+    perplexity="perplexity audit",
+    optimized_prompt="user prompt",
+)
+
+
+def test_synthesis_skepticism_constant_has_marker():
+    assert _SYNTHESIS_MARKER in SYNTHESIS_SKEPTICISM
+
+
+def test_synthesis_prompt_contains_skepticism():
+    assert _SYNTHESIS_MARKER in _SAMPLE_SYNTHESIS
+
+
+@pytest.mark.parametrize("model", ROUND1_MODELS)
+def test_synthesis_skepticism_absent_from_round1(model):
+    prompt = get_round1_system_prompt(model)
+    assert _SYNTHESIS_MARKER not in prompt, (
+        f"{model}: SYNTHESIS_SKEPTICISM must not appear in round-1 prompts"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Synthesis prompt block ordering:
+# role → ANTI_HALLUCINATION_BLOCK → CASCADING_GUARD →
+# CONFIDENCE_CONVENTION → SYNTHESIS_SKEPTICISM → task instructions
+# ---------------------------------------------------------------------------
+
+def test_synthesis_role_precedes_anti_hallucination():
+    role_pos = _SAMPLE_SYNTHESIS.find("You are the expert chair")
+    guard_pos = _SAMPLE_SYNTHESIS.find("Response Accuracy Guidelines")
+    assert 0 <= role_pos < guard_pos, "role must precede ANTI_HALLUCINATION_BLOCK"
+
+
+def test_synthesis_anti_hallucination_precedes_cascading_guard():
+    anti_pos = _SAMPLE_SYNTHESIS.find("Response Accuracy Guidelines")
+    cascade_pos = _SAMPLE_SYNTHESIS.find("independently verify")
+    assert anti_pos < cascade_pos, "ANTI_HALLUCINATION_BLOCK must precede CASCADING_GUARD"
+
+
+def test_synthesis_cascading_guard_precedes_confidence_convention():
+    cascade_pos = _SAMPLE_SYNTHESIS.find("independently verify")
+    confidence_pos = _SAMPLE_SYNTHESIS.find("Confidence Qualifiers")
+    assert cascade_pos < confidence_pos, "CASCADING_GUARD must precede CONFIDENCE_CONVENTION"
+
+
+def test_synthesis_confidence_convention_precedes_skepticism():
+    confidence_pos = _SAMPLE_SYNTHESIS.find("Confidence Qualifiers")
+    skepticism_pos = _SAMPLE_SYNTHESIS.find(_SYNTHESIS_MARKER)
+    assert confidence_pos < skepticism_pos, "CONFIDENCE_CONVENTION must precede SYNTHESIS_SKEPTICISM"
+
+
+def test_synthesis_skepticism_precedes_task_instructions():
+    skepticism_pos = _SAMPLE_SYNTHESIS.find(_SYNTHESIS_MARKER)
+    task_pos = _SAMPLE_SYNTHESIS.find("Gemini's analysis")
+    assert skepticism_pos < task_pos, "SYNTHESIS_SKEPTICISM must precede task instructions"
