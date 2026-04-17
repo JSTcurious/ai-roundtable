@@ -17,7 +17,9 @@ These are used for:
 This directory records real session outputs from ai-roundtable as of April 2026.
 Sessions 001-011 cover the first two weeks of production testing, spanning the
 Gemini Flash intake rewrite (transcripts 009-011) and earlier direct-question sessions
-that established the baseline for guardrail behavior.
+that established the baseline for guardrail behavior. Session 012 is the first
+validation transcript for the four-model round-1 architecture (Claude added as a
+research seat) and the removal of the observation gate.
 
 Recurring patterns documented across the suite:
 - **Tag adoption**: 0% in sessions 001-003, first adoption in session 005 (offshore wind RCA),
@@ -31,6 +33,9 @@ Recurring patterns documented across the suite:
 - **Intake rewrite validation**: sessions 009-011 document the first real-world tests of the
   Gemini Flash intake, confirming correct clarification behavior, tier selection, and prompt
   optimization
+- **Four-model round-1 validation**: session 012 is the first test of the four-model round-1
+  architecture; Claude was the sole substantive contributor (Gemini 503, GPT deferred, Grok
+  absent) — first use of all four confidence tags in a single round-1 response
 
 ## Index
 
@@ -45,3 +50,4 @@ Recurring patterns documented across the suite:
 - [009 — DPO vs PPO comparative analysis (intake happy path — no clarification, tier=smart)](./009-dpo-ppo-comparative-analysis.md)
 - [010 — AI engineering project plan (clarifying turn — ambiguous prompt resolved in one exchange)](./010-ai-engineering-project-plan.md)
 - [011 — ISO-NE installed capacity (tier=quick, SYNTHESIS_TRUST_HIERARCHY regression pass)](./011-isone-installed-capacity.md)
+- [012 — ISO-NE offshore wind four-model round-1 validation (Claude sole contributor — all four tags used, observation gate removed)](./012-isone-offshore-wind-four-model-round1.md)
