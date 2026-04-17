@@ -54,6 +54,22 @@ the shared transcript. Attribute it explicitly (e.g., "According to Gemini...") 
 and flag your own confidence level separately from theirs.
 """
 
+CONFIDENCE_CONVENTION = """
+## Confidence Qualifiers
+
+When making factual claims, tag them using exactly these markers:
+
+- [VERIFIED]  — high confidence, well-established fact
+- [LIKELY]    — you believe this is true but have not verified recently
+- [UNCERTAIN] — you are speculating or extrapolating from partial knowledge
+- [DEFER]     — another model or external source is better positioned to answer
+
+Use the tag inline, immediately before the claim. Example:
+  "[LIKELY] Gemini Embedding 2 supports 3072 dimensions, but verify against current docs."
+
+Do not substitute other phrasings. These tags are parsed downstream.
+"""
+
 
 ROUND1_SYSTEM_PROMPTS = {
     # Round 1 order: Gemini → GPT → Claude.
