@@ -43,8 +43,17 @@ def test_confidence_convention_defines_all_tags():
         assert tag in CONFIDENCE_CONVENTION, f"CONFIDENCE_CONVENTION missing tag: {tag}"
 
 
-def test_confidence_convention_has_counter_example():
+def test_confidence_convention_has_examples_section():
+    assert "## Examples" in CONFIDENCE_CONVENTION
+
+
+def test_confidence_convention_has_fabrication_example():
     assert "Bad (do not do this)" in CONFIDENCE_CONVENTION
+    assert "[UNCERTAIN] I'm not aware of Claude Opus 4.7" in CONFIDENCE_CONVENTION
+
+
+def test_confidence_convention_has_defer_example():
+    assert "[DEFER] I don't have reliable data on this" in CONFIDENCE_CONVENTION
 
 
 # ---------------------------------------------------------------------------

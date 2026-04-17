@@ -57,24 +57,30 @@ and flag your own confidence level separately from theirs.
 CONFIDENCE_CONVENTION = """
 ## Confidence Qualifiers
 
-When making factual claims, tag them using exactly these markers:
+When making factual claims, tag them using exactly these markers inline,
+immediately before the claim:
 
-- [VERIFIED]  — high confidence, well-established fact
-- [LIKELY]    — you believe this is true but have not verified recently
+- [VERIFIED] — high confidence, well-established fact
+- [LIKELY]   — you believe this is true but have not verified recently
 - [UNCERTAIN] — you are speculating or extrapolating from partial knowledge
-- [DEFER]     — another model or external source is better positioned to answer
+- [DEFER]    — another model or external source is better positioned to answer
 
-Use the tag inline, immediately before the claim. Example:
-  "[LIKELY] Gemini Embedding 2 supports 3072 dimensions, but verify against current docs."
+## Examples
 
 Bad (do not do this):
   "Claude Opus 4.7 does not exist."
 
 Good:
-  "[UNCERTAIN] I'm not aware of Claude Opus 4.7 — it may be newer than my \
-training data, or a misnomer for Claude 3 Opus."
+  "[UNCERTAIN] I'm not aware of Claude Opus 4.7 — it may be newer than my
+  training data, or a misnomer for Claude 3 Opus."
 
-Do not substitute other phrasings. These tags are parsed downstream.
+Bad:
+  "I don't have specific details about that."
+
+Good:
+  "[DEFER] I don't have reliable data on this — check the official documentation."
+
+Do not substitute other phrasings. Use exactly the bracketed tags above.
 """
 
 SYNTHESIS_SKEPTICISM = """
