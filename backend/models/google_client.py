@@ -47,7 +47,9 @@ MODELS = {
 
 # Intake uses a separate model constant so it can be pinned or overridden independently
 # of the round-1 research models. Reuses GOOGLE_API_KEY — no new credentials needed.
-INTAKE_MODEL = os.getenv("GEMINI_INTAKE_MODEL", "gemini-2.5-flash-preview-04-17")
+# Fallback order: env var → preview-05-20 → gemini-2.5-flash (stable, no date suffix)
+INTAKE_MODEL = os.getenv("GEMINI_INTAKE_MODEL", "gemini-2.5-flash-preview-05-20")
+_INTAKE_MODEL_FALLBACK = "gemini-2.5-flash"
 
 GEMINI_INTAKE_SYSTEM = """
 You are an intake analyst for an AI research roundtable. Your job is to
@@ -84,6 +86,7 @@ def call_gemini_intake(prompt: str) -> IntakeDecision:
     Analyze a user's intake prompt with Gemini Flash and return a structured decision.
 
     Uses response_schema to enforce typed JSON output — no free-form parsing required.
+    Tries INTAKE_MODEL first; falls back to _INTAKE_MODEL_FALLBACK on API error.
 
     Args:
         prompt: The user's raw prompt, or a combined clarification turn string.
@@ -93,24 +96,41 @@ def call_gemini_intake(prompt: str) -> IntakeDecision:
 
     Raises:
         ValueError: if the API response fails schema validation.
-        Exception:  on API error (propagated from google-genai client).
+        Exception:  on API error from both primary and fallback models.
     """
     config = types.GenerateContentConfig(
         response_mime_type="application/json",
         response_schema=IntakeDecision,
         system_instruction=GEMINI_INTAKE_SYSTEM,
     )
-    response = _get_client().models.generate_content(
-        model=INTAKE_MODEL,
-        contents=[types.Content(role="user", parts=[types.Part(text=prompt)])],
-        config=config,
-    )
-    try:
-        return IntakeDecision.model_validate_json(response.text)
-    except Exception as e:
-        raise ValueError(
-            f"Gemini intake schema validation failed: {e}. Raw response: {response.text!r}"
-        )
+    contents = [types.Content(role="user", parts=[types.Part(text=prompt)])]
+
+    models_to_try = [INTAKE_MODEL]
+    if INTAKE_MODEL != _INTAKE_MODEL_FALLBACK:
+        models_to_try.append(_INTAKE_MODEL_FALLBACK)
+
+    last_exc = None
+    for model_name in models_to_try:
+        try:
+            response = _get_client().models.generate_content(
+                model=model_name,
+                contents=contents,
+                config=config,
+            )
+            try:
+                return IntakeDecision.model_validate_json(response.text)
+            except Exception as e:
+                raise ValueError(
+                    f"Gemini intake schema validation failed ({model_name}): {e}. "
+                    f"Raw response: {response.text!r}"
+                )
+        except ValueError:
+            raise  # schema errors are not retried — re-raise immediately
+        except Exception as e:
+            last_exc = e
+            continue
+
+    raise last_exc
 
 _ADVISOR_PROMPT = (
     "Review this response and produce an improved final version.\n\n"
