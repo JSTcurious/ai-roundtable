@@ -158,7 +158,12 @@ class IntakeSession:
             f"Clarifying question asked: {self._clarifying_question}\n"
             f"User's answer: {answer}\n\n"
             "Now return the final IntakeDecision with needs_clarification: false. "
-            "Incorporate the answer into the optimized_prompt."
+            "IMPORTANT: The optimized_prompt must preserve all proper nouns from the "
+            "original prompt exactly as written. Do not substitute model names, product "
+            "names, or version numbers — even if you believe they are incorrect or refer "
+            "to unreleased products. The research models will handle verification. "
+            "Incorporate the user's clarification answer to add context and specificity, "
+            "but keep the original proper nouns intact."
         )
         decision = call_gemini_intake(combined)
         self.complete = True
