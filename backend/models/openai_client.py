@@ -46,8 +46,10 @@ MODELS = {
     "deep":  "gpt-4o",
 }
 
-# Intake model — pinned separately from round-1 so it can be changed independently
-INTAKE_MODEL = os.getenv("INTAKE_MODEL", "gpt-4o-mini")
+from backend.models.model_config import INTAKE_PRIMARY
+
+# Intake model — sourced from model_config (env-overridable via INTAKE_PRIMARY)
+INTAKE_MODEL = INTAKE_PRIMARY
 
 # ── Intake system prompt ──────────────────────────────────────────────────────
 
@@ -167,6 +169,10 @@ def call_gpt4o_mini_intake(prompt: str) -> IntakeDecision:
     raise RuntimeError(
         "GPT-4o Mini intake unavailable after 3 attempts — please try again in a moment."
     ) from last_exc
+
+
+# Role-based alias used by intake fallback chain
+call_intake_primary = call_gpt4o_mini_intake
 
 
 # ── Round 1 call functions ────────────────────────────────────────────────────

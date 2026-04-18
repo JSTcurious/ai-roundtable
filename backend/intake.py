@@ -15,11 +15,14 @@ Functions:
     sanitize_config — recursively sanitize string values in a config dict
 """
 
+import logging
 import re
 from typing import Any, Optional
 
-from backend.models.openai_client import call_gpt4o_mini_intake
 from backend.models.intake_decision import IntakeDecision
+from backend.models.resilient_caller import call_with_fallback
+
+logger = logging.getLogger(__name__)
 
 # Unicode bidi overrides, directional formatting, and other invisible control characters.
 # Ranges covered:
@@ -52,6 +55,51 @@ def sanitize_config(obj: Any) -> Any:
     if isinstance(obj, list):
         return [sanitize_config(item) for item in obj]
     return obj
+
+
+def _intake_passthrough(prompt: str) -> IntakeDecision:
+    """
+    Emergency passthrough — all intake models failed.
+    Returns raw prompt with smart tier defaults.
+    Never raises. Logs warning for monitoring.
+    """
+    logger.warning(
+        "Intake passthrough triggered — all models unavailable. "
+        "Session will run with unoptimized prompt at smart tier."
+    )
+    return IntakeDecision(
+        needs_clarification=False,
+        clarifying_question=None,
+        optimized_prompt=prompt,
+        tier="smart",
+        output_type="analysis",
+        reasoning="Intake service temporarily unavailable — running with smart tier default.",
+    )
+
+
+def call_intake(prompt: str) -> tuple:
+    """
+    Run intake with fallback chain. Returns (IntakeDecision, provider_used).
+
+    Chain:
+        Primary:   INTAKE_PRIMARY   (gpt-4o-mini, OpenAI)
+        Fallback1: INTAKE_FALLBACK1 (qwen-2.5-72b, OpenRouter)
+        Fallback2: INTAKE_FALLBACK2 (claude-haiku, Anthropic)
+        Emergency: Passthrough      (smart tier defaults, never fails)
+    """
+    from backend.models.openai_client import call_intake_primary
+    from backend.models.openrouter_client import call_intake_fallback1
+    from backend.models.anthropic_client import call_intake_fallback2
+
+    return call_with_fallback(
+        primary_fn=lambda: call_intake_primary(prompt),
+        fallback_fns=[
+            lambda: call_intake_fallback1(prompt),
+            lambda: call_intake_fallback2(prompt),
+        ],
+        emergency_fn=lambda: _intake_passthrough(prompt),
+        role="intake",
+    )
 
 
 def _decision_to_config(decision: IntakeDecision) -> dict:
@@ -94,6 +142,7 @@ class IntakeSession:
         self.session_config: Optional[dict] = None
         self._original_prompt: Optional[str] = None
         self._clarifying_question: Optional[str] = None
+        self._intake_provider: str = "unknown"
 
     def analyze(self, prompt: str) -> dict:
         """
@@ -112,7 +161,8 @@ class IntakeSession:
                 "config": dict,
             }
         """
-        decision = call_gpt4o_mini_intake(prompt)
+        decision, provider_used = call_intake(prompt)
+        self._intake_provider = provider_used
 
         if decision.needs_clarification:
             self._original_prompt = prompt
@@ -165,7 +215,8 @@ class IntakeSession:
             "Incorporate the user's clarification answer to add context and specificity, "
             "but keep the original proper nouns intact."
         )
-        decision = call_gpt4o_mini_intake(combined)
+        decision, provider_used = call_intake(combined)
+        self._intake_provider = provider_used
         self.complete = True
         self.session_config = _decision_to_config(decision)
         return {
