@@ -59,6 +59,7 @@ from backend.router import (
     get_tier_config,
     get_round1_system_prompt,
     build_synthesis_prompt,
+    select_synthesis_model,
     USE_CASE_LIBRARY,
     get_use_case,
 )
@@ -66,18 +67,26 @@ from backend.models.anthropic_client import (
     call_claude,
     call_claude_smart,
     call_claude_smart_async,
+    call_research_claude_async,
 )
 from backend.models.google_client import (
     call_gemini,
     call_gemini_smart,
     call_gemini_smart_async,
+    call_research_gemini_async,
 )
-from backend.models.openai_client import call_gpt, call_gpt_smart, call_gpt_smart_async
-from backend.models.grok_client import call_grok, call_grok_smart, call_grok_smart_async
+from backend.models.openai_client import (
+    call_gpt, call_gpt_smart, call_gpt_smart_async, call_research_gpt_async,
+)
+from backend.models.grok_client import (
+    call_grok, call_grok_smart, call_grok_smart_async, call_research_grok_async,
+)
 from backend.models.perplexity_client import (
     research as perplexity_research,
-    audit as perplexity_audit,
+    audit_with_fallback,
 )
+from backend.models.pipeline_health import PipelineHealth
+from backend.models.model_config import SYNTHESIS_FALLBACK
 from backend.exporter import Exporter
 from backend.models.model_validator import validate_model_config
 
@@ -264,13 +273,11 @@ async def session_run(req: SessionRunRequest):
     tier = config.get("tier", "smart"); print(f"[SESSION] tier={tier}", flush=True)
     output_type = config.get("output_type", "report")
     optimized_prompt = config.get("optimized_prompt", req.prompt)
+    health = PipelineHealth()
 
-    try:
-        tier_config = get_tier_config(tier)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    mode = tier_config.get("mode", "single")
+    # Tier must be "smart" or "deep" — anything else defaults to smart
+    if tier not in ("smart", "deep"):
+        tier = "smart"
 
     transcript = Transcript()
     transcript.session_config = config
@@ -285,9 +292,6 @@ async def session_run(req: SessionRunRequest):
             )
     transcript.add_user_message(req.prompt)
 
-    def _skip(sender: str, exc: Exception) -> str:
-        return f"[{sender} unavailable — skipped after retries: {exc}]"
-
     gemini_history = transcript.get_history_for_model("gemini")
     gpt_history    = transcript.get_history_for_model("gpt")
     grok_history   = transcript.get_history_for_model("grok")
@@ -298,91 +302,6 @@ async def session_run(req: SessionRunRequest):
     claude_system  = get_round1_system_prompt("claude")
 
     # ── Parallel: Gemini + GPT + Grok + Claude + Perplexity pre-research ─────
-    if mode == "smart":
-        async def _gemini_task() -> str:
-            try:
-                result = await _call_with_retry_async(
-                    lambda: call_gemini_smart_async(gemini_history, gemini_system),
-                    "Gemini-smart",
-                )
-                return result["advisor_text"]
-            except Exception as exc:
-                return _skip("Gemini", exc)
-
-        async def _gpt_task() -> str:
-            try:
-                result = await _call_with_retry_async(
-                    lambda: call_gpt_smart_async(gpt_history, gpt_system),
-                    "GPT-smart",
-                )
-                return result["advisor_text"]
-            except Exception as exc:
-                return _skip("GPT", exc)
-
-        async def _grok_task() -> str:
-            try:
-                result = await _call_with_retry_async(
-                    lambda: call_grok_smart_async(grok_history, grok_system),
-                    "Grok-smart",
-                )
-                return result["advisor_text"]
-            except Exception as exc:
-                return _skip("Grok", exc)
-
-        async def _claude_r1_task() -> str:
-            try:
-                result = await _call_with_retry_async(
-                    lambda: call_claude_smart_async(claude_history, claude_system),
-                    "Claude-round1-smart",
-                )
-                return result["advisor_text"]
-            except Exception as exc:
-                return _skip("Claude", exc)
-    else:
-        async def _gemini_task() -> str:
-            try:
-                r = await asyncio.to_thread(
-                    _call_with_retry,
-                    lambda: call_gemini(messages=gemini_history, tier=tier, system=gemini_system),
-                    "Gemini",
-                )
-                return r.text
-            except Exception as exc:
-                return _skip("Gemini", exc)
-
-        async def _gpt_task() -> str:
-            try:
-                r = await asyncio.to_thread(
-                    _call_with_retry,
-                    lambda: call_gpt(messages=gpt_history, tier=tier, system=gpt_system),
-                    "GPT",
-                )
-                return r.choices[0].message.content
-            except Exception as exc:
-                return _skip("GPT", exc)
-
-        async def _grok_task() -> str:
-            try:
-                r = await asyncio.to_thread(
-                    _call_with_retry,
-                    lambda: call_grok(messages=grok_history, tier=tier, system=grok_system),
-                    "Grok",
-                )
-                return r.choices[0].message.content
-            except Exception as exc:
-                return _skip("Grok", exc)
-
-        async def _claude_r1_task() -> str:
-            try:
-                r = await asyncio.to_thread(
-                    _call_with_retry,
-                    lambda: call_claude(messages=claude_history, tier=tier, system=claude_system),
-                    "Claude-round1",
-                )
-                return r.content[0].text
-            except Exception as exc:
-                return _skip("Claude", exc)
-
     async def _research_task() -> str:
         try:
             return await asyncio.to_thread(
@@ -393,31 +312,58 @@ async def session_run(req: SessionRunRequest):
         except Exception as exc:
             return f"[Perplexity pre-research unavailable: {exc}]"
 
-    gemini_text, gpt_text, grok_text, claude_r1_text, perplexity_pre = await asyncio.gather(
-        _gemini_task(), _gpt_task(), _grok_task(), _claude_r1_task(), _research_task(),
+    results = await asyncio.gather(
+        call_research_gemini_async(gemini_history, gemini_system, tier),
+        call_research_gpt_async(gpt_history, gpt_system, tier),
+        call_research_grok_async(grok_history, grok_system, tier),
+        call_research_claude_async(claude_history, claude_system, tier),
+        _research_task(),
+        return_exceptions=True,
     )
+
+    def _unpack(result, lab: str) -> tuple:
+        if isinstance(result, Exception):
+            return f"[{lab.capitalize()} unavailable — {result}]", "unavailable"
+        if isinstance(result, tuple):
+            return result
+        return str(result), "primary"
+
+    gemini_text,    gemini_avail    = _unpack(results[0], "gemini")
+    gpt_text,       gpt_avail       = _unpack(results[1], "gpt")
+    grok_text,      grok_avail      = _unpack(results[2], "grok")
+    claude_r1_text, claude_avail    = _unpack(results[3], "claude")
+    perplexity_pre = results[4] if isinstance(results[4], str) else ""
+
+    health.research_models = {
+        "gemini": gemini_avail,
+        "gpt":    gpt_avail,
+        "grok":   grok_avail,
+        "claude": claude_avail,
+    }
 
     transcript.add_model_message("Gemini", gemini_text,    round="round1")
     transcript.add_model_message("GPT",    gpt_text,       round="round1")
     transcript.add_model_message("Grok",   grok_text,      round="round1")
     transcript.add_model_message("Claude", claude_r1_text, round="round1")
 
-    # ── Perplexity audit (Phase 2) ────────────────────────────────────────────
+    # ── Perplexity audit (Phase 2) with fallback ──────────────────────────────
     try:
-        audit_text = await asyncio.to_thread(
-            _call_with_retry,
-            lambda: perplexity_audit(
-                {"gemini": gemini_text, "gpt": gpt_text, "grok": grok_text},
-                research_text=perplexity_pre,
-                tier=tier,
-            ),
-            "Perplexity-audit",
+        audit_text, factcheck_provider = await asyncio.to_thread(
+            audit_with_fallback,
+            {"gemini": gemini_text, "gpt": gpt_text,
+             "grok": grok_text, "claude": claude_r1_text},
+            perplexity_pre,
+            tier,
         )
     except Exception as exc:
         audit_text = f"[Perplexity audit unavailable: {exc}]"
+        factcheck_provider = "emergency"
+    health.factcheck_model = factcheck_provider
+    health.factcheck_degraded = (factcheck_provider != "primary")
     transcript.add_model_message("Perplexity", audit_text, round="audit")
 
-    # ── Synthesis: Claude (smart: executor → advisor; else: single call) ──────
+    # ── Synthesis: route to analytical or factual model based on audit ────────
+    synthesis_model_id, synthesis_route = select_synthesis_model(audit_text)
     synthesis_system = build_synthesis_prompt(
         output_type=output_type,
         perplexity_findings=audit_text,
@@ -429,23 +375,28 @@ async def session_run(req: SessionRunRequest):
         },
         optimized_prompt=optimized_prompt,
     )
-    if mode == "smart":
-        result = await _call_with_retry_async(
-            lambda: call_claude_smart_async(
-                [{"role": "user", "content": req.prompt}],
-                synthesis_system,
-            ),
-            "Claude-smart",
+    synthesis_messages = [{"role": "user", "content": req.prompt}]
+    try:
+        synthesis_text = await call_synthesis_async(
+            synthesis_model_id, synthesis_messages, synthesis_system, tier
         )
-        synthesis_text = result["advisor_text"]
-    else:
-        synthesis_response = call_claude(
-            messages=[{"role": "user", "content": req.prompt}],
-            tier=tier,
-            system=synthesis_system,
-        )
-        synthesis_text = synthesis_response.content[0].text
+        health.synthesis_model = synthesis_model_id
+        health.synthesis_routed = synthesis_route
+    except Exception as exc:
+        print(f"[synthesis] primary failed ({exc}) — using fallback", flush=True)
+        try:
+            synthesis_text = await call_synthesis_async(
+                SYNTHESIS_FALLBACK, synthesis_messages, synthesis_system, tier
+            )
+            health.synthesis_model = SYNTHESIS_FALLBACK
+            health.synthesis_routed = f"{synthesis_route}_fallback"
+        except Exception as exc2:
+            synthesis_text = f"[Synthesis unavailable: {exc2}]"
+            health.synthesis_model = "emergency"
+            health.synthesis_routed = f"{synthesis_route}_fallback"
+
     transcript.add_model_message("Claude", synthesis_text, round="synthesis")
+    print(f"[SESSION] {health.summary()}", flush=True)
 
     return {
         "round1": {
@@ -454,8 +405,10 @@ async def session_run(req: SessionRunRequest):
             "grok":   grok_text,
             "claude": claude_r1_text,
         },
-        "audit":     audit_text,
-        "synthesis": synthesis_text,
+        "audit":             audit_text,
+        "synthesis":         synthesis_text,
+        "pipeline_health":   health.summary(),
+        "annotations":       health.to_annotation(),
     }
 
 
@@ -710,6 +663,42 @@ def _call_with_retry(fn, sender: str):
     raise last_exc
 
 
+async def call_synthesis_async(
+    model: str,
+    messages: list,
+    system: str,
+    tier: str,
+) -> str:
+    """
+    Dispatch synthesis to the correct provider based on model ID prefix.
+
+    claude/* → Anthropic (smart: executor+advisor; deep: single opus call)
+    gpt/*    → OpenAI
+    qwen/*   → OpenRouter
+    """
+    if model.startswith("claude"):
+        if tier == "smart":
+            result = await _call_with_retry_async(
+                lambda: call_claude_smart_async(messages, system),
+                "Claude-synthesis-smart",
+            )
+            return result["advisor_text"]
+        else:
+            result = await asyncio.to_thread(
+                call_claude, messages=messages, tier="deep", system=system
+            )
+            return result.content[0].text
+    elif model.startswith("gpt"):
+        result = await asyncio.to_thread(
+            call_gpt, messages=messages, tier="deep", system=system
+        )
+        return result.choices[0].message.content
+    else:
+        # OpenRouter fallback (Qwen or other)
+        from backend.models.openrouter_client import call_synthesis_fallback
+        return await asyncio.to_thread(call_synthesis_fallback, messages, system)
+
+
 async def _call_with_retry_async(coro_factory, sender: str):
     """
     Await coro_factory() with up to 3 retries on retryable errors (503 / 429 / rate-limit).
@@ -915,7 +904,10 @@ async def session_websocket(websocket: WebSocket):
         await websocket.close()
         return
 
-    mode = tier_config.get("mode", "single")
+    # Tier must be "smart" or "deep" — anything else defaults to smart
+    if tier not in ("smart", "deep"):
+        tier = "smart"
+    health = PipelineHealth()
     optimized_prompt = config.get("optimized_prompt", prompt)
     transcript = _build_transcript(config, history, prompt)
 
@@ -923,10 +915,7 @@ async def session_websocket(websocket: WebSocket):
     try:
         await websocket.send_json({"type": "session_started"})
 
-        # ── Round 1 + Perplexity pre-research ───────────────────────────────────
-        # quick/deep: stream all four models in parallel.
-        # smart: async smart clients (executor + advisor) off the event loop,
-        # then chunk-emit advisor text for all four models simultaneously.
+        # ── Round 1: all four labs + Perplexity pre-research ─────────────────
         gemini_history = transcript.get_history_for_model("gemini")
         gpt_history    = transcript.get_history_for_model("gpt")
         grok_history   = transcript.get_history_for_model("grok")
@@ -947,144 +936,77 @@ async def session_websocket(websocket: WebSocket):
             except Exception as exc:
                 return f"[Perplexity pre-research unavailable: {exc}]"
 
-        def _smart_round1_body(res, sender_name: str) -> str:
-            if isinstance(res, Exception):
-                return f"[{sender_name} unavailable — skipped after retries: {res}]"
-            if isinstance(res, dict) and res.get("advisor_text") is not None:
-                return str(res["advisor_text"])
-            return f"[{sender_name} unavailable]"
+        results = await asyncio.gather(
+            call_research_gemini_async(gemini_history, gemini_system, tier),
+            call_research_gpt_async(gpt_history, gpt_system, tier),
+            call_research_grok_async(grok_history, grok_system, tier),
+            call_research_claude_async(claude_history, claude_system, tier),
+            _research_task(),
+            return_exceptions=True,
+        )
 
-        if mode == "smart":
-            r1_results = await asyncio.gather(
-                _research_task(),
-                _call_with_retry_async(
-                    lambda: call_gemini_smart_async(gemini_history, gemini_system),
-                    "Gemini-smart",
-                ),
-                _call_with_retry_async(
-                    lambda: call_gpt_smart_async(gpt_history, gpt_system),
-                    "GPT-smart",
-                ),
-                _call_with_retry_async(
-                    lambda: call_grok_smart_async(grok_history, grok_system),
-                    "Grok-smart",
-                ),
-                _call_with_retry_async(
-                    lambda: call_claude_smart_async(claude_history, claude_system),
-                    "Claude-round1",
-                ),
-                return_exceptions=True,
-            )
-            perplexity_pre    = r1_results[0] if isinstance(r1_results[0], str) else ""
-            gem_res           = r1_results[1]
-            gpt_res           = r1_results[2]
-            grok_res          = r1_results[3]
-            claude_r1_res     = r1_results[4]
-            gemini_text_body      = _smart_round1_body(gem_res,       "Gemini")
-            gpt_text_body         = _smart_round1_body(gpt_res,       "GPT")
-            grok_text_body        = _smart_round1_body(grok_res,      "Grok")
-            claude_r1_text_body   = _smart_round1_body(claude_r1_res, "Claude")
+        def _unpack(result, lab: str) -> tuple:
+            if isinstance(result, Exception):
+                return f"[{lab.capitalize()} unavailable — {result}]", "unavailable"
+            if isinstance(result, tuple):
+                return result
+            return str(result), "primary"
 
-            async def _emit_model_tokens(sender: str, text: str) -> None:
-                body = text or ""
-                step = 48
-                for i in range(0, len(body), step):
-                    piece = body[i : i + step]
-                    async with send_lock:
-                        await websocket.send_json({"type": "token", "sender": sender, "token": piece})
+        gemini_text,    gemini_avail    = _unpack(results[0], "gemini")
+        gpt_text,       gpt_avail       = _unpack(results[1], "gpt")
+        grok_text,      grok_avail      = _unpack(results[2], "grok")
+        claude_r1_text, claude_avail    = _unpack(results[3], "claude")
+        perplexity_pre = results[4] if isinstance(results[4], str) else ""
+
+        health.research_models = {
+            "gemini": gemini_avail,
+            "gpt":    gpt_avail,
+            "grok":   grok_avail,
+            "claude": claude_avail,
+        }
+
+        async def _emit_model_tokens(sender: str, text: str) -> None:
+            body = text or ""
+            step = 48
+            for i in range(0, len(body), step):
+                piece = body[i : i + step]
                 async with send_lock:
-                    await websocket.send_json({"type": "model_complete", "sender": sender})
+                    await websocket.send_json({"type": "token", "sender": sender, "token": piece})
+            async with send_lock:
+                await websocket.send_json({"type": "model_complete", "sender": sender})
 
-            await asyncio.gather(
-                _emit_model_tokens("Gemini", gemini_text_body),
-                _emit_model_tokens("GPT",    gpt_text_body),
-                _emit_model_tokens("Grok",   grok_text_body),
-                _emit_model_tokens("Claude", claude_r1_text_body),
-            )
-            gemini_text    = gemini_text_body
-            gpt_text       = gpt_text_body
-            grok_text      = grok_text_body
-            claude_r1_text = claude_r1_text_body
-        else:
-            results = await asyncio.gather(
-                _stream_model(
-                    websocket, "Gemini",
-                    lambda: _gemini_token_iter(gemini_history, tier, gemini_system),
-                    transcript=None,
-                    send_lock=send_lock,
-                    commit_to_transcript=False,
-                ),
-                _stream_model(
-                    websocket, "GPT",
-                    lambda: _gpt_token_iter(gpt_history, tier, gpt_system),
-                    transcript=None,
-                    send_lock=send_lock,
-                    commit_to_transcript=False,
-                ),
-                _stream_model(
-                    websocket, "Grok",
-                    lambda: _grok_token_iter(grok_history, tier, grok_system),
-                    transcript=None,
-                    send_lock=send_lock,
-                    commit_to_transcript=False,
-                ),
-                _stream_model(
-                    websocket, "Claude",
-                    lambda: _claude_token_iter(claude_history, tier, claude_system),
-                    transcript=None,
-                    send_lock=send_lock,
-                    commit_to_transcript=False,
-                ),
-                _research_task(),
-                return_exceptions=True,
-            )
-            gemini_exec    = results[0] if isinstance(results[0], str) else f"[Gemini error: {results[0]}]"
-            gpt_exec       = results[1] if isinstance(results[1], str) else f"[GPT error: {results[1]}]"
-            grok_exec      = results[2] if isinstance(results[2], str) else f"[Grok error: {results[2]}]"
-            claude_r1_exec = results[3] if isinstance(results[3], str) else f"[Claude error: {results[3]}]"
-            perplexity_pre = results[4] if isinstance(results[4], str) else ""
-            gemini_text    = gemini_exec
-            gpt_text       = gpt_exec
-            grok_text      = grok_exec
-            claude_r1_text = claude_r1_exec
+        await asyncio.gather(
+            _emit_model_tokens("Gemini", gemini_text),
+            _emit_model_tokens("GPT",    gpt_text),
+            _emit_model_tokens("Grok",   grok_text),
+            _emit_model_tokens("Claude", claude_r1_text),
+        )
 
         transcript.add_model_message("Gemini", gemini_text,    round="round1")
         transcript.add_model_message("GPT",    gpt_text,       round="round1")
         transcript.add_model_message("Grok",   grok_text,      round="round1")
         transcript.add_model_message("Claude", claude_r1_text, round="round1")
 
-        # ── Perplexity audit (Phase 2) ────────────────────────────────────────
+        # ── Perplexity audit (Phase 2) with fallback ──────────────────────────
         await websocket.send_json({"type": "perplexity_thinking"})
         try:
-            audit_text = await asyncio.to_thread(
-                _call_with_retry,
-                lambda: perplexity_audit(
-                    {"gemini": gemini_text, "gpt": gpt_text, "grok": grok_text},
-                    research_text=perplexity_pre,
-                    tier=tier,
-                ),
-                "Perplexity-audit",
+            audit_text, factcheck_provider = await asyncio.to_thread(
+                audit_with_fallback,
+                {"gemini": gemini_text, "gpt": gpt_text,
+                 "grok": grok_text, "claude": claude_r1_text},
+                perplexity_pre,
+                tier,
             )
         except Exception as exc:
             audit_text = f"[Perplexity audit unavailable: {exc}]"
+            factcheck_provider = "emergency"
+        health.factcheck_model = factcheck_provider
+        health.factcheck_degraded = (factcheck_provider != "primary")
         transcript.add_model_message("Perplexity", audit_text, round="audit")
         await websocket.send_json({"type": "perplexity_complete", "content": audit_text})
 
-        # ── Generate synthesis annotations (read-only, sent after synthesis) ──
-        # Observations are generated now so they're ready to send immediately
-        # after synthesis_complete — no gate, no user response needed.
-        observations = await _generate_observations(
-            prompt=optimized_prompt,
-            gemini=gemini_text,
-            gpt=gpt_text,
-            grok=grok_text,
-            claude=claude_r1_text,
-            perplexity=audit_text,
-            tier=tier,
-        )
-
-        # ── Synthesis: Claude executor → (smart) advisor ─────────────────────
-        await websocket.send_json({"type": "synthesis_thinking"})
+        # ── Synthesis: route to analytical or factual model based on audit ────
+        synthesis_model_id, synthesis_route = select_synthesis_model(audit_text)
         synthesis_system = build_synthesis_prompt(
             output_type=output_type,
             perplexity_findings=audit_text,
@@ -1096,40 +1018,46 @@ async def session_websocket(websocket: WebSocket):
             },
             optimized_prompt=optimized_prompt,
         )
-        if mode == "smart":
-            try:
-                pack = await _call_with_retry_async(
-                    lambda: call_claude_smart_async(
-                        [{"role": "user", "content": prompt}],
-                        synthesis_system,
-                    ),
-                    "Claude-smart",
-                )
-                synthesis_text = str(pack.get("advisor_text", ""))
-            except Exception:
-                synthesis_text = ""
-            step = 48
-            for i in range(0, len(synthesis_text), step):
-                piece = synthesis_text[i : i + step]
-                async with send_lock:
-                    await websocket.send_json({"type": "token", "sender": "Claude", "token": piece})
-        else:
-            synthesis_text = await _stream_tokens(
-                websocket, "Claude",
-                lambda: _claude_token_iter(
-                    [{"role": "user", "content": prompt}], tier, synthesis_system
-                ),
-                send_lock=send_lock,
+        synthesis_messages = [{"role": "user", "content": prompt}]
+
+        await websocket.send_json({"type": "synthesis_thinking"})
+        try:
+            synthesis_text = await call_synthesis_async(
+                synthesis_model_id, synthesis_messages, synthesis_system, tier
             )
+            health.synthesis_model = synthesis_model_id
+            health.synthesis_routed = synthesis_route
+        except Exception as exc:
+            print(f"[synthesis] primary failed ({exc}) — using fallback", flush=True)
+            try:
+                synthesis_text = await call_synthesis_async(
+                    SYNTHESIS_FALLBACK, synthesis_messages, synthesis_system, tier
+                )
+                health.synthesis_model = SYNTHESIS_FALLBACK
+                health.synthesis_routed = f"{synthesis_route}_fallback"
+            except Exception as exc2:
+                synthesis_text = f"[Synthesis unavailable: {exc2}]"
+                health.synthesis_model = "emergency"
+                health.synthesis_routed = f"{synthesis_route}_fallback"
+
+        # Emit synthesis tokens
+        step = 48
+        for i in range(0, len(synthesis_text), step):
+            piece = synthesis_text[i : i + step]
+            async with send_lock:
+                await websocket.send_json({"type": "token", "sender": "Claude", "token": piece})
 
         transcript.add_model_message("Claude", synthesis_text, round="synthesis")
         await websocket.send_json({"type": "synthesis_complete", "content": synthesis_text})
-        # Send read-only synthesis annotations after synthesis (fire-and-forget, no gate).
-        if observations:
-            await websocket.send_json({
-                "type": "synthesis_annotations",
-                "annotations": observations,
-            })
+
+        print(f"[SESSION] {health.summary()}", flush=True)
+
+        # Send pipeline health annotations (read-only, after synthesis_complete).
+        await websocket.send_json({
+            "type": "synthesis_annotations",
+            "annotations": health.to_annotation(),
+            "pipeline_health": health.summary(),
+        })
         await websocket.send_json({"type": "session_complete"})
 
     except Exception as e:
