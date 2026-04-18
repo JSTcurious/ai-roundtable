@@ -289,6 +289,38 @@ async def call_gpt_smart_async(messages: list, system=None) -> dict:
     )
 
 
+async def call_research_gpt_async(
+    history: list, system: str, tier: str
+) -> tuple:
+    """
+    Call GPT for research with fallback to stable model.
+    Returns (response_text, availability_status).
+    availability_status: "primary" | "fallback" | "unavailable"
+    """
+    loop = asyncio.get_event_loop()
+
+    try:
+        if tier == "smart":
+            result = await loop.run_in_executor(
+                None, partial(call_gpt_smart, history, system=system)
+            )
+            return result["advisor_text"], "primary"
+        else:
+            result = await loop.run_in_executor(
+                None, partial(call_gpt, messages=history, tier="deep", system=system)
+            )
+            return result.choices[0].message.content, "primary"
+    except Exception:
+        try:
+            from backend.models.model_config import get_fallback_model
+            result = await loop.run_in_executor(
+                None, partial(call_gpt, messages=history, tier="smart", system=system)
+            )
+            return result.choices[0].message.content, "fallback"
+        except Exception:
+            return "[GPT unavailable this session]", "unavailable"
+
+
 def ping() -> dict:
     """
     Smoke test — sends a minimal message to confirm API key and connectivity.

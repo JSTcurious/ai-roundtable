@@ -164,6 +164,35 @@ def ping() -> dict:
 
 # ── Intake fallback2 ─────────────────────────────────────────────────────────
 
+async def call_research_claude_async(
+    history: list, system: str, tier: str
+) -> tuple:
+    """
+    Call Claude for research with fallback to stable model.
+    Returns (response_text, availability_status).
+    availability_status: "primary" | "fallback" | "unavailable"
+    """
+    loop = asyncio.get_event_loop()
+
+    try:
+        if tier == "smart":
+            result = await call_claude_smart_async(history, system)
+            return result["advisor_text"], "primary"
+        else:
+            result = await loop.run_in_executor(
+                None, partial(call_claude, messages=history, tier="deep", system=system)
+            )
+            return result.content[0].text, "primary"
+    except Exception:
+        try:
+            result = await loop.run_in_executor(
+                None, partial(call_claude, messages=history, tier="smart", system=system)
+            )
+            return result.content[0].text, "fallback"
+        except Exception:
+            return "[Claude unavailable this session]", "unavailable"
+
+
 def call_intake_fallback2(prompt: str):
     """
     Intake fallback2 — Claude Haiku (Anthropic) as last-resort intake model.
