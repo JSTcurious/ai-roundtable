@@ -286,6 +286,49 @@ async def call_gemini_smart_async(messages: list, system=None) -> dict:
     )
 
 
+async def call_research_gemini_async(
+    history: list, system: str, tier: str
+) -> tuple:
+    """
+    Call Gemini for research with fallback to stable model.
+    Returns (response_text, availability_status).
+    availability_status: "primary" | "fallback" | "unavailable"
+
+    Smart tier: executor + advisor pattern.
+    Deep tier: single top-model call.
+    """
+    from backend.models.model_config import get_fallback_model
+    from backend.models.resilient_caller import call_with_fallback
+
+    async def _primary():
+        if tier == "smart":
+            result = await call_gemini_smart_async(history, system)
+            return result["advisor_text"]
+        else:
+            result = await loop_run(call_gemini, messages=history, tier="deep", system=system)
+            return result.text
+
+    async def _fallback():
+        fallback_id = get_fallback_model("gemini")
+        result = await loop_run(call_gemini, messages=history, tier="smart", system=system)
+        return result.text
+
+    loop = asyncio.get_event_loop()
+
+    async def loop_run(fn, **kwargs):
+        return await loop.run_in_executor(None, partial(fn, **kwargs))
+
+    try:
+        text = await _primary()
+        return text, "primary"
+    except Exception:
+        try:
+            text = await _fallback()
+            return text, "fallback"
+        except Exception:
+            return f"[Gemini unavailable this session]", "unavailable"
+
+
 def ping() -> dict:
     """
     Smoke test — sends a minimal message to confirm API key and connectivity.

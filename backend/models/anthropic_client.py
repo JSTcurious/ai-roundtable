@@ -162,6 +162,79 @@ def ping() -> dict:
         return {"ok": False, "error": str(e)}
 
 
+# ── Intake fallback2 ─────────────────────────────────────────────────────────
+
+async def call_research_claude_async(
+    history: list, system: str, tier: str
+) -> tuple:
+    """
+    Call Claude for research with fallback to stable model.
+    Returns (response_text, availability_status).
+    availability_status: "primary" | "fallback" | "unavailable"
+    """
+    loop = asyncio.get_event_loop()
+
+    try:
+        if tier == "smart":
+            result = await call_claude_smart_async(history, system)
+            return result["advisor_text"], "primary"
+        else:
+            result = await loop.run_in_executor(
+                None, partial(call_claude, messages=history, tier="deep", system=system)
+            )
+            return result.content[0].text, "primary"
+    except Exception:
+        try:
+            result = await loop.run_in_executor(
+                None, partial(call_claude, messages=history, tier="smart", system=system)
+            )
+            return result.content[0].text, "fallback"
+        except Exception:
+            return "[Claude unavailable this session]", "unavailable"
+
+
+def call_intake_fallback2(prompt: str):
+    """
+    Intake fallback2 — Claude Haiku (Anthropic) as last-resort intake model.
+
+    Uses INTAKE_FALLBACK2 model ID from model_config.
+    Same IntakeDecision schema and system prompt as primary.
+
+    Args:
+        prompt: The user's raw prompt, or combined clarification turn string.
+
+    Returns:
+        IntakeDecision
+
+    Raises:
+        ValueError:   if response fails schema validation.
+        RuntimeError: on API failure.
+    """
+    import json
+    from backend.models.intake_decision import IntakeDecision
+    from backend.models.model_config import INTAKE_FALLBACK2
+    from backend.models.openai_client import _build_intake_system_prompt
+
+    system_prompt = _build_intake_system_prompt().strip()
+    response = _get_client().messages.create(
+        model=INTAKE_FALLBACK2,
+        max_tokens=512,
+        system=system_prompt,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    raw = response.content[0].text.strip()
+    # Strip markdown fences if present
+    if raw.startswith("```"):
+        parts = raw.split("```")
+        raw = parts[1].lstrip("json").strip() if len(parts) > 1 else raw
+    try:
+        return IntakeDecision.model_validate_json(raw)
+    except Exception as e:
+        raise ValueError(
+            f"Claude Haiku intake schema validation failed: {e}. Raw: {raw!r}"
+        )
+
+
 if __name__ == "__main__":
     result = ping()
     if result["ok"]:

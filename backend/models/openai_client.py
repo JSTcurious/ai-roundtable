@@ -46,8 +46,10 @@ MODELS = {
     "deep":  "gpt-4o",
 }
 
-# Intake model — pinned separately from round-1 so it can be changed independently
-INTAKE_MODEL = os.getenv("INTAKE_MODEL", "gpt-4o-mini")
+from backend.models.model_config import INTAKE_PRIMARY
+
+# Intake model — sourced from model_config (env-overridable via INTAKE_PRIMARY)
+INTAKE_MODEL = INTAKE_PRIMARY
 
 # ── Intake system prompt ──────────────────────────────────────────────────────
 
@@ -169,6 +171,10 @@ def call_gpt4o_mini_intake(prompt: str) -> IntakeDecision:
     ) from last_exc
 
 
+# Role-based alias used by intake fallback chain
+call_intake_primary = call_gpt4o_mini_intake
+
+
 # ── Round 1 call functions ────────────────────────────────────────────────────
 
 # gpt-5 as advisor; fall back to gpt-4o if not yet available on this account
@@ -281,6 +287,38 @@ async def call_gpt_smart_async(messages: list, system=None) -> dict:
         None,
         partial(call_gpt_smart, messages, system=system),
     )
+
+
+async def call_research_gpt_async(
+    history: list, system: str, tier: str
+) -> tuple:
+    """
+    Call GPT for research with fallback to stable model.
+    Returns (response_text, availability_status).
+    availability_status: "primary" | "fallback" | "unavailable"
+    """
+    loop = asyncio.get_event_loop()
+
+    try:
+        if tier == "smart":
+            result = await loop.run_in_executor(
+                None, partial(call_gpt_smart, history, system=system)
+            )
+            return result["advisor_text"], "primary"
+        else:
+            result = await loop.run_in_executor(
+                None, partial(call_gpt, messages=history, tier="deep", system=system)
+            )
+            return result.choices[0].message.content, "primary"
+    except Exception:
+        try:
+            from backend.models.model_config import get_fallback_model
+            result = await loop.run_in_executor(
+                None, partial(call_gpt, messages=history, tier="smart", system=system)
+            )
+            return result.choices[0].message.content, "fallback"
+        except Exception:
+            return "[GPT unavailable this session]", "unavailable"
 
 
 def ping() -> dict:

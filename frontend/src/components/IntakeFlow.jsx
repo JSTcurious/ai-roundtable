@@ -17,16 +17,50 @@ import Header from "./common/Header";
 const API_BASE = process.env.REACT_APP_API_URL || "http://localhost:8000";
 
 const TIER_LABELS = {
-  quick: "⚡ Quick",
   smart: "⚖ Smart",
   deep:  "🔍 Deep",
 };
 
-const TIER_DESCRIPTIONS = {
-  quick: "Single executor per model · fastest · good for gut checks and brainstorms",
-  smart: "Executor + advisor per model · near-Deep quality · recommended for most sessions",
-  deep:  "Flagship models throughout · maximum depth · best for reports and critical decisions",
-};
+/**
+ * Modal confirming the user understands the cost/time trade-off of upgrading to Deep.
+ */
+function DeepConfirmationModal({ onConfirm, onCancel }) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="deep-modal-title"
+    >
+      <div className="w-full max-w-sm rounded-xl border border-[#2a2a2a] bg-[#1e1e1e] p-6 shadow-xl">
+        <h2 id="deep-modal-title" className="mb-2 text-base font-semibold text-[#e8e8e8]">
+          Upgrade to Deep?
+        </h2>
+        <p className="mb-5 text-sm leading-relaxed text-[#888888]">
+          Sessions take longer (10–20 min) and cost significantly more.
+          Deep uses flagship models throughout — best for reports and critical decisions.
+        </p>
+        <div className="flex gap-3 justify-end">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-lg border border-[#2a2a2a] bg-[#0d0d0d] px-4 py-2 text-sm text-[#888888] hover:text-[#e8e8e8] focus:outline-none"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            className="rounded-lg px-4 py-2 text-sm font-bold focus:outline-none"
+            style={{ background: "#F5A623", color: "#0d0d0d" }}
+          >
+            Upgrade to Deep
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 /**
  * @param {Object}   props
@@ -42,8 +76,8 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
   const [answer, setAnswer] = useState("");
   const [submittingAnswer, setSubmittingAnswer] = useState(false);
   const [config, setConfig] = useState(null);
-  /** Whether the inline tier override panel is open */
-  const [showOverride, setShowOverride] = useState(false);
+  /** Whether the Deep upgrade confirmation modal is open */
+  const [showDeepConfirm, setShowDeepConfirm] = useState(false);
   const [tierChoice, setTierChoice] = useState("smart");
   const [error, setError] = useState(null);
   const answerRef = useRef(null);
@@ -220,39 +254,23 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
                 </div>
                 <p className="mt-1.5 text-sm text-[#888888]">{config.reasoning}</p>
               </div>
-              <button
-                type="button"
-                onClick={() => setShowOverride((v) => !v)}
-                className="shrink-0 text-sm text-[#888888] underline-offset-2 hover:text-[#e8e8e8] focus:outline-none"
-              >
-                {showOverride ? "Close" : "Change"}
-              </button>
+              {tierChoice === "smart" && (
+                <button
+                  type="button"
+                  onClick={() => setShowDeepConfirm(true)}
+                  className="shrink-0 text-sm text-[#F5A623] underline-offset-2 hover:opacity-80 focus:outline-none"
+                >
+                  Upgrade to Deep ↑
+                </button>
+              )}
             </div>
 
-            {/* Inline tier override */}
-            {showOverride && (
-              <div className="space-y-3 rounded-lg border border-[#2a2a2a] bg-[#1e1e1e] px-4 py-4">
-                <p className="text-xs font-medium uppercase tracking-wide text-[#888888]">Override tier</p>
-                <div className="flex gap-3">
-                  {["quick", "smart", "deep"].map((id) => (
-                    <button
-                      key={id}
-                      type="button"
-                      onClick={() => { setTierChoice(id); setShowOverride(false); }}
-                      className={`min-w-0 flex-1 rounded-lg border px-3 py-2.5 text-center text-sm font-medium transition-colors focus:outline-none ${
-                        tierChoice === id
-                          ? "border-[#6B6B6B] bg-[#2a2a2a] text-[#e8e8e8]"
-                          : "border-[#2a2a2a] bg-[#0d0d0d] text-[#888888] hover:border-[#6B6B6B]"
-                      }`}
-                    >
-                      {TIER_LABELS[id]}
-                    </button>
-                  ))}
-                </div>
-                <p className="text-xs leading-relaxed text-[#666666]">
-                  {TIER_DESCRIPTIONS[tierChoice]}
-                </p>
-              </div>
+            {/* Deep upgrade confirmation modal */}
+            {showDeepConfirm && (
+              <DeepConfirmationModal
+                onConfirm={() => { setTierChoice("deep"); setShowDeepConfirm(false); }}
+                onCancel={() => setShowDeepConfirm(false)}
+              />
             )}
 
             {/* Confirm */}
