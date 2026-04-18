@@ -23,11 +23,13 @@ Functions:
 
 from typing import Optional
 
-from backend.models.anthropic_client import MODELS as CLAUDE_MODELS
-from backend.models.google_client import MODELS as GEMINI_MODELS
-from backend.models.openai_client import MODELS as GPT_MODELS
+from backend.models.model_config import (
+    get_executor_model,
+    get_advisor_model,
+    get_fallback_model,
+    get_all_labs,
+)
 from backend.models.perplexity_client import MODELS as PERPLEXITY_MODELS
-from backend.models.grok_client import MODELS as GROK_MODELS
 
 
 # ---------------------------------------------------------------------------
@@ -237,88 +239,21 @@ def _format_round1_responses(responses: dict) -> str:
     return "\n\n".join(lines) if lines else "(no round-1 responses available)"
 
 
-# Maps tier names as they may arrive from the frontend or session_config
-TIER_ALIASES = {
-    "quick":         "quick",
-    "smart":         "smart",
-    "deep":          "deep_thinking",
-    "deep_thinking": "deep_thinking",
-}
-
-
 def get_tier_config(tier: str) -> dict:
     """
-    Return the model IDs and calling strategy for a given tier.
-
-    Args:
-        tier: "quick" | "smart" | "deep" | "deep_thinking"
-
-    Returns (quick / deep_thinking):
-        {
-            "mode":       "single",
-            "claude":     str,
-            "gemini":     str,
-            "gpt":        str,
-            "perplexity": str,
-            "strategy":   str,
-        }
-
-    Returns (smart):
-        {
-            "mode":            "smart",
-            "claude_executor": str,
-            "claude_advisor":  str,
-            "gemini_executor": str,
-            "gemini_advisor":  str,
-            "gpt_executor":    str,
-            "gpt_advisor":     str,
-            "perplexity":      str,
-            "strategy":        "smart",
-        }
-
-    Raises ValueError for unrecognised tier names.
+    Return executor and advisor model IDs for all labs at a given tier.
+    Tier must be 'smart' or 'deep'. Any other value defaults to smart.
     """
-    normalised = TIER_ALIASES.get(tier)
-    if normalised is None:
-        raise ValueError(
-            f"Unknown tier: {tier!r}. Expected 'quick', 'smart', 'deep', or 'deep_thinking'."
-        )
+    if tier not in ("smart", "deep"):
+        tier = "smart"
 
-    if normalised == "quick":
-        return {
-            "mode":       "single",
-            "claude":     CLAUDE_MODELS["quick"],
-            "gemini":     GEMINI_MODELS["quick"],
-            "gpt":        GPT_MODELS["quick"],
-            "grok":       GROK_MODELS["quick"],
-            "perplexity": PERPLEXITY_MODELS["quick"],
-            "strategy":   "quick",
-        }
-
-    if normalised == "smart":
-        return {
-            "mode":            "smart",
-            "claude_executor": CLAUDE_MODELS["smart"],
-            "claude_advisor":  CLAUDE_MODELS["deep"],
-            "gemini_executor": GEMINI_MODELS["smart"],
-            "gemini_advisor":  GEMINI_MODELS["deep"],
-            "gpt_executor":    GPT_MODELS["smart"],
-            "gpt_advisor":     GPT_MODELS["deep"],
-            "grok_executor":   GROK_MODELS["smart"],
-            "grok_advisor":    GROK_MODELS["deep"],
-            "perplexity":      PERPLEXITY_MODELS["smart"],
-            "strategy":        "smart",
-        }
-
-    # deep_thinking
     return {
-        "mode":       "single",
-        "claude":     CLAUDE_MODELS["deep"],
-        "gemini":     GEMINI_MODELS["deep"],
-        "gpt":        GPT_MODELS["deep"],
-        "grok":       GROK_MODELS["deep"],
-        "perplexity": PERPLEXITY_MODELS["deep"],
-        "strategy":   "deep_thinking",
+        lab: {
+            "executor": get_executor_model(tier, lab),
+            "advisor":  get_advisor_model(tier, lab),
+            "fallback": get_fallback_model(lab),
+        }
+        for lab in get_all_labs()
     }
 
 
