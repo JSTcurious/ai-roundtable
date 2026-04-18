@@ -85,41 +85,178 @@ def research(prompt: str, tier: str = "quick") -> str:
     return response.choices[0].message.content.strip()
 
 
-def audit(model_responses: dict, research_text: str = "", tier: str = "quick") -> str:
+def _build_audit_prompt(
+    round1_responses: dict,
+    research_text: str,
+    tier: str,
+) -> str:
+    """Build audit prompt with depth appropriate to tier."""
+    responses_block = "\n\n".join(
+        f"### {model}\n{text}"
+        for model, text in round1_responses.items()
+    )
+
+    base = f"""
+You are fact-checking AI model responses for accuracy and currency.
+
+## Round-1 Responses to Audit
+{responses_block}
+
+## Pre-Research Context
+{research_text or '(no pre-research available)'}
+"""
+
+    if tier == "deep":
+        return base + """
+## Deep Audit Instructions
+
+Be comprehensive and adversarial. Check everything.
+
+1. Verify EVERY specific factual claim (prices, dates, model versions,
+   statistics, named entities) across all four model responses.
+2. Map contradictions between models explicitly — when models disagree,
+   state which is correct, why, and cite a source.
+3. Research current practitioner consensus from live sources.
+4. Identify which round-1 models were most reliable on this topic.
+5. Flag your own confidence level on each correction.
+
+Return all four sections with full depth. Do not abbreviate.
+Cite specific sources for every correction — no vague references.
+"""
+    else:  # smart
+        return base + """
+## Smart Audit Instructions
+
+Be targeted and signal-focused. Prioritize the most impactful findings.
+
+1. Flag clearly wrong or outdated facts — focus on the most impactful errors.
+2. Surface the top 3 most important pieces of missing current information.
+3. Cite specific sources for every correction.
+4. Keep each section tight — synthesis needs clear signal, not volume.
+
+Return all four sections. Prioritize accuracy and clarity over completeness.
+"""
+
+
+def _build_audit_request(
+    round1_responses: dict,
+    research_text: str,
+    tier: str,
+    model: str = None,
+) -> dict:
+    """Build the full Perplexity API request dict."""
+    from backend.models.model_config import FACTCHECK_PRIMARY, get_factcheck_max_tokens
+    return {
+        "model": model or FACTCHECK_PRIMARY,
+        "max_tokens": get_factcheck_max_tokens(tier),
+        "messages": [
+            {
+                "role": "user",
+                "content": _build_audit_prompt(round1_responses, research_text, tier),
+            }
+        ],
+    }
+
+
+def _call_perplexity_audit(
+    round1_responses: dict,
+    research_text: str,
+    tier: str,
+    model: str = None,
+) -> str:
+    """Call Perplexity audit API with the given model."""
+    req = _build_audit_request(round1_responses, research_text, tier, model=model)
+    response = _get_client().chat.completions.create(**req)
+    return response.choices[0].message.content.strip()
+
+
+def _call_gpt_audit_with_web_search(
+    round1_responses: dict,
+    research_text: str,
+    tier: str,
+) -> str:
     """
-    Phase 2 — Cross-check Gemini + GPT responses against live web research.
+    GPT fallback audit with web search tool — used only when Perplexity is down.
+    Cross-provider last resort: different grounding architecture, lower reliability.
+    """
+    from openai import OpenAI
+    from backend.models.model_config import FACTCHECK_FALLBACK2, get_factcheck_max_tokens
+    import os
+
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    prompt = _build_audit_prompt(round1_responses, research_text, tier)
+    prompt += "\n\nNote: You are acting as fact-checker. Search the web to verify claims."
+
+    response = client.chat.completions.create(
+        model=FACTCHECK_FALLBACK2,
+        max_tokens=get_factcheck_max_tokens(tier),
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return response.choices[0].message.content.strip()
+
+
+def audit_with_fallback(
+    round1_responses: dict,
+    research_text: str,
+    tier: str,
+) -> tuple:
+    """
+    Run Perplexity audit with fallback chain.
+    Returns (audit_text, provider_used).
+
+    Chain:
+        Primary:   Perplexity Sonar Pro  (FACTCHECK_PRIMARY)
+        Fallback1: Perplexity Sonar      (FACTCHECK_FALLBACK1, same grounding)
+        Fallback2: GPT-5.4 + web search  (FACTCHECK_FALLBACK2, cross-provider)
+        Emergency: Degraded notice string (never raises)
+
+    Both Perplexity tiers use the same Smart/Deep audit prompt.
+    """
+    from backend.models.resilient_caller import call_with_fallback as _call_with_fallback
+    from backend.models.model_config import FACTCHECK_PRIMARY, FACTCHECK_FALLBACK1
+
+    def _emergency_factcheck() -> str:
+        return (
+            "[Fact-check unavailable — all fact-check providers failed. "
+            "Synthesis is based on round-1 model responses only. "
+            "Apply additional skepticism to all factual claims. "
+            "Verify key facts against official sources before acting.]"
+        )
+
+    return _call_with_fallback(
+        primary_fn=lambda: _call_perplexity_audit(
+            round1_responses, research_text, tier,
+            model=FACTCHECK_PRIMARY,
+        ),
+        fallback_fns=[
+            lambda: _call_perplexity_audit(
+                round1_responses, research_text, tier,
+                model=FACTCHECK_FALLBACK1,
+            ),
+            lambda: _call_gpt_audit_with_web_search(
+                round1_responses, research_text, tier,
+            ),
+        ],
+        emergency_fn=_emergency_factcheck,
+        role="factcheck",
+    )
+
+
+def audit(model_responses: dict, research_text: str = "", tier: str = "smart") -> str:
+    """
+    Phase 2 — Cross-check model responses against live web research.
+    Legacy single-call interface — use audit_with_fallback() for resilience.
 
     Args:
-        model_responses: {"gemini": str, "gpt": str}
+        model_responses: {"gemini": str, "gpt": str, "grok": str, ...}
         research_text:   findings from research() (Phase 1)
-        tier:            "quick" | "deep"
+        tier:            "smart" | "deep"
 
     Returns:
         Structured audit string with citations and dates.
     """
-    model = MODELS.get(tier, MODELS["quick"])
-
-    gemini_response = model_responses.get("gemini", "")
-    gpt_response = model_responses.get("gpt", "")
-
-    audit_prompt = (
-        f"You have live web research and two AI model responses on this topic.\n\n"
-        f"Live research you gathered:\n{research_text or '(no pre-research available)'}\n\n"
-        f"Gemini's response:\n{gemini_response or '(not available)'}\n\n"
-        f"GPT's response:\n{gpt_response or '(not available)'}\n\n"
-        f"Identify:\n"
-        f"1. Facts that are outdated or incorrect per current web research\n"
-        f"2. Important current information neither model mentioned\n"
-        f"3. Tools or courses that have changed in relevance recently\n"
-        f"4. What the current practitioner community actually recommends right now\n\n"
-        f"Return a structured audit with citations and dates for all sources."
-    )
-
-    response = _get_client().chat.completions.create(
-        model=model,
-        messages=[{"role": "user", "content": audit_prompt}],
-    )
-    return response.choices[0].message.content.strip()
+    from backend.models.model_config import FACTCHECK_PRIMARY
+    return _call_perplexity_audit(model_responses, research_text, tier, model=FACTCHECK_PRIMARY)
 
 
 def ping() -> dict:
