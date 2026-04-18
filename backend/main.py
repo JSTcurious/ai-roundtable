@@ -79,6 +79,7 @@ from backend.models.perplexity_client import (
     audit as perplexity_audit,
 )
 from backend.exporter import Exporter
+from backend.models.model_validator import validate_model_config
 
 app = FastAPI(title="ai-roundtable v2")
 
@@ -88,6 +89,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.on_event("startup")
+async def startup_event():
+    """Validate model config on startup. Logs warnings, never crashes."""
+    import asyncio
+    loop = asyncio.get_event_loop()
+    warnings = await loop.run_in_executor(None, validate_model_config)
+    if warnings:
+        print(f"⚠️  {len(warnings)} stale model ID(s) — run: python -m tools.check_models")
+
 
 # In-memory session store — sufficient for v2. Replace with Redis for multi-user.
 _intake_sessions: dict[str, IntakeSession] = {}
