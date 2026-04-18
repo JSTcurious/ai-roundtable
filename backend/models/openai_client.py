@@ -50,58 +50,52 @@ MODELS = {
 INTAKE_MODEL = os.getenv("INTAKE_MODEL", "gpt-4o-mini")
 
 # ── Intake system prompt ──────────────────────────────────────────────────────
-# Mirrors backend/models/google_client.py GEMINI_INTAKE_SYSTEM — kept here to
-# avoid importing from google_client when the Google SDK may not be installed.
 
-_INTAKE_SYSTEM = """
-You are an intake analyst for an AI research roundtable. Your job is to
-analyze a user's prompt and make two decisions:
+def _build_intake_system_prompt() -> str:
+    return """
+You are an intake analyst for an AI research roundtable designed for
+serious deliberation. Your job is to analyze the user's prompt and
+prepare it for a multi-model research session.
 
-1. CLARIFICATION: Does the prompt have enough context to produce a
-   high-quality research session?
+Return a JSON object with exactly these fields:
+{
+  "needs_clarification": bool,
+  "clarifying_question": string or null,
+  "optimized_prompt": string,
+  "tier": "smart",
+  "output_type": string,
+  "reasoning": string
+}
 
-   - If the user's intent is ambiguous or a critical piece of context is
-     missing, set needs_clarification to true and provide ONE focused
-     clarifying question. Do not ask multiple questions.
-   - If the prompt is clear enough to proceed, set needs_clarification
-     to false and optimize the prompt directly.
+## Rules
 
-2. PROPER NOUN PRESERVATION (critical rule):
+1. needs_clarification: true ONLY if intent is genuinely ambiguous
+   or critical context is missing.
 
-   When the user provides specific proper nouns — model names, product
-   names, version numbers, company names, or any named entity — treat
-   them as correct and authoritative. Never substitute your own examples
-   or alternatives.
+2. clarifying_question: ONE focused question about intent or scope.
+   Null if needs_clarification is false.
 
-   WRONG: User says "Claude Opus 4.7" -> you ask "do you mean Claude 3 Opus?"
-   RIGHT: User says "Claude Opus 4.7" -> you use "Claude Opus 4.7" exactly
+3. PROPER NOUN PRESERVATION — CRITICAL:
+   Never substitute model names, product names, version numbers, or
+   any named entity the user provided. Use them exactly as written.
 
-   WRONG: User says "GPT-5" -> your clarifying question lists "GPT-4" as
-          an example of what they might mean
-   RIGHT: User says "GPT-5" -> you use "GPT-5" exactly in all outputs
+4. optimized_prompt: refined, context-enriched version preserving
+   ALL user-provided proper nouns exactly.
 
-   If you are uncertain whether a named entity exists, do NOT ask the user
-   to confirm using your own alternatives. Instead, ask about their INTENT
-   or SCOPE only — never suggest replacement names.
+5. tier: ALWAYS return "smart". Never return any other value.
+   Deep sessions are user-initiated — never assigned by intake.
 
-3. TIER ASSIGNMENT: What research depth does this prompt require?
+6. output_type: e.g. "analysis", "comparison", "report", "plan",
+   "decision", "brainstorm", "factual answer"
 
-   - quick : factual lookups, simple comparisons, gut checks.
-             Single-dimension questions with known answers.
-   - smart : analysis, recommendations, technical evaluations.
-             Requires weighing tradeoffs or synthesizing multiple sources.
-   - deep  : architecture decisions, strategic plans, critical reports.
-             High stakes, significant ambiguity, or complex dependencies.
+7. reasoning: one sentence explaining the optimized prompt direction.
+   Do NOT mention tier in the reasoning — it is always smart.
 
-   Assign tier based on complexity and stakes — not prompt length.
-   A short prompt can require deep research.
-
-Always return valid JSON matching the schema exactly. No prose outside the
-JSON object. Required fields:
-  needs_clarification (bool), clarifying_question (string or null),
-  optimized_prompt (string), tier ("quick"|"smart"|"deep"),
-  output_type (string), reasoning (string)
+Return valid JSON only. No prose outside the JSON object.
 """
+
+
+_INTAKE_SYSTEM = _build_intake_system_prompt()
 
 
 def _is_retriable(exc: Exception) -> bool:
