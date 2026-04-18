@@ -1,0 +1,53 @@
+name: Weekly Model Currency Check
+
+on:
+  schedule:
+    - cron: '0 9 * * 1'  # Every Monday 9am UTC
+  workflow_dispatch:       # Allow manual trigger
+
+jobs:
+  check-models:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install dependencies
+        run: pip install uv && uv sync
+
+      - name: Run model currency check
+        id: check
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY:    ${{ secrets.OPENAI_API_KEY }}
+          GOOGLE_API_KEY:    ${{ secrets.GOOGLE_API_KEY }}
+          XAI_API_KEY:       ${{ secrets.XAI_API_KEY }}
+        run: uv run python -m tools.check_models
+
+      - name: Open issue if stale models found
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: 'Model currency check — stale model IDs detected',
+              body: [
+                '## Stale Model IDs Detected',
+                '',
+                'The weekly model currency check found one or more stale model IDs.',
+                '',
+                '**Action required:**',
+                '1. Run `python -m tools.check_models --fix` locally',
+                '2. Update `backend/.env` or `model_config.py` with current IDs',
+                '3. Open a PR with the updates',
+                '',
+                'Check the workflow run for specific details.',
+              ].join('\n'),
+              labels: ['maintenance', 'model-config']
+            })
