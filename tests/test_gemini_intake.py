@@ -46,9 +46,9 @@ AMBIGUOUS_DECISION = _decision(
 )
 FINAL_DECISION = _decision(
     optimized_prompt="Refined prompt incorporating the user's clarification answer",
-    tier="deep",
+    tier="smart",
     output_type="report",
-    reasoning="Deep selected — architecture decision with significant tradeoffs",
+    reasoning="Smart selected — architecture decision with significant tradeoffs",
 )
 
 
@@ -57,7 +57,7 @@ FINAL_DECISION = _decision(
 # ---------------------------------------------------------------------------
 
 def test_clear_prompt_completes_in_one_turn():
-    with patch("backend.intake.call_gpt4o_mini_intake", return_value=CLEAR_DECISION):
+    with patch("backend.models.openai_client.call_gpt4o_mini_intake", return_value=CLEAR_DECISION):
         session = IntakeSession()
         result = session.analyze("How do I design a RAG pipeline?")
 
@@ -74,7 +74,7 @@ def test_clear_prompt_completes_in_one_turn():
 # ---------------------------------------------------------------------------
 
 def test_ambiguous_prompt_returns_clarifying_question():
-    with patch("backend.intake.call_gpt4o_mini_intake", return_value=AMBIGUOUS_DECISION):
+    with patch("backend.models.openai_client.call_gpt4o_mini_intake", return_value=AMBIGUOUS_DECISION):
         session = IntakeSession()
         result = session.analyze("I need help with my project")
 
@@ -90,7 +90,7 @@ def test_ambiguous_prompt_returns_clarifying_question():
 # ---------------------------------------------------------------------------
 
 def test_clarification_answer_completes_session():
-    with patch("backend.intake.call_gpt4o_mini_intake", side_effect=[AMBIGUOUS_DECISION, FINAL_DECISION]):
+    with patch("backend.models.openai_client.call_gpt4o_mini_intake", side_effect=[AMBIGUOUS_DECISION, FINAL_DECISION]):
         session = IntakeSession()
         r1 = session.analyze("I need help with my project")
         assert r1["status"] == "clarifying"
@@ -99,7 +99,7 @@ def test_clarification_answer_completes_session():
 
     assert r2["status"] == "complete"
     assert r2["config"]["optimized_prompt"] == "Refined prompt incorporating the user's clarification answer"
-    assert r2["config"]["tier"] == "deep"
+    assert r2["config"]["tier"] == "smart"
     assert session.complete is True
 
 
@@ -107,10 +107,10 @@ def test_clarification_answer_completes_session():
 # Test 4: Tier is always one of "quick", "smart", "deep"
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("tier", ["quick", "smart", "deep"])
+@pytest.mark.parametrize("tier", ["smart"])
 def test_tier_is_valid_literal(tier):
     decision = _decision(tier=tier)
-    with patch("backend.intake.call_gpt4o_mini_intake", return_value=decision):
+    with patch("backend.models.openai_client.call_gpt4o_mini_intake", return_value=decision):
         session = IntakeSession()
         result = session.analyze("Test prompt")
     assert result["config"]["tier"] == tier
@@ -127,12 +127,37 @@ def test_invalid_tier_raises_validation_error():
         )
 
 
+def test_quick_tier_is_invalid_for_intake():
+    """Intake always returns smart — quick is no longer a valid IntakeDecision tier."""
+    with pytest.raises(ValidationError):
+        IntakeDecision(
+            needs_clarification=False,
+            optimized_prompt="Test",
+            tier="quick",
+            output_type="report",
+            reasoning="test",
+        )
+
+
+def test_deep_tier_is_invalid_for_intake():
+    """Intake always returns smart — deep is no longer a valid IntakeDecision tier.
+    Users may upgrade to deep via the frontend confirmation modal."""
+    with pytest.raises(ValidationError):
+        IntakeDecision(
+            needs_clarification=False,
+            optimized_prompt="Test",
+            tier="deep",
+            output_type="report",
+            reasoning="test",
+        )
+
+
 # ---------------------------------------------------------------------------
 # Test 5: Maximum one clarifying turn — second respond() returns existing config
 # ---------------------------------------------------------------------------
 
 def test_second_respond_returns_existing_config_without_api_call():
-    with patch("backend.intake.call_gpt4o_mini_intake", side_effect=[AMBIGUOUS_DECISION, FINAL_DECISION]) as mock_api:
+    with patch("backend.models.openai_client.call_gpt4o_mini_intake", side_effect=[AMBIGUOUS_DECISION, FINAL_DECISION]) as mock_api:
         session = IntakeSession()
         session.analyze("Ambiguous prompt")
         session.respond("First answer")
@@ -290,7 +315,7 @@ def test_clarifying_question_does_not_substitute_model_names():
     This test asserts the correct pattern: an intent-only question contains
     no model names from the training data that contradict the user's prompt.
     """
-    with patch("backend.intake.call_gpt4o_mini_intake", return_value=_INTENT_ONLY_QUESTION):
+    with patch("backend.models.openai_client.call_gpt4o_mini_intake", return_value=_INTENT_ONLY_QUESTION):
         session = IntakeSession()
         result = session.analyze(_PRICING_PROMPT)
 
@@ -307,7 +332,7 @@ def test_clarifying_question_with_substituted_names_is_detectable():
     the assertions above would catch it. This test confirms the detection logic
     works against a known-bad response.
     """
-    with patch("backend.intake.call_gpt4o_mini_intake", return_value=_SUBSTITUTED_QUESTION):
+    with patch("backend.models.openai_client.call_gpt4o_mini_intake", return_value=_SUBSTITUTED_QUESTION):
         session = IntakeSession()
         result = session.analyze(_PRICING_PROMPT)
 
@@ -329,9 +354,9 @@ _PRESERVED_FINAL = _decision(
         "GPT-5, and Gemini 2.5 Pro as of April 2026. The user wants standard "
         "API pricing, not enterprise contract rates."
     ),
-    tier="quick",
+    tier="smart",
     output_type="comparison",
-    reasoning="Quick — factual pricing lookup with named models",
+    reasoning="Smart — factual pricing lookup with named models",
 )
 
 _SUBSTITUTED_FINAL = _decision(
@@ -340,9 +365,9 @@ _SUBSTITUTED_FINAL = _decision(
         "Compare the current standard API pricing tiers for Claude 3 Opus, "
         "GPT-4, and Gemini 1.5 Pro as of April 2026."
     ),
-    tier="quick",
+    tier="smart",
     output_type="comparison",
-    reasoning="Quick — factual pricing lookup",
+    reasoning="Smart — factual pricing lookup",
 )
 
 
@@ -351,7 +376,7 @@ def test_turn1_optimized_prompt_preserves_original_model_names():
     After the user answers the clarifying question, the optimized_prompt must
     contain the model names from the original prompt, not substitutions.
     """
-    with patch("backend.intake.call_gpt4o_mini_intake",
+    with patch("backend.models.openai_client.call_gpt4o_mini_intake",
                side_effect=[_INTENT_ONLY_QUESTION, _PRESERVED_FINAL]):
         session = IntakeSession()
         session.analyze(_PRICING_PROMPT)
@@ -372,7 +397,7 @@ def test_turn1_substituted_prompt_is_detectable():
     substituted model names, the assertions above would catch it. This test
     confirms the detection logic works against a known-bad response.
     """
-    with patch("backend.intake.call_gpt4o_mini_intake",
+    with patch("backend.models.openai_client.call_gpt4o_mini_intake",
                side_effect=[_INTENT_ONLY_QUESTION, _SUBSTITUTED_FINAL]):
         session = IntakeSession()
         session.analyze(_PRICING_PROMPT)
