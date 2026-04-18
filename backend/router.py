@@ -247,6 +247,7 @@ FACTUAL_CONTRADICTION_SIGNALS = [
     "as of 2026", "as of april 2026", "current pricing", "launched",
     "released", "no longer available", "wrong", "inaccurate",
     "this is false", "this is incorrect", "has been superseded",
+    "contradicts", "disagrees", "not accurate", "factually wrong",
 ]
 
 
