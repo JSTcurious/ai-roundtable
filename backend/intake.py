@@ -87,12 +87,12 @@ def call_intake(prompt: str) -> tuple:
         Fallback2: INTAKE_FALLBACK2 (claude-haiku, Anthropic)
         Emergency: Passthrough      (smart tier defaults, never fails)
     """
-    from backend.models.openai_client import call_intake_primary
+    from backend.models.openai_client import call_gpt4o_mini_intake
     from backend.models.openrouter_client import call_intake_fallback1
     from backend.models.anthropic_client import call_intake_fallback2
 
     return call_with_fallback(
-        primary_fn=lambda: call_intake_primary(prompt),
+        primary_fn=lambda: call_gpt4o_mini_intake(prompt),
         fallback_fns=[
             lambda: call_intake_fallback1(prompt),
             lambda: call_intake_fallback2(prompt),
