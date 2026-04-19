@@ -20,8 +20,8 @@ function SynthesisPanel({ content, isStreaming, complete }) {
   return (
     <div className="flex max-h-[400px] w-full flex-col overflow-hidden rounded-lg border border-border bg-surface px-4 py-3" style={{ borderLeft: "3px solid #E8712A" }}>
       <div className="mb-2 shrink-0 text-xs font-semibold uppercase tracking-wide text-claude">
-        Claude + Chair
-        <span className="font-normal text-text-secondary"> · final deliverable</span>
+        CLAUDE
+        <span className="font-normal text-text-secondary"> - Synthesis</span>
       </div>
       <div className="synthesis-panel-scroll min-h-0 flex-1">
         <div className="markdown-session break-words text-[0.9375rem] leading-relaxed text-text-primary">

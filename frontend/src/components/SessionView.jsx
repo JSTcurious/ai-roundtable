@@ -727,7 +727,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     // SYNTHESIS — active during observations + synthesis thinking/streaming, done when final
     const sDone = isResume || synthesisFinal;
     const sActive = synthesisPhaseEntered && !synthesisFinal;
-    const sLabel = synthesisThinking || synthesisStreaming ? "SYNTHESIZING..." : "SYNTHESIS";
+    const sLabel = synthesisThinking || synthesisStreaming ? "SYNTHESIZING..." : "FINAL ANSWER";
 
     return { promptDone, transcriptDone, transcriptActive, factDone, factActive, sDone, sActive, sLabel };
   }, [isResume, sessionStarted, synthesisPhaseEntered, perplexityPhase, synthesisThinking, synthesisStreaming, synthesisFinal]);
