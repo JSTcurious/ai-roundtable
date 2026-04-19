@@ -1144,8 +1144,8 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
               {/* Chips */}
               {awaitingUserTake && userTakeChips.length > 0 && (
                 <div>
-                  <p className="mb-3 text-xs text-text-secondary">
-                    Here are some perspectives to consider:
+                  <p className="mb-3 text-[11px] text-text-secondary opacity-60">
+                    Select what resonates:
                   </p>
                   <div className="space-y-2">
                     {userTakeChips.map((chip) => {
@@ -1155,7 +1155,14 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
                       return (
                         <div key={label}>
                           {/* Chip row: label button + expand toggle */}
-                          <div className="flex items-center gap-1">
+                          <div
+                            className="flex items-center gap-1 rounded-full transition-colors duration-150"
+                            style={
+                              expanded
+                                ? { borderColor: "#f59e0b", background: "rgba(245,158,11,0.08)", border: "1px solid #f59e0b" }
+                                : {}
+                            }
+                          >
                             <button
                               type="button"
                               onClick={() => !synthesisRequested && toggleChip(label)}
@@ -1174,7 +1181,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
                               <button
                                 type="button"
                                 onClick={() => toggleExpanded(label)}
-                                className="shrink-0 rounded-full px-2 py-1 text-xs transition-colors focus:outline-none"
+                                className="shrink-0 rounded-full px-2.5 py-1 text-base leading-none transition-colors focus:outline-none"
                                 style={{ color: expanded ? "#F5A623" : "#666666" }}
                                 aria-label={expanded ? "Hide evidence" : "Show evidence"}
                                 aria-expanded={expanded}
@@ -1186,8 +1193,14 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
                           {/* Evidence accordion */}
                           {expanded && evidence && (
                             <div
-                              className="ml-4 mt-1.5 rounded-md px-3 py-2 text-xs leading-relaxed"
-                              style={{ color: "#888888", background: "#161616", borderLeft: "2px solid #2a2a2a" }}
+                              className="ml-4 mt-1.5 rounded-md px-3 text-xs leading-relaxed"
+                              style={{
+                                color: "#888888",
+                                background: "#161616",
+                                borderLeft: "2px solid #2a2a2a",
+                                paddingTop: "8px",
+                                paddingBottom: "4px",
+                              }}
                             >
                               {evidence}
                             </div>
@@ -1214,7 +1227,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
                     placeholder="What's your read on this? Any model you trust more? Anything you want weighted differently? (optional)"
                     className="w-full resize-y rounded-md border border-border bg-bg px-3 py-2 text-sm leading-relaxed text-text-primary placeholder:text-text-secondary focus:border-border-focus focus:outline-none disabled:opacity-50"
                   />
-                  <div className="flex justify-end">
+                  <div className="flex justify-center" style={{ marginTop: "16px" }}>
                     <button
                       type="button"
                       onClick={handleSynthesize}

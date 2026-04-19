@@ -558,7 +558,7 @@ a brief evidence note that explains why this perspective is worth considering.
 Rules:
 - Be specific to THIS session's content — not generic
 - Reference specific models, claims, or findings where relevant
-- Include at least one skeptical or contrarian option
+- Include no more than one skeptical or contrarian option — vary perspectives across agreement, skepticism, action, and nuance
 - Include at least one that sides with the fact-check over round-1
 - label: under 8 words
 - evidence: 2-3 sentences of specific context from the research
