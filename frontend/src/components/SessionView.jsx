@@ -47,40 +47,6 @@ function wsUrlFromApiBase() {
 
 /** @typedef {'idle' | 'round1_parallel' | 'perplexity' | 'synthesis'} StreamPhase */
 
-/**
- * Collapsible stage header — active stages show plain label, done stages show toggle.
- */
-function StageHeader({ label, summary, done, open, onToggle, active }) {
-  if (!done) {
-    return (
-      <h2 className={`text-xs font-semibold uppercase tracking-wide text-text-secondary ${active ? "animate-pulse" : ""}`}>
-        {label}
-      </h2>
-    );
-  }
-  return (
-    <button
-      type="button"
-      onClick={onToggle}
-      className="flex w-full items-center gap-2 text-left focus:outline-none"
-      aria-expanded={open}
-    >
-      <span
-        aria-hidden
-        className="shrink-0 text-[10px] text-text-secondary"
-        style={{ display: "inline-block", transform: open ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.15s" }}
-      >
-        ▾
-      </span>
-      <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">{label}</span>
-      {!open && summary && (
-        <span className="ml-1 text-xs text-[#555555]">{summary}</span>
-      )}
-      <span className="ml-auto text-xs text-[#555555]" aria-hidden>✓</span>
-    </button>
-  );
-}
-
 function timestamp() {
   return new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
@@ -300,10 +266,8 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
   const [annotations, setAnnotations] = useState([]);
   const [annotationsOpen, setAnnotationsOpen] = useState(false);
 
-  // ── Synthesis collapse/expand state ──────────────────────────────────────
-  // Synthesis auto-expands when complete; user can toggle after.
-  const [synthesisOpen, setSynthesisOpen] = useState(false);
-  const synthesisAutoExpandedRef = useRef(false);
+  // ── Annotations ref — mirrors state for access inside WS closure ────────
+  const annotationsRef = useRef([]);
 
   const r1CountsRef = useRef({ Gemini: 0, GPT: 0, Grok: 0, Claude: 0 });
 
@@ -440,9 +404,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     setSessionComplete(true);
     phaseRef.current = "idle";
     r1CountsRef.current = { Gemini: ge.length, GPT: gp.length, Grok: grk.length, Claude: cla.length };
-    // Resume: synthesis auto-expanded
-    setSynthesisOpen(true);
-    synthesisAutoExpandedRef.current = true;
+    // Resume: all stages complete
   }, [resumeTranscript, sessionConfig]);
 
   useEffect(() => {
@@ -485,8 +447,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     setSessionComplete(false);
     setAnnotations([]);
     setAnnotationsOpen(false);
-    setSynthesisOpen(false);
-    synthesisAutoExpandedRef.current = false;
+    annotationsRef.current = [];
 
     const url = wsUrlFromApiBase();
 
@@ -576,9 +537,12 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
             onSynthesisCompleteRef.current?.(data.content ?? "");
             break;
           case "synthesis_annotations":
+            console.log("[SESSION NOTES] synthesis_annotations received:", data.annotations);
+            annotationsRef.current = data.annotations || [];
             setAnnotations(data.annotations || []);
             break;
           case "session_complete":
+            console.log("[SESSION NOTES] session_complete fired, annotations:", annotationsRef.current);
             completedNormallyRef.current = true;
             setSessionComplete(true);
             break;
@@ -774,14 +738,6 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     (synthesisPhaseEntered && perplexityPhase !== "thinking");
   const synthesisStageDone = isResume || synthesisFinal;
 
-  // Auto-expand synthesis when complete (fires once on transition)
-  useEffect(() => {
-    if (synthesisStageDone && !synthesisAutoExpandedRef.current) {
-      synthesisAutoExpandedRef.current = true;
-      setSynthesisOpen(true);
-    }
-  }, [synthesisStageDone]);
-
   const showTranscriptRoundtable = isResume || sessionStarted;
 
   const showGeminiThinking =
@@ -819,8 +775,6 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     claudeR1Streaming ||
     (Boolean(String(claudeR1 || "").trim()) && !isSkipNotice(claudeR1)) ||
     (claudeR1Complete && !isSkipNotice(claudeR1));
-
-  const round1GridClass = "flex flex-col gap-4";
 
   return (
     <div className="min-h-screen bg-bg text-text-primary">
@@ -909,65 +863,57 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
           <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-secondary">
             Optimized Prompt
           </h2>
-          <div className="bubble-scroll max-h-[3rem] overflow-y-auto rounded-lg border border-border bg-surface px-4 py-3 text-sm leading-relaxed text-text-primary whitespace-pre-wrap">
+          <div className="bubble-scroll max-h-[6rem] overflow-y-auto rounded-lg border border-border bg-surface px-4 py-3 text-sm leading-relaxed text-text-primary whitespace-pre-wrap">
             {displayPrompt || "—"}
           </div>
         </section>
 
-        {/* ── SYNTHESIS — shown when phase entered; sits immediately below PROMPT ── */}
+        {/* ── SYNTHESIS — shown when phase entered; always expanded ── */}
         {synthesisPhaseEntered && (
           <section aria-label="Synthesis" className="space-y-3">
-            <StageHeader
-              label={breadcrumbState.sLabel}
-              summary={null}
-              done={synthesisStageDone}
-              open={synthesisOpen}
-              onToggle={() => setSynthesisOpen((o) => !o)}
-              active={!synthesisStageDone}
-            />
-            {/* Content: show when active OR when done+open */}
-            {(!synthesisStageDone || synthesisOpen) && (
-              <div className="space-y-4">
-                {synthesisThinking && !synthesisFinal && !String(synthesisText).trim() && (
-                  <ThinkingDotsBubble
-                    label="🟠 CLAUDE"
-                    color={MODEL_HEX.Claude}
-                    subtitle="Synthesizing your roundtable..."
-                  />
-                )}
-                {(synthesisStreaming || synthesisFinal || synthesisText.length > 0) && (
-                  <SynthesisPanel
-                    content={synthesisBody}
-                    isStreaming={synthesisStreaming && !synthesisFinal}
-                    complete={synthesisFinal}
-                  />
-                )}
-                {/* Session notes — only when there are noteworthy annotations */}
-                {sessionComplete && annotations.length > 0 && (
-                  <div className="rounded-lg border border-border bg-[#161616]" style={{ borderLeft: "3px solid #2a2a2a" }}>
-                    <button
-                      type="button"
-                      onClick={() => setAnnotationsOpen((o) => !o)}
-                      className="flex w-full items-center gap-2 px-4 py-3 text-left text-xs text-text-secondary transition-colors hover:text-text-primary focus:outline-none"
-                      aria-expanded={annotationsOpen}
-                    >
-                      <span aria-hidden style={{ display: "inline-block", transform: annotationsOpen ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.15s" }}>▾</span>
-                      Session notes
-                    </button>
-                    {annotationsOpen && (
-                      <ul className="space-y-1.5 px-4 pb-4 pt-1">
-                        {annotations.map((a, i) => (
-                          <li key={i} className="flex gap-2 text-xs leading-relaxed text-text-secondary">
-                            <span className="shrink-0 text-[#444444]">·</span>
-                            <span>{a}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
+            <h2 className={`text-xs font-semibold uppercase tracking-wide text-text-secondary${!synthesisStageDone ? " animate-pulse" : ""}`}>
+              {breadcrumbState.sLabel}
+            </h2>
+            <div className="space-y-4">
+              {synthesisThinking && !synthesisFinal && !String(synthesisText).trim() && (
+                <ThinkingDotsBubble
+                  label="🟠 CLAUDE"
+                  color={MODEL_HEX.Claude}
+                  subtitle="Synthesizing your roundtable..."
+                />
+              )}
+              {(synthesisStreaming || synthesisFinal || synthesisText.length > 0) && (
+                <SynthesisPanel
+                  content={synthesisBody}
+                  isStreaming={synthesisStreaming && !synthesisFinal}
+                  complete={synthesisFinal}
+                />
+              )}
+              {/* Session notes — only when there are noteworthy annotations */}
+              {sessionComplete && annotations.length > 0 && (
+                <div className="rounded-lg border border-border bg-[#161616]" style={{ borderLeft: "3px solid #2a2a2a" }}>
+                  <button
+                    type="button"
+                    onClick={() => setAnnotationsOpen((o) => !o)}
+                    className="flex w-full items-center gap-2 px-4 py-3 text-left text-xs text-text-secondary transition-colors hover:text-text-primary focus:outline-none"
+                    aria-expanded={annotationsOpen}
+                  >
+                    <span aria-hidden style={{ display: "inline-block", transform: annotationsOpen ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.15s" }}>▾</span>
+                    Session notes
+                  </button>
+                  {annotationsOpen && (
+                    <ul className="space-y-1.5 px-4 pb-4 pt-1">
+                      {annotations.map((a, i) => (
+                        <li key={i} className="flex gap-2 text-xs leading-relaxed text-text-secondary">
+                          <span className="shrink-0 text-[#444444]">·</span>
+                          <span>{a}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </div>
           </section>
         )}
 
@@ -977,7 +923,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
             <h2 className={`text-xs font-semibold uppercase tracking-wide text-text-secondary${perplexityPhase === "thinking" ? " animate-pulse" : ""}`}>
               Fact-Check
             </h2>
-            <div className="overflow-y-auto space-y-2" style={{ maxHeight: "300px" }}>
+            <div className="space-y-2">
               {perplexityPhase === "thinking" && (
                 <ThinkingDotsBubble label="🔎 PERPLEXITY" color={MODEL_HEX.Perplexity} />
               )}
@@ -989,6 +935,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
                   round="audit"
                   complete
                   titleOverride="🔎 PERPLEXITY"
+                  contentMaxHeight="300px"
                 />
               )}
             </div>
@@ -1001,8 +948,8 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
             <h2 className={`text-xs font-semibold uppercase tracking-wide text-text-secondary${!researchStageDone ? " animate-pulse" : ""}`}>
               Research
             </h2>
-            <div className="overflow-y-auto space-y-4" style={{ maxHeight: "400px" }}>
-              {/* Alphabetical order: Claude, Gemini, GPT, Grok */}
+            {/* Alphabetical order: Claude, Gemini, GPT, Grok — each with its own scrollable bubble */}
+            <div className="space-y-4">
 
               {/* Claude */}
               {claudeR1RoundActive && (
@@ -1019,6 +966,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
                       isStreaming={claudeR1Streaming}
                       round="round1"
                       complete={claudeR1Complete}
+                      contentMaxHeight="200px"
                     />
                   )}
                 </div>
@@ -1040,6 +988,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
                         isStreaming={geminiR1Streaming}
                         round="round1"
                         complete={geminiR1Complete}
+                        contentMaxHeight="200px"
                       />
                       {geminiAdvisorReviewing && (
                         <p className="text-xs text-[#888888]" role="status" aria-live="polite">⚖ advisor reviewing...</p>
@@ -1065,6 +1014,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
                         isStreaming={gptR1Streaming}
                         round="round1"
                         complete={gptR1Complete}
+                        contentMaxHeight="200px"
                       />
                       {gptAdvisorReviewing && (
                         <p className="text-xs text-[#888888]" role="status" aria-live="polite">⚖ advisor reviewing...</p>
@@ -1090,6 +1040,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
                         isStreaming={grokR1Streaming}
                         round="round1"
                         complete={grokR1Complete}
+                        contentMaxHeight="200px"
                       />
                       {grokAdvisorReviewing && (
                         <p className="text-xs text-[#888888]" role="status" aria-live="polite">⚖ advisor reviewing...</p>
