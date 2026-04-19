@@ -604,7 +604,7 @@ async def generate_user_take_chips(
     Returns a list of 3-4 chip strings. Returns [] on any error (fail-open —
     YOUR TAKE still shows without chips).
     """
-    from backend.models.openai_client import call_for_chips
+    from backend.models.anthropic_client import call_for_chips
 
     prompt = (
         f"Research responses:\n{_format_round1_for_chips(round1_responses)}\n\n"
