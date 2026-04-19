@@ -348,7 +348,7 @@ async def session_run(req: SessionRunRequest):
 
     # ── Perplexity audit (Phase 2) with fallback ──────────────────────────────
     try:
-        audit_text, factcheck_provider = await asyncio.to_thread(
+        audit_text, factcheck_provider, _ = await asyncio.to_thread(
             audit_with_fallback,
             {"gemini": gemini_text, "gpt": gpt_text,
              "grok": grok_text, "claude": claude_r1_text},
@@ -990,7 +990,7 @@ async def session_websocket(websocket: WebSocket):
         # ── Perplexity audit (Phase 2) with fallback ──────────────────────────
         await websocket.send_json({"type": "perplexity_thinking"})
         try:
-            audit_text, factcheck_provider = await asyncio.to_thread(
+            audit_text, factcheck_provider, citations = await asyncio.to_thread(
                 audit_with_fallback,
                 {"gemini": gemini_text, "gpt": gpt_text,
                  "grok": grok_text, "claude": claude_r1_text},
@@ -1000,10 +1000,15 @@ async def session_websocket(websocket: WebSocket):
         except Exception as exc:
             audit_text = f"[Perplexity audit unavailable: {exc}]"
             factcheck_provider = "emergency"
+            citations = []
         health.factcheck_model = factcheck_provider
         health.factcheck_degraded = (factcheck_provider != "primary")
         transcript.add_model_message("Perplexity", audit_text, round="audit")
-        await websocket.send_json({"type": "perplexity_complete", "content": audit_text})
+        await websocket.send_json({
+            "type": "perplexity_complete",
+            "content": audit_text,
+            "citations": citations,
+        })
 
         # ── Synthesis: route to analytical or factual model based on audit ────
         synthesis_model_id, synthesis_route = select_synthesis_model(audit_text)

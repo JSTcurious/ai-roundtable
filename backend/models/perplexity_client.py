@@ -164,10 +164,24 @@ def _call_perplexity_audit(
     tier: str,
     model: str = None,
 ) -> str:
-    """Call Perplexity audit API with the given model."""
+    """Call Perplexity audit API with the given model. Returns content only (legacy)."""
     req = _build_audit_request(round1_responses, research_text, tier, model=model)
     response = _get_client().chat.completions.create(**req)
     return response.choices[0].message.content.strip()
+
+
+def _call_perplexity_audit_with_citations(
+    round1_responses: dict,
+    research_text: str,
+    tier: str,
+    model: str = None,
+) -> tuple:
+    """Call Perplexity audit API. Returns (content_str, citations_list)."""
+    req = _build_audit_request(round1_responses, research_text, tier, model=model)
+    response = _get_client().chat.completions.create(**req)
+    content = response.choices[0].message.content.strip()
+    citations = list(getattr(response, "citations", None) or [])
+    return content, citations
 
 
 def _call_gpt_audit_with_web_search(
@@ -202,7 +216,7 @@ def audit_with_fallback(
 ) -> tuple:
     """
     Run Perplexity audit with fallback chain.
-    Returns (audit_text, provider_used).
+    Returns (audit_text, provider_used, citations_list).
 
     Chain:
         Primary:   Perplexity Sonar Pro  (FACTCHECK_PRIMARY)
@@ -210,12 +224,35 @@ def audit_with_fallback(
         Fallback2: GPT-5.4 + web search  (FACTCHECK_FALLBACK2, cross-provider)
         Emergency: Degraded notice string (never raises)
 
-    Both Perplexity tiers use the same Smart/Deep audit prompt.
+    Citations are extracted from Perplexity responses (list of URL strings).
+    Fallback2 and emergency return an empty citations list.
     """
     from backend.models.resilient_caller import call_with_fallback as _call_with_fallback
     from backend.models.model_config import FACTCHECK_PRIMARY, FACTCHECK_FALLBACK1
 
-    def _emergency_factcheck() -> str:
+    # Mutable container so closures can write citations out to the caller.
+    citations_holder: list = []
+
+    def _primary():
+        content, citations = _call_perplexity_audit_with_citations(
+            round1_responses, research_text, tier, model=FACTCHECK_PRIMARY,
+        )
+        citations_holder[:] = citations
+        return content
+
+    def _fallback1():
+        content, citations = _call_perplexity_audit_with_citations(
+            round1_responses, research_text, tier, model=FACTCHECK_FALLBACK1,
+        )
+        citations_holder[:] = citations
+        return content
+
+    def _fallback2():
+        citations_holder[:] = []
+        return _call_gpt_audit_with_web_search(round1_responses, research_text, tier)
+
+    def _emergency():
+        citations_holder[:] = []
         return (
             "[Fact-check unavailable — all fact-check providers failed. "
             "Synthesis is based on round-1 model responses only. "
@@ -223,23 +260,13 @@ def audit_with_fallback(
             "Verify key facts against official sources before acting.]"
         )
 
-    return _call_with_fallback(
-        primary_fn=lambda: _call_perplexity_audit(
-            round1_responses, research_text, tier,
-            model=FACTCHECK_PRIMARY,
-        ),
-        fallback_fns=[
-            lambda: _call_perplexity_audit(
-                round1_responses, research_text, tier,
-                model=FACTCHECK_FALLBACK1,
-            ),
-            lambda: _call_gpt_audit_with_web_search(
-                round1_responses, research_text, tier,
-            ),
-        ],
-        emergency_fn=_emergency_factcheck,
+    result, provider = _call_with_fallback(
+        primary_fn=_primary,
+        fallback_fns=[_fallback1, _fallback2],
+        emergency_fn=_emergency,
         role="factcheck",
     )
+    return result, provider, citations_holder
 
 
 def audit(model_responses: dict, research_text: str = "", tier: str = "smart") -> str:

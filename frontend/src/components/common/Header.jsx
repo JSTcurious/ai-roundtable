@@ -35,7 +35,7 @@ function Header({ onHome, onSaveExit, children }) {
             className="w-24 shrink-0 text-right text-sm font-medium uppercase tracking-wide transition-colors hover:underline focus:outline-none"
             style={{ color: "#F5A623" }}
           >
-            Save & Exit
+            Save Session
           </button>
         ) : (
           <div className="w-24 shrink-0" aria-hidden />

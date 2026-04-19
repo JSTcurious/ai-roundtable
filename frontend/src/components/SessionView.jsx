@@ -15,9 +15,8 @@ import { MODEL_HEX } from "../constants/modelColors";
 import Header from "./common/Header";
 import ModelBubble from "./common/ModelBubble";
 import SynthesisPanel from "./SynthesisPanel";
-import TakeFurther from "./TakeFurther";
-
 const DEFAULT_HTTP = "http://localhost:8000";
+const API_BASE = process.env.REACT_APP_API_URL || DEFAULT_HTTP;
 
 /** Browser WebSocket has no configurable open timeout; guard hung connects. */
 const WS_CONNECT_TIMEOUT_MS = 120_000;
@@ -104,18 +103,6 @@ function buildTranscriptDict(sessionConfig, prompt, geminiR1, gptR1, grokR1, cla
     session_config: sessionConfig,
     intake_summary: sessionConfig?.intake_summary ?? null,
   };
-}
-
-function downloadJsonFile(payload, filename) {
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
 }
 
 function formatTierBadge(tier) {
@@ -262,12 +249,8 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
 
   const [leaveIntent, setLeaveIntent] = useState(null);
 
-  // ── Synthesis annotations — shown in Session notes panel ────────────────
-  const [annotations, setAnnotations] = useState([]);
-  const [annotationsOpen, setAnnotationsOpen] = useState(false);
-
-  // ── Annotations ref — mirrors state for access inside WS closure ────────
-  const annotationsRef = useRef([]);
+  // ── Perplexity citations — shown below FINAL ANSWER ─────────────────────
+  const [citations, setCitations] = useState([]);
 
   const r1CountsRef = useRef({ Gemini: 0, GPT: 0, Grok: 0, Claude: 0 });
 
@@ -404,6 +387,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     setSessionComplete(true);
     phaseRef.current = "idle";
     r1CountsRef.current = { Gemini: ge.length, GPT: gp.length, Grok: grk.length, Claude: cla.length };
+    setCitations([]);
     // Resume: all stages complete
   }, [resumeTranscript, sessionConfig]);
 
@@ -445,9 +429,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     setSynthesisStreaming(false);
     setSynthesisFinal(false);
     setSessionComplete(false);
-    setAnnotations([]);
-    setAnnotationsOpen(false);
-    annotationsRef.current = [];
+    setCitations([]);
 
     const url = wsUrlFromApiBase();
 
@@ -520,6 +502,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
             break;
           case "perplexity_complete":
             setPerplexityContent(data.content ?? "");
+            setCitations(data.citations || []);
             setPerplexityPhase("content");
             break;
           case "synthesis_thinking":
@@ -536,13 +519,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
             setStreamPhaseMarker((n) => n + 1);
             onSynthesisCompleteRef.current?.(data.content ?? "");
             break;
-          case "synthesis_annotations":
-            console.log("[SESSION NOTES] synthesis_annotations received:", data.annotations);
-            annotationsRef.current = data.annotations || [];
-            setAnnotations(data.annotations || []);
-            break;
           case "session_complete":
-            console.log("[SESSION NOTES] session_complete fired, annotations:", annotationsRef.current);
             completedNormallyRef.current = true;
             setSessionComplete(true);
             break;
@@ -622,14 +599,40 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
 
   const sessionSettled = synthesisFinal;
 
-  const downloadResumePayload = useCallback(() => {
-    const transcript = {
-      messages: transcriptForExport.messages,
-      intake_summary: transcriptForExport.intake_summary ?? null,
-    };
-    const slug = new Date().toISOString().slice(0, 10);
-    downloadJsonFile({ session_config: sessionConfig, transcript }, `ai-roundtable-session-${slug}.json`);
-  }, [sessionConfig, transcriptForExport]);
+  const downloadSessionMarkdown = useCallback(async () => {
+    if (!transcriptForExport || !sessionConfig) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/export/markdown`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "full", transcript: transcriptForExport, session_config: sessionConfig }),
+      });
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `ai-roundtable-${new Date().toISOString().slice(0, 10)}.md`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch { /* navigate home regardless */ }
+  }, [transcriptForExport, sessionConfig]);
+
+  const downloadFinalAnswerTxt = useCallback(() => {
+    if (!synthesisText) return;
+    const ts = new Date().toISOString().slice(0, 16).replace("T", "-").replace(":", "");
+    const blob = new Blob([synthesisText], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `final-answer-${ts}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }, [synthesisText]);
 
   const requestHome = useCallback(() => {
     if (!onNavigateHome) return;
@@ -637,25 +640,25 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     else setLeaveIntent("home");
   }, [onNavigateHome, sessionSettled]);
 
-  const requestSaveExit = useCallback(() => {
+  const requestSaveExit = useCallback(async () => {
     if (!onNavigateHome) return;
     if (sessionSettled) {
-      downloadResumePayload();
+      await downloadSessionMarkdown();
       onNavigateHome();
     } else {
       setLeaveIntent("save-exit");
     }
-  }, [onNavigateHome, sessionSettled, downloadResumePayload]);
+  }, [onNavigateHome, sessionSettled, downloadSessionMarkdown]);
 
-  const confirmLeave = useCallback(() => {
+  const confirmLeave = useCallback(async () => {
     const intent = leaveIntent;
     setLeaveIntent(null);
     if (!onNavigateHome) return;
     if (intent === "save-exit") {
-      downloadResumePayload();
+      await downloadSessionMarkdown();
     }
     onNavigateHome();
-  }, [leaveIntent, onNavigateHome, downloadResumePayload]);
+  }, [leaveIntent, onNavigateHome, downloadSessionMarkdown]);
 
   const inlineAlert = streamError || transportError;
   const synthesisBody =
@@ -787,11 +790,11 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
         >
           <div className="w-full max-w-md rounded-lg border border-border bg-surface px-5 py-5 shadow-lg">
             <h2 id="leave-dialog-title" className="text-base font-semibold text-text-primary">
-              {leaveIntent === "save-exit" ? "Save and exit?" : "Leave session?"}
+              {leaveIntent === "save-exit" ? "Save session and exit?" : "Leave session?"}
             </h2>
             <p className="mt-3 text-sm leading-relaxed text-text-secondary">
               {leaveIntent === "save-exit"
-                ? "Session in progress — your responses will be lost unless you save. Save a session .json file and go home?"
+                ? "Session in progress — your responses will be lost unless you save. Download a full session .md file and go home?"
                 : "Session in progress — your responses will be lost. Go home anyway?"}
             </p>
             <div className="mt-5 flex justify-end gap-2">
@@ -868,12 +871,24 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
           </div>
         </section>
 
-        {/* ── SYNTHESIS — shown when phase entered; always expanded ── */}
+        {/* ── FINAL ANSWER — shown when phase entered; always expanded ── */}
         {synthesisPhaseEntered && (
-          <section aria-label="Synthesis" className="space-y-3">
-            <h2 className={`text-xs font-semibold uppercase tracking-wide text-text-secondary${!synthesisStageDone ? " animate-pulse" : ""}`}>
-              {breadcrumbState.sLabel}
-            </h2>
+          <section aria-label="Final answer" className="space-y-3">
+            <div className="flex items-center gap-3">
+              <h2 className={`text-xs font-semibold uppercase tracking-wide text-text-secondary${!synthesisStageDone ? " animate-pulse" : ""}`}>
+                {breadcrumbState.sLabel}
+              </h2>
+              {synthesisFinal && (
+                <button
+                  type="button"
+                  onClick={downloadFinalAnswerTxt}
+                  className="text-xs text-[#555555] hover:text-text-secondary transition-colors focus:outline-none"
+                  aria-label="Save final answer as text file"
+                >
+                  save
+                </button>
+              )}
+            </div>
             <div className="space-y-4">
               {synthesisThinking && !synthesisFinal && !String(synthesisText).trim() && (
                 <ThinkingDotsBubble
@@ -889,28 +904,25 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
                   complete={synthesisFinal}
                 />
               )}
-              {/* Session notes — only when there are noteworthy annotations */}
-              {sessionComplete && annotations.length > 0 && (
-                <div className="rounded-lg border border-border bg-[#161616]" style={{ borderLeft: "3px solid #2a2a2a" }}>
-                  <button
-                    type="button"
-                    onClick={() => setAnnotationsOpen((o) => !o)}
-                    className="flex w-full items-center gap-2 px-4 py-3 text-left text-xs text-text-secondary transition-colors hover:text-text-primary focus:outline-none"
-                    aria-expanded={annotationsOpen}
-                  >
-                    <span aria-hidden style={{ display: "inline-block", transform: annotationsOpen ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.15s" }}>▾</span>
-                    Session notes
-                  </button>
-                  {annotationsOpen && (
-                    <ul className="space-y-1.5 px-4 pb-4 pt-1">
-                      {annotations.map((a, i) => (
-                        <li key={i} className="flex gap-2 text-xs leading-relaxed text-text-secondary">
-                          <span className="shrink-0 text-[#444444]">·</span>
-                          <span>{a}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
+              {/* Sources — citations from Perplexity fact-check */}
+              {sessionComplete && citations.length > 0 && (
+                <div className="space-y-1.5">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-text-secondary">Sources</p>
+                  <ol className="space-y-1">
+                    {citations.map((url, i) => (
+                      <li key={i} className="flex gap-2 text-xs text-[#888888]">
+                        <span className="shrink-0 text-[#555555]">[{i + 1}]</span>
+                        <a
+                          href={url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="break-all hover:text-text-secondary transition-colors"
+                        >
+                          {url}
+                        </a>
+                      </li>
+                    ))}
+                  </ol>
                 </div>
               )}
             </div>
@@ -1063,9 +1075,6 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
           </p>
         )}
 
-        {sessionComplete && (
-          <TakeFurther sessionConfig={sessionConfig} transcript={transcriptForExport} />
-        )}
       </div>
     </div>
   );
