@@ -59,6 +59,7 @@ from backend.router import (
     get_tier_config,
     get_round1_system_prompt,
     build_synthesis_prompt,
+    build_synthesis_system,
     select_synthesis_model,
     USE_CASE_LIBRARY,
     get_use_case,
@@ -178,6 +179,52 @@ async def get_use_case_by_id(use_case_id: str):
     if card is None:
         raise HTTPException(status_code=404, detail=f"Use case '{use_case_id}' not found.")
     return card
+
+
+@app.get("/api/model-info")
+async def get_model_info():
+    """
+    Return current model IDs for all labs at smart and deep tiers.
+
+    Used by IntakeFlow to render the expandable model breakdown below the
+    Smart/Deep slider — so the UI always reflects model_config.py constants
+    without hardcoding model names in JSX.
+    """
+    from backend.models.model_config import (
+        RESEARCH_CLAUDE_SMART_EXECUTOR,
+        RESEARCH_CLAUDE_SMART_ADVISOR,
+        RESEARCH_CLAUDE_DEEP,
+        RESEARCH_GEMINI_SMART_EXECUTOR,
+        RESEARCH_GEMINI_SMART_ADVISOR,
+        RESEARCH_GEMINI_DEEP,
+        RESEARCH_GPT_SMART_EXECUTOR,
+        RESEARCH_GPT_SMART_ADVISOR,
+        RESEARCH_GPT_DEEP,
+        RESEARCH_GROK_SMART_EXECUTOR,
+        RESEARCH_GROK_SMART_ADVISOR,
+        RESEARCH_GROK_DEEP,
+        FACTCHECK_PRIMARY,
+    )
+    return {
+        "smart": {
+            "claude":    {"executor": RESEARCH_CLAUDE_SMART_EXECUTOR,
+                          "advisor":  RESEARCH_CLAUDE_SMART_ADVISOR},
+            "gemini":    {"executor": RESEARCH_GEMINI_SMART_EXECUTOR,
+                          "advisor":  RESEARCH_GEMINI_SMART_ADVISOR},
+            "gpt":       {"executor": RESEARCH_GPT_SMART_EXECUTOR,
+                          "advisor":  RESEARCH_GPT_SMART_ADVISOR},
+            "grok":      {"executor": RESEARCH_GROK_SMART_EXECUTOR,
+                          "advisor":  RESEARCH_GROK_SMART_ADVISOR},
+            "factcheck": FACTCHECK_PRIMARY,
+        },
+        "deep": {
+            "claude":    RESEARCH_CLAUDE_DEEP,
+            "gemini":    RESEARCH_GEMINI_DEEP,
+            "gpt":       RESEARCH_GPT_DEEP,
+            "grok":      RESEARCH_GROK_DEEP,
+            "factcheck": FACTCHECK_PRIMARY,
+        },
+    }
 
 
 # ── Intake endpoints ──────────────────────────────────────────────────────────
@@ -768,16 +815,28 @@ async def _stream_model(
     return text
 
 
-async def _drain_client_pings(websocket: WebSocket) -> None:
+async def _drain_client_messages(
+    websocket: WebSocket,
+    take_queue: "asyncio.Queue | None" = None,
+) -> None:
     """
     Read client JSON while the session runs; answer keep-alive pings so inbound
     frames are not mistaken for session payloads.
+
+    If take_queue is provided, routes ``submit_user_take`` messages into it so
+    the session handler can await the user's perspective before synthesis.
     """
     try:
         while True:
             data = await websocket.receive_json()
             if isinstance(data, dict) and data.get("type") == "ping":
                 await websocket.send_json({"type": "pong"})
+            elif (
+                take_queue is not None
+                and isinstance(data, dict)
+                and data.get("type") == "submit_user_take"
+            ):
+                await take_queue.put(data.get("user_take", ""))
     except WebSocketDisconnect:
         return
     except asyncio.CancelledError:
@@ -911,7 +970,8 @@ async def session_websocket(websocket: WebSocket):
     optimized_prompt = config.get("optimized_prompt", prompt)
     transcript = _build_transcript(config, history, prompt)
 
-    ping_task = asyncio.create_task(_drain_client_pings(websocket))
+    user_take_queue: asyncio.Queue = asyncio.Queue()
+    ping_task = asyncio.create_task(_drain_client_messages(websocket, user_take_queue))
     try:
         await websocket.send_json({"type": "session_started"})
 
@@ -965,7 +1025,13 @@ async def session_websocket(websocket: WebSocket):
             "claude": claude_avail,
         }
 
-        async def _emit_model_tokens(sender: str, text: str) -> None:
+        async def _emit_model_tokens(
+            sender: str,
+            text: str,
+            model_used: str = "",
+            advisor_model: str = "",
+            availability: str = "primary",
+        ) -> None:
             body = text or ""
             step = 48
             for i in range(0, len(body), step):
@@ -973,13 +1039,40 @@ async def session_websocket(websocket: WebSocket):
                 async with send_lock:
                     await websocket.send_json({"type": "token", "sender": sender, "token": piece})
             async with send_lock:
-                await websocket.send_json({"type": "model_complete", "sender": sender})
+                await websocket.send_json({
+                    "type": "model_complete",
+                    "sender": sender,
+                    "model_used": model_used,
+                    "advisor_model": advisor_model,
+                    "tier": tier,
+                    "availability": availability,
+                })
 
         await asyncio.gather(
-            _emit_model_tokens("Gemini", gemini_text),
-            _emit_model_tokens("GPT",    gpt_text),
-            _emit_model_tokens("Grok",   grok_text),
-            _emit_model_tokens("Claude", claude_r1_text),
+            _emit_model_tokens(
+                "Gemini", gemini_text,
+                model_used=tier_config["gemini"]["executor"],
+                advisor_model=tier_config["gemini"]["advisor"],
+                availability=gemini_avail,
+            ),
+            _emit_model_tokens(
+                "GPT", gpt_text,
+                model_used=tier_config["gpt"]["executor"],
+                advisor_model=tier_config["gpt"]["advisor"],
+                availability=gpt_avail,
+            ),
+            _emit_model_tokens(
+                "Grok", grok_text,
+                model_used=tier_config["grok"]["executor"],
+                advisor_model=tier_config["grok"]["advisor"],
+                availability=grok_avail,
+            ),
+            _emit_model_tokens(
+                "Claude", claude_r1_text,
+                model_used=tier_config["claude"]["executor"],
+                advisor_model=tier_config["claude"]["advisor"],
+                availability=claude_avail,
+            ),
         )
 
         transcript.add_model_message("Gemini", gemini_text,    round="round1")
@@ -1004,25 +1097,34 @@ async def session_websocket(websocket: WebSocket):
         health.factcheck_model = factcheck_provider
         health.factcheck_degraded = (factcheck_provider != "primary")
         transcript.add_model_message("Perplexity", audit_text, round="audit")
+
+        # Determine factcheck display info for frontend transparency
+        _factcheck_display = {
+            "primary":   ("sonar-pro",  "primary"),
+            "fallback1": ("sonar",      "fallback"),
+            "fallback2": ("gpt-5.4",    "fallback2"),
+        }
+        _fc_model, _fc_avail = _factcheck_display.get(
+            factcheck_provider, ("sonar-pro", "primary")
+        )
         await websocket.send_json({
             "type": "perplexity_complete",
             "content": audit_text,
             "citations": citations,
+            "factcheck_model_used": _fc_model,
+            "factcheck_availability": _fc_avail,
         })
+
+        # ── Philosophy B: wait for user's perspective before synthesis ─────────
+        await websocket.send_json({"type": "awaiting_user_take"})
+        try:
+            user_take = await asyncio.wait_for(user_take_queue.get(), timeout=600.0)
+        except asyncio.TimeoutError:
+            user_take = ""
 
         # ── Synthesis: route to analytical or factual model based on audit ────
         synthesis_model_id, synthesis_route = select_synthesis_model(audit_text)
-        synthesis_system = build_synthesis_prompt(
-            output_type=output_type,
-            perplexity_findings=audit_text,
-            round1_responses={
-                "gemini": gemini_text,
-                "gpt":    gpt_text,
-                "grok":   grok_text,
-                "claude": claude_r1_text,
-            },
-            optimized_prompt=optimized_prompt,
-        )
+        synthesis_system = build_synthesis_system(user_take)
         synthesis_messages = [{"role": "user", "content": prompt}]
 
         await websocket.send_json({"type": "synthesis_thinking"})
@@ -1053,7 +1155,12 @@ async def session_websocket(websocket: WebSocket):
                 await websocket.send_json({"type": "token", "sender": "Claude", "token": piece})
 
         transcript.add_model_message("Claude", synthesis_text, round="synthesis")
-        await websocket.send_json({"type": "synthesis_complete", "content": synthesis_text})
+        await websocket.send_json({
+            "type": "synthesis_complete",
+            "content": synthesis_text,
+            "synthesis_model_used": health.synthesis_model or synthesis_model_id,
+            "synthesis_route": health.synthesis_routed or synthesis_route,
+        })
 
         print(f"[SESSION] {health.summary()}", flush=True)
 

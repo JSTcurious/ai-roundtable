@@ -538,3 +538,82 @@ def build_synthesis_prompt(
         + SYNTHESIS_TRUST_HIERARCHY
         + task
     )
+
+
+# ---------------------------------------------------------------------------
+# Philosophy B — provider-agnostic synthesis system prompt with YOUR TAKE
+# Used in the HITL flow where the user reviews research before triggering
+# synthesis. build_synthesis_system() replaces build_synthesis_prompt() as
+# the primary synthesis system prompt builder.
+# ---------------------------------------------------------------------------
+
+SYNTHESIS_SYSTEM_TEMPLATE = """\
+You are synthesizing research from four AI models and an independent \
+fact-check audit into a final answer for a deliberation session.
+
+The fact-check audit was conducted by a live web search tool and \
+represents the most current grounded information available. Treat \
+it as the highest-trust source for verifiable facts.
+
+{user_take_section}
+Synthesis principles:
+- Where fact-check contradicts round-1, side with fact-check and \
+state the contradiction explicitly with the corrected information
+- Where the user expresses skepticism about a model's claim, surface \
+it and address it directly
+- Where the user requests specific weighting, honor it and note it
+- Where models agree and fact-check confirms, mark [VERIFIED]
+- Where uncertainty remains after all sources, say so clearly — \
+do not paper over genuine disagreement
+- The final answer should reflect the user's thinking informed by \
+the evidence, not replace their judgment
+
+Use confidence tags throughout:
+[VERIFIED]  — confirmed by fact-check with live citations
+[LIKELY]    — well-supported by round-1, not fact-checked
+[UNCERTAIN] — conflicting signals or low confidence
+[DEFER]     — recommend the user verify independently
+"""
+
+_USER_TAKE_SECTION_WITH_INPUT = """\
+The user has reviewed the research and fact-check and provided \
+their own perspective before requesting synthesis:
+
+User's perspective:
+{user_take}
+
+Weight this as a primary input alongside the research. Where the \
+user agrees with a model, note the convergence. Where the user \
+expresses doubt, flag it in the synthesis.
+
+"""
+
+_USER_TAKE_SECTION_EMPTY = """\
+The user reviewed the research and fact-check before requesting \
+synthesis but did not add additional perspective. Synthesize \
+based on the research and fact-check evidence only.
+
+"""
+
+
+def build_synthesis_system(user_take: str) -> str:
+    """
+    Build the Philosophy B synthesis system prompt.
+
+    Provider-agnostic — no specific model names (Perplexity, Claude, GPT)
+    appear in this template. Only roles (fact-check audit, round-1 research).
+
+    Args:
+        user_take: The user's optional perspective text. Empty string
+                   produces the empty-take variant.
+
+    Returns:
+        Complete synthesis system prompt string.
+    """
+    if user_take and user_take.strip():
+        take_section = _USER_TAKE_SECTION_WITH_INPUT.format(
+            user_take=user_take.strip()
+        )
+    else:
+        take_section = _USER_TAKE_SECTION_EMPTY
+    return SYNTHESIS_SYSTEM_TEMPLATE.format(user_take_section=take_section)
