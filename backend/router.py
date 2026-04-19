@@ -498,8 +498,15 @@ def build_synthesis_prompt(
     Return the Claude synthesis system prompt with all inputs injected.
 
     Perplexity findings are injected as a structurally distinct, authoritative
-    block BEFORE round-1 responses so Claude cannot conflate them. Round-1
-    responses are grouped under an explicit CASCADING_GUARD label.
+    block BEFORE round-1 responses so Claude cannot conflate them.
+
+    CASCADING_GUARD is intentionally excluded from this prompt. It belongs in
+    round-1 system prompts where it prevents cascading unverified claims across
+    the shared transcript. In synthesis, SYNTHESIS_TRUST_HIERARCHY already
+    partitions Perplexity (grounded, cited, Tier 1) from round-1 models
+    (open-world, unverified, Tier 2). Including CASCADING_GUARD here caused
+    Claude to apply uniform skepticism to Perplexity findings — suppressing
+    verified facts rather than elevating them. See: transcript 002, issue #2.
 
     Args:
         output_type:         e.g. "roadmap", "report", "decision", "plan", "brainstorm"
@@ -526,7 +533,6 @@ def build_synthesis_prompt(
     return (
         _SYNTHESIS_ROLE
         + ANTI_HALLUCINATION_BLOCK
-        + CASCADING_GUARD
         + CONFIDENCE_CONVENTION
         + SYNTHESIS_SKEPTICISM
         + SYNTHESIS_TRUST_HIERARCHY
