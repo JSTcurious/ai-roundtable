@@ -66,7 +66,7 @@ Return a JSON object with exactly these fields:
   "needs_clarification": bool,
   "clarifying_question": string or null,
   "optimized_prompt": string,
-  "tier": "smart" | "deep",
+  "tier": "smart",
   "output_type": string,
   "reasoning": string
 }
@@ -86,33 +86,12 @@ Return a JSON object with exactly these fields:
 4. optimized_prompt: refined, context-enriched version of the user's
    prompt. Preserve ALL user-provided proper nouns exactly.
 
-5. tier assignment — assign the tier the question deserves:
-
-   "smart": the default for most sessions.
-   - Analysis, recommendations, research, comparisons
-   - Technical evaluations and factual questions
-   - "What is...", "Compare X vs Y", "Explain how...", "What are the risks of..."
-   - Questions where getting it 80% right is sufficient
-
-   "deep": assign when the question involves high-stakes decisions
-   or complex multi-dimensional problems where getting it wrong has
-   real consequences.
-   - Architecture decisions: "Design the architecture for..."
-   - Build vs buy decisions: "Should we build or buy..."
-   - Strategic decisions: "What is our go-to-market strategy for..."
-   - Investment or hiring decisions
-   - Questions where getting it wrong has serious consequences
-
-   Be conservative — most questions are smart.
-   When in doubt, assign smart.
-
-   IMPORTANT: The user cannot downgrade a deep assignment. If you
-   assign deep, deep runs. Assign deep only when genuinely warranted.
+5. tier: always return "smart". The user controls tier via the session UI.
 
 6. output_type: e.g. "analysis", "comparison", "report", "plan",
    "decision", "research", "factual answer"
 
-7. reasoning: one sentence explaining tier assignment and prompt direction.
+7. reasoning: one sentence explaining prompt direction and output type.
 
 Return valid JSON only. No prose outside the JSON object.
 """

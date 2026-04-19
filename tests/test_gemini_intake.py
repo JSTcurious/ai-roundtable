@@ -104,16 +104,16 @@ def test_clarification_answer_completes_session():
 
 
 # ---------------------------------------------------------------------------
-# Test 4: Tier is "smart" or "deep" (both valid, "quick" is not)
+# Test 4: Tier is always "smart" — "deep" and "quick" are not valid literals
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("tier", ["smart", "deep"])
-def test_tier_is_valid_literal(tier):
-    decision = _decision(tier=tier)
+def test_tier_is_always_smart():
+    """Intake always returns smart — tier is Literal["smart"]."""
+    decision = _decision(tier="smart")
     with patch("backend.models.openai_client.call_gpt4o_mini_intake", return_value=decision):
         session = IntakeSession()
         result = session.analyze("Test prompt")
-    assert result["config"]["tier"] == tier
+    assert result["config"]["tier"] == "smart"
 
 
 def test_invalid_tier_raises_validation_error():
@@ -128,7 +128,7 @@ def test_invalid_tier_raises_validation_error():
 
 
 def test_quick_tier_is_invalid_for_intake():
-    """quick is not a valid IntakeDecision tier — only smart and deep."""
+    """quick is not a valid IntakeDecision tier — only smart is valid."""
     with pytest.raises(ValidationError):
         IntakeDecision(
             needs_clarification=False,
@@ -139,51 +139,35 @@ def test_quick_tier_is_invalid_for_intake():
         )
 
 
-def test_deep_tier_is_valid_for_intake():
-    """Intake now assigns deep for high-stakes questions — deep is a valid literal."""
-    decision = IntakeDecision(
-        needs_clarification=False,
-        optimized_prompt="Design the data architecture for a real-time fraud detection system",
-        tier="deep",
-        output_type="decision",
-        reasoning="Deep selected — architecture decision with significant real-time constraints",
-    )
-    assert decision.tier == "deep"
+def test_deep_tier_is_invalid_for_intake():
+    """Intake always returns smart — deep is not a valid IntakeDecision tier."""
+    with pytest.raises(ValidationError):
+        IntakeDecision(
+            needs_clarification=False,
+            optimized_prompt="Design the data architecture for a real-time fraud detection system",
+            tier="deep",
+            output_type="decision",
+            reasoning="Deep selected — architecture decision",
+        )
 
 
-def test_deep_assignment_is_honoured_in_session_config():
-    """When intake assigns deep, the session config must reflect tier='deep'."""
-    deep_decision = _decision(
-        tier="deep",
-        output_type="decision",
-        reasoning="Deep selected — architecture decision",
-        optimized_prompt="Design the architecture for a real-time fraud detection system",
-    )
-    with patch("backend.models.openai_client.call_gpt4o_mini_intake", return_value=deep_decision):
-        session = IntakeSession()
-        result = session.analyze("Design the architecture for a real-time fraud detection system")
-
-    assert result["config"]["tier"] == "deep"
-
-
-def test_architecture_prompt_maps_to_deep_tier():
-    """Architecture decision prompts should receive deep tier from intake.
-    This verifies the session pipeline honours deep assignment from intake."""
+def test_architecture_prompt_maps_to_smart_tier():
+    """Architecture prompts receive smart tier from intake — user upgrades via slider if needed."""
     arch_decision = _decision(
-        tier="deep",
+        tier="smart",
         output_type="decision",
-        reasoning="Deep selected — architecture decision requiring comprehensive analysis",
+        reasoning="Smart selected — architecture analysis with well-defined scope",
         optimized_prompt="Design the architecture for a real-time data processing pipeline",
     )
     with patch("backend.models.openai_client.call_gpt4o_mini_intake", return_value=arch_decision):
         session = IntakeSession()
         result = session.analyze("Design the architecture for a real-time data processing pipeline")
 
-    assert result["config"]["tier"] == "deep"
+    assert result["config"]["tier"] == "smart"
 
 
 def test_comparison_prompt_maps_to_smart_tier():
-    """Comparison prompts (X vs Y) should receive smart tier — standard analysis."""
+    """Comparison prompts (X vs Y) receive smart tier — standard analysis."""
     comparison_decision = _decision(
         tier="smart",
         output_type="comparison",

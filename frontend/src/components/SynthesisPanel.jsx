@@ -18,31 +18,28 @@ import remarkGfm from "remark-gfm";
  */
 function SynthesisPanel({ content, isStreaming, complete }) {
   return (
-    <section aria-label="Synthesis" className="border-t border-accent-ui pt-6">
-      <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-text-secondary">SYNTHESIS</h2>
-      <div className="flex max-h-[400px] w-full flex-col overflow-hidden rounded-lg border border-border bg-surface px-4 py-3" style={{ borderLeft: "3px solid #E8712A" }}>
-        <div className="mb-2 shrink-0 text-xs font-semibold uppercase tracking-wide text-claude">
-          Claude + Chair
-          <span className="font-normal text-text-secondary"> · final deliverable</span>
-        </div>
-        <div className="synthesis-panel-scroll min-h-0 flex-1">
-          <div className="markdown-session break-words text-[0.9375rem] leading-relaxed text-text-primary">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
-            {isStreaming && !complete ? (
-              <span
-                className="ml-0.5 inline-block h-[1em] w-2 animate-pulse align-[-0.125em] bg-claude"
-                aria-hidden
-              />
-            ) : null}
-            {complete ? (
-              <span className="ml-2 text-xs text-text-secondary" aria-label="Complete">
-                ✓
-              </span>
-            ) : null}
-          </div>
+    <div className="flex max-h-[400px] w-full flex-col overflow-hidden rounded-lg border border-border bg-surface px-4 py-3" style={{ borderLeft: "3px solid #E8712A" }}>
+      <div className="mb-2 shrink-0 text-xs font-semibold uppercase tracking-wide text-claude">
+        Claude + Chair
+        <span className="font-normal text-text-secondary"> · final deliverable</span>
+      </div>
+      <div className="synthesis-panel-scroll min-h-0 flex-1">
+        <div className="markdown-session break-words text-[0.9375rem] leading-relaxed text-text-primary">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+          {isStreaming && !complete ? (
+            <span
+              className="ml-0.5 inline-block h-[1em] w-2 animate-pulse align-[-0.125em] bg-claude"
+              aria-hidden
+            />
+          ) : null}
+          {complete ? (
+            <span className="ml-2 text-xs text-text-secondary" aria-label="Complete">
+              ✓
+            </span>
+          ) : null}
         </div>
       </div>
-    </section>
+    </div>
   );
 }
 

@@ -163,39 +163,46 @@ class TestFactcheckTokenLimits:
         assert get_factcheck_max_tokens("deep") == 2000
 
 
-# ── Intake tier assignment ────────────────────────────────────────────────────
+# ── Intake tier lock (always smart) ──────────────────────────────────────────
 
 class TestIntakeTierAssignment:
-    def test_intake_system_prompt_assigns_smart_or_deep(self):
-        """Intake now assigns smart OR deep based on prompt complexity."""
+    def test_intake_system_prompt_states_always_smart(self):
+        """Intake system prompt must instruct the model to always return smart."""
         from backend.models.openai_client import _build_intake_system_prompt
         prompt = _build_intake_system_prompt()
-        assert '"smart" | "deep"' in prompt or '"smart" or "deep"' in prompt or "smart" in prompt and "deep" in prompt
+        assert "always return" in prompt.lower() and "smart" in prompt
 
-    def test_intake_system_prompt_conservative_deep_rule(self):
-        """Intake system prompt must instruct the model to be conservative with deep."""
+    def test_intake_system_prompt_user_controls_tier(self):
+        """Intake system prompt must state that the user controls tier via the session UI."""
         from backend.models.openai_client import _build_intake_system_prompt
         prompt = _build_intake_system_prompt()
-        assert "Be conservative" in prompt
-        assert "When in doubt, assign smart" in prompt
+        assert "user controls tier" in prompt.lower() or "session ui" in prompt.lower()
 
-    def test_intake_system_prompt_deep_criteria_includes_architecture(self):
-        """Intake system prompt must include architecture decisions as deep criteria."""
+    def test_intake_system_prompt_no_deep_tier_option(self):
+        """Intake system prompt must not offer deep as a tier option."""
         from backend.models.openai_client import _build_intake_system_prompt
         prompt = _build_intake_system_prompt()
-        assert "Architecture decision" in prompt or "architecture" in prompt.lower()
-
-    def test_intake_system_prompt_no_downgrade_rule_present(self):
-        """Intake system prompt must state that deep cannot be downgraded."""
-        from backend.models.openai_client import _build_intake_system_prompt
-        prompt = _build_intake_system_prompt()
-        assert "cannot downgrade" in prompt or "deep runs" in prompt
+        # "deep" must not appear as a tier choice (may appear in output_type examples)
+        assert '"deep"' not in prompt and "'deep'" not in prompt
 
     def test_intake_system_prompt_no_quick_tier(self):
         """Intake system prompt must not reference quick tier as an option."""
         from backend.models.openai_client import _build_intake_system_prompt
         prompt = _build_intake_system_prompt()
         assert "quick" not in prompt.lower()
+
+    def test_intake_decision_tier_literal_is_smart_only(self):
+        """IntakeDecision.tier must be Literal["smart"] — deep is invalid."""
+        from backend.models.intake_decision import IntakeDecision
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError):
+            IntakeDecision(
+                needs_clarification=False,
+                optimized_prompt="Test",
+                tier="deep",
+                output_type="analysis",
+                reasoning="test",
+            )
 
 
 # ── Validator safety ──────────────────────────────────────────────────────────
