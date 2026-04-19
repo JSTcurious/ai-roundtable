@@ -18,8 +18,9 @@ export { MODEL_HEX };
  * @param {boolean} [props.complete] — show subtle ✓ after model_complete
  * @param {string} [props.subtitle] — e.g. "Synthesis"
  * @param {string} [props.titleOverride] — full header line (replaces sender · subtitle)
+ * @param {string} [props.contentMaxHeight] — override inner content max-height (default "320px")
  */
-function ModelBubble({ sender, content, isStreaming, round, complete, subtitle, titleOverride }) {
+function ModelBubble({ sender, content, isStreaming, round, complete, subtitle, titleOverride, contentMaxHeight }) {
   const hex = MODEL_HEX[sender] || "#e8e8e8";
 
   return (
@@ -45,7 +46,7 @@ function ModelBubble({ sender, content, isStreaming, round, complete, subtitle, 
           </span>
         ) : null}
       </div>
-      <div className="bubble-scroll max-h-[320px] markdown-session break-words text-[0.9375rem] leading-relaxed text-text-primary">
+      <div className="bubble-scroll markdown-session break-words text-[0.9375rem] leading-relaxed text-text-primary" style={{ maxHeight: contentMaxHeight || "320px" }}>
         <ReactMarkdown>{content}</ReactMarkdown>
         {isStreaming ? (
           <span

@@ -42,11 +42,9 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
   const [answer, setAnswer] = useState("");
   const [submittingAnswer, setSubmittingAnswer] = useState(false);
   const [config, setConfig] = useState(null);
-  /** Tier assigned by intake — "smart" | "deep". Immutable after set. */
-  const [intakeTier, setIntakeTier] = useState("smart");
-  /** User's current tier selection — starts at intakeTier, can only move to "deep". */
+  /** User's current tier selection — always starts at "smart", can only move to "deep". */
   const [tierChoice, setTierChoice] = useState("smart");
-  /** Once deep is selected (by intake or user), this locks — no return to smart. */
+  /** Once deep is selected, this locks — no return to smart. */
   const [tierLocked, setTierLocked] = useState(false);
   const [error, setError] = useState(null);
   const answerRef = useRef(null);
@@ -81,11 +79,8 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
           setPhase("clarifying");
         } else {
           const cfg = data.config || {};
-          const tier = cfg.tier || "smart";
           setConfig(cfg);
-          setIntakeTier(tier);
-          setTierChoice(tier);
-          setTierLocked(tier === "deep");
+          setTierChoice("smart");
           setPhase("badge");
         }
       } catch (e) {
@@ -113,11 +108,8 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
       }
       const data = await res.json();
       const cfg = data.config || {};
-      const tier = cfg.tier || "smart";
       setConfig(cfg);
-      setIntakeTier(tier);
-      setTierChoice(tier);
-      setTierLocked(tier === "deep");
+      setTierChoice("smart");
       setPhase("badge");
     } catch (e) {
       setError(e.message || "Submit failed");
@@ -236,71 +228,56 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
               <p className="mt-1.5 text-sm text-[#888888]">{config.reasoning}</p>
             </div>
 
-            {/* RESEARCH DEPTH — slider when smart, static notice when deep-locked by intake */}
-            {intakeTier === "deep" ? (
-              /* Deep assigned by intake — no controls, no appeal */
-              <div className="rounded-lg border border-[#2a2a2a] bg-[#1e1e1e] px-4 py-3">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-semibold" style={{ color: "#F5A623" }}>
-                    🔭 Deep · Auto-selected
-                  </span>
-                </div>
-                <p className="mt-1.5 text-sm text-[#888888]">
-                  This question warrants deep analysis — top models with extended thinking.
-                </p>
-              </div>
-            ) : (
-              /* Smart assigned by intake — slider, user may upgrade to deep (one-way) */
-              <div>
-                <p className="mb-3 text-xs font-medium uppercase tracking-wide text-[#888888]">Research Depth</p>
-                <div className="flex items-center gap-4">
-                  {/* Smart label */}
+            {/* RESEARCH DEPTH — slider always shown; user upgrades smart → deep (one-way) */}
+            <div>
+              <p className="mb-3 text-xs font-medium uppercase tracking-wide text-[#888888]">Research Depth</p>
+              <div className="flex items-center gap-4">
+                {/* Smart label */}
+                <span
+                  className="text-sm font-medium transition-colors duration-200"
+                  style={{ color: tierChoice === "smart" ? "#e8e8e8" : "#555555" }}
+                >
+                  Smart
+                </span>
+
+                {/* Pill toggle track */}
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={tierChoice === "deep"}
+                  aria-label="Research depth — slide right to upgrade to Deep"
+                  onClick={handleSliderChange}
+                  disabled={tierLocked}
+                  className="relative h-7 w-14 flex-shrink-0 rounded-full transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623] disabled:cursor-not-allowed"
+                  style={{ background: tierChoice === "deep" ? "#F5A623" : "#2a2a2a" }}
+                >
                   <span
-                    className="text-sm font-medium transition-colors duration-200"
-                    style={{ color: tierChoice === "smart" ? "#e8e8e8" : "#555555" }}
-                  >
-                    Smart
-                  </span>
+                    className="absolute top-0.5 left-0.5 h-6 w-6 rounded-full bg-[#e8e8e8] shadow transition-transform duration-200"
+                    style={{ transform: tierChoice === "deep" ? "translateX(28px)" : "translateX(0)" }}
+                  />
+                </button>
 
-                  {/* Pill toggle track */}
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={tierChoice === "deep"}
-                    aria-label="Research depth — slide right to upgrade to Deep"
-                    onClick={handleSliderChange}
-                    disabled={tierLocked}
-                    className="relative h-7 w-14 flex-shrink-0 rounded-full transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623] disabled:cursor-not-allowed"
-                    style={{ background: tierChoice === "deep" ? "#F5A623" : "#2a2a2a" }}
-                  >
-                    <span
-                      className="absolute top-0.5 left-0.5 h-6 w-6 rounded-full bg-[#e8e8e8] shadow transition-transform duration-200"
-                      style={{ transform: tierChoice === "deep" ? "translateX(28px)" : "translateX(0)" }}
-                    />
-                  </button>
-
-                  {/* Deep label */}
-                  <span
-                    className="text-sm font-medium transition-colors duration-200"
-                    style={{ color: tierChoice === "deep" ? "#e8e8e8" : "#555555" }}
-                  >
-                    Deep
-                  </span>
-                </div>
-
-                {/* Description — changes on toggle, locked notice when deep selected */}
-                <p className="mt-2 text-sm text-[#888888]">
-                  {tierChoice === "smart"
-                    ? "Executor + advisor per model · recommended for most sessions"
-                    : "Top models · extended thinking · for high-stakes decisions"}
-                </p>
-                {tierLocked && tierChoice === "deep" && (
-                  <p className="mt-1 text-xs text-[#555555]">
-                    Deep selected — session will run at full depth.
-                  </p>
-                )}
+                {/* Deep label */}
+                <span
+                  className="text-sm font-medium transition-colors duration-200"
+                  style={{ color: tierChoice === "deep" ? "#e8e8e8" : "#555555" }}
+                >
+                  Deep
+                </span>
               </div>
-            )}
+
+              {/* Description — changes on toggle, locked notice when deep selected */}
+              <p className="mt-2 text-sm text-[#888888]">
+                {tierChoice === "smart"
+                  ? "Executor + advisor per model · recommended for most sessions"
+                  : "Top models · extended thinking · for high-stakes decisions"}
+              </p>
+              {tierLocked && tierChoice === "deep" && (
+                <p className="mt-1 text-xs text-[#555555]">
+                  Deep selected — session will run at full depth.
+                </p>
+              )}
+            </div>
 
             {/* Confirm */}
             <div className="flex justify-end">
