@@ -25,6 +25,9 @@ const WS_CONNECT_TIMEOUT_MS = 120_000;
 /** App-level keep-alive (some proxies idle-timeout unidirectional streams). */
 const WS_KEEPALIVE_INTERVAL_MS = 30_000;
 
+/** Max reconnect attempts before showing the terminal disconnection error. */
+const WS_RECONNECT_MAX = 3;
+
 /** Progress bar — Roundtable node (multi-model stage). */
 const ROUNDTABLE_HEX = "#6B6B6B";
 
@@ -442,140 +445,169 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     setAnnotationsOpen(false);
 
     const url = wsUrlFromApiBase();
-    const ws = new WebSocket(url);
 
-    let pingIntervalId = 0;
+    // Mutable tracking for reconnect loop — plain objects, not React state,
+    // so reconnect retries don't re-trigger this effect.
+    const wsHolder        = { current: /** @type {WebSocket|null} */ (null) };
+    let reconnectCount    = 0;
+    let pingIntervalId    = 0;
+    let reconnectTimeoutId = 0;
 
-    const connectTimeoutId = window.setTimeout(() => {
+    function connectWs() {
       if (cancelled) return;
-      if (ws.readyState !== WebSocket.OPEN) {
+
+      const ws = new WebSocket(url);
+      wsHolder.current = ws;
+
+      const connectTimeoutId = window.setTimeout(() => {
+        if (cancelled) return;
+        if (ws.readyState !== WebSocket.OPEN) {
+          try {
+            ws.close();
+          } catch {
+            /* ignore */
+          }
+          setTransportError("Could not connect — timed out waiting for the server.");
+        }
+      }, WS_CONNECT_TIMEOUT_MS);
+
+      ws.onmessage = (event) => {
+        let data;
         try {
-          ws.close();
+          data = JSON.parse(event.data);
         } catch {
-          /* ignore */
+          return;
         }
-        setTransportError("Could not connect — timed out waiting for the server.");
-      }
-    }, WS_CONNECT_TIMEOUT_MS);
 
-    ws.onmessage = (event) => {
-      let data;
-      try {
-        data = JSON.parse(event.data);
-      } catch {
-        return;
-      }
-
-      switch (data.type) {
-        case "ping":
-        case "pong":
-          break;
-        case "session_started":
-          setSessionStarted(true);
-          phaseRef.current = "round1_parallel";
-          setStreamPhaseMarker((n) => n + 1);
-          break;
-        case "token":
-          appendToken(data.sender, data.token);
-          break;
-        case "model_complete":
-          handleModelComplete(data.sender);
-          break;
-        case "advisor_thinking": {
-          const advSender = data.sender;
-          if (advSender === "Gemini") setGeminiAdvisorReviewing(true);
-          if (advSender === "GPT")    setGptAdvisorReviewing(true);
-          if (advSender === "Grok")   setGrokAdvisorReviewing(true);
-          break;
+        switch (data.type) {
+          case "ping":
+          case "pong":
+            break;
+          case "session_started":
+            setSessionStarted(true);
+            phaseRef.current = "round1_parallel";
+            setStreamPhaseMarker((n) => n + 1);
+            break;
+          case "token":
+            appendToken(data.sender, data.token);
+            break;
+          case "model_complete":
+            handleModelComplete(data.sender);
+            break;
+          case "advisor_thinking": {
+            const advSender = data.sender;
+            if (advSender === "Gemini") setGeminiAdvisorReviewing(true);
+            if (advSender === "GPT")    setGptAdvisorReviewing(true);
+            if (advSender === "Grok")   setGrokAdvisorReviewing(true);
+            break;
+          }
+          case "advisor_complete": {
+            const advDone = data.sender;
+            if (advDone === "Gemini") setGeminiAdvisorReviewing(false);
+            if (advDone === "GPT")    setGptAdvisorReviewing(false);
+            if (advDone === "Grok")   setGrokAdvisorReviewing(false);
+            break;
+          }
+          case "perplexity_thinking":
+            phaseRef.current = "perplexity";
+            setPerplexityPhase("thinking");
+            setStreamPhaseMarker((n) => n + 1);
+            break;
+          case "perplexity_complete":
+            setPerplexityContent(data.content ?? "");
+            setPerplexityPhase("content");
+            break;
+          case "synthesis_thinking":
+            setSynthesisThinking(true);
+            phaseRef.current = "synthesis";
+            setStreamPhaseMarker((n) => n + 1);
+            break;
+          case "synthesis_complete":
+            setSynthesisText(data.content ?? "");
+            setSynthesisStreaming(false);
+            setSynthesisFinal(true);
+            setSynthesisThinking(false);
+            phaseRef.current = "idle";
+            setStreamPhaseMarker((n) => n + 1);
+            onSynthesisCompleteRef.current?.(data.content ?? "");
+            break;
+          case "synthesis_annotations":
+            setAnnotations(data.annotations || []);
+            break;
+          case "session_complete":
+            completedNormallyRef.current = true;
+            setSessionComplete(true);
+            break;
+          case "error":
+            setStreamError(data.message || "Session error");
+            break;
+          default:
+            break;
         }
-        case "advisor_complete": {
-          const advDone = data.sender;
-          if (advDone === "Gemini") setGeminiAdvisorReviewing(false);
-          if (advDone === "GPT")    setGptAdvisorReviewing(false);
-          if (advDone === "Grok")   setGrokAdvisorReviewing(false);
-          break;
+      };
+
+      ws.onopen = () => {
+        openedRef.current = true;
+        window.clearTimeout(connectTimeoutId);
+        // Clear the "Reconnecting…" banner if this is a successful retry.
+        if (reconnectCount > 0) setTransportError(null);
+        ws.send(
+          JSON.stringify({
+            session_config: sessionConfig,
+            prompt: displayPrompt,
+            history: [],
+          })
+        );
+        pingIntervalId = window.setInterval(() => {
+          if (cancelled || ws.readyState !== WebSocket.OPEN) return;
+          try {
+            ws.send(JSON.stringify({ type: "ping", t: Date.now() }));
+          } catch {
+            /* ignore */
+          }
+        }, WS_KEEPALIVE_INTERVAL_MS);
+      };
+
+      ws.onerror = () => {
+        /* Browser gives no details; onclose handles messaging. */
+      };
+
+      ws.onclose = () => {
+        window.clearTimeout(connectTimeoutId);
+        if (pingIntervalId) { window.clearInterval(pingIntervalId); pingIntervalId = 0; }
+        if (cancelled || completedNormallyRef.current) return;
+
+        if (!openedRef.current) {
+          // Never connected — don't retry, just report.
+          setTransportError((prev) => prev || "WebSocket connection failed.");
+          return;
         }
-        case "perplexity_thinking":
-          phaseRef.current = "perplexity";
-          setPerplexityPhase("thinking");
-          setStreamPhaseMarker((n) => n + 1);
-          break;
-        case "perplexity_complete":
-          setPerplexityContent(data.content ?? "");
-          setPerplexityPhase("content");
-          break;
-        case "synthesis_thinking":
-          setSynthesisThinking(true);
-          phaseRef.current = "synthesis";
-          setStreamPhaseMarker((n) => n + 1);
-          break;
-        case "synthesis_complete":
-          setSynthesisText(data.content ?? "");
-          setSynthesisStreaming(false);
-          setSynthesisFinal(true);
-          setSynthesisThinking(false);
-          phaseRef.current = "idle";
-          setStreamPhaseMarker((n) => n + 1);
-          onSynthesisCompleteRef.current?.(data.content ?? "");
-          break;
-        case "synthesis_annotations":
-          setAnnotations(data.annotations || []);
-          break;
-        case "session_complete":
-          completedNormallyRef.current = true;
-          setSessionComplete(true);
-          break;
-        case "error":
-          setStreamError(data.message || "Session error");
-          break;
-        default:
-          break;
-      }
-    };
 
-    ws.onopen = () => {
-      openedRef.current = true;
-      window.clearTimeout(connectTimeoutId);
-      ws.send(
-        JSON.stringify({
-          session_config: sessionConfig,
-          prompt: displayPrompt,
-          history: [],
-        })
-      );
-      pingIntervalId = window.setInterval(() => {
-        if (cancelled || ws.readyState !== WebSocket.OPEN) return;
-        try {
-          ws.send(JSON.stringify({ type: "ping", t: Date.now() }));
-        } catch {
-          /* ignore */
+        // Session was open and dropped mid-stream — attempt reconnect.
+        if (reconnectCount < WS_RECONNECT_MAX) {
+          reconnectCount += 1;
+          const delay = Math.pow(2, reconnectCount - 1) * 1000; // 1s → 2s → 4s
+          setTransportError(`Reconnecting… (attempt ${reconnectCount} of ${WS_RECONNECT_MAX})`);
+          reconnectTimeoutId = window.setTimeout(connectWs, delay);
+        } else {
+          setTransportError("Session disconnected — responses may be incomplete.");
         }
-      }, WS_KEEPALIVE_INTERVAL_MS);
-    };
+      };
+    }
 
-    ws.onerror = () => {
-      /* Browser gives no details; onclose handles messaging. */
-    };
-
-    ws.onclose = () => {
-      window.clearTimeout(connectTimeoutId);
-      if (pingIntervalId) window.clearInterval(pingIntervalId);
-      if (cancelled || completedNormallyRef.current) return;
-      if (!openedRef.current) {
-        setTransportError((prev) => prev || "WebSocket connection failed.");
-      } else {
-        setTransportError("Session disconnected — responses may be incomplete.");
-      }
-    };
+    connectWs();
 
     return () => {
       cancelled = true;
-      window.clearTimeout(connectTimeoutId);
+      window.clearTimeout(reconnectTimeoutId);
       if (pingIntervalId) window.clearInterval(pingIntervalId);
-      ws.onmessage = null;
-      ws.onclose = null;
-      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
-        ws.close();
+      const ws = wsHolder.current;
+      if (ws) {
+        ws.onmessage = null;
+        ws.onclose   = null;
+        if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+          ws.close();
+        }
       }
     };
   }, [sessionConfig, displayPrompt, resumeTranscript, appendToken, handleModelComplete]);
