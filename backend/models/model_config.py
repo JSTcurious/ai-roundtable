@@ -18,7 +18,7 @@ Deep tier uses top models throughout:
     No executor/advisor split — single high-quality pass.
 
 Grok participates in both Smart and Deep.
-Deep sessions are never auto-assigned by intake — user opt-in only.
+Deep sessions are assigned by intake for high-stakes questions, or upgraded by user.
 
 Factcheck always uses deep audit depth (~2000 tokens output).
 The Smart/Deep audit prompt distinction is preserved in perplexity_client.py
@@ -140,8 +140,10 @@ SYNTHESIS_FACTUAL    = os.getenv("SYNTHESIS_FACTUAL",    "gpt-5.4")
 SYNTHESIS_FALLBACK   = os.getenv("SYNTHESIS_FALLBACK",   "qwen/qwen-2.5-72b-instruct")
 
 # ── Intake ────────────────────────────────────────────────────────────────────
-# Intake always assigns "smart" tier — never "deep".
-# Deep requires explicit user opt-in via the session UI.
+# Intake assigns "smart" or "deep" based on prompt complexity.
+# Deep is assigned for architecture decisions, build/buy, strategic choices,
+# and high-stakes questions. Smart is the default for most sessions.
+# If intake assigns deep, deep runs — user cannot downgrade. See ADR 003 addendum.
 #
 # Fallback chain uses provider diversity:
 #   Primary:   GPT-4o Mini  (OpenAI — 16/16 eval, $0.23/1K sessions)

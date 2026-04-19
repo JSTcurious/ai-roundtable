@@ -14,7 +14,7 @@ class IntakeDecision(BaseModel):
     needs_clarification: bool
     clarifying_question: Optional[str] = None  # only when needs_clarification is True
     optimized_prompt: str        # refined, context-enriched version of user's raw prompt
-    tier: Literal["smart"]   # intake always returns smart; frontend may upgrade to deep
+    tier: Literal["smart", "deep"]  # intake assigns based on prompt complexity
     output_type: str             # e.g. "report", "plan", "decision", "brainstorm", "analysis"
     reasoning: str               # one sentence shown in UI:
                                  # "Deep selected — architecture decision with significant tradeoffs"
