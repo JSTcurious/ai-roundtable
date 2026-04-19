@@ -300,17 +300,9 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
   const [annotations, setAnnotations] = useState([]);
   const [annotationsOpen, setAnnotationsOpen] = useState(false);
 
-  // ── Pipeline stage collapse/expand state ──────────────────────────────────
-  // Stages auto-collapse when complete, synthesis auto-expands.
-  // After auto-transition, user can toggle freely.
-  const [researchOpen, setResearchOpen] = useState(true);
-  const [factcheckOpen, setFactcheckOpen] = useState(true);
+  // ── Synthesis collapse/expand state ──────────────────────────────────────
+  // Synthesis auto-expands when complete; user can toggle after.
   const [synthesisOpen, setSynthesisOpen] = useState(false);
-  // Individual model sub-panel expand state inside RESEARCH (all open by default)
-  const [modelOpen, setModelOpen] = useState({ claude: true, gemini: true, gpt: true, grok: true });
-
-  const researchAutoCollapsedRef = useRef(false);
-  const factcheckAutoCollapsedRef = useRef(false);
   const synthesisAutoExpandedRef = useRef(false);
 
   const r1CountsRef = useRef({ Gemini: 0, GPT: 0, Grok: 0, Claude: 0 });
@@ -448,12 +440,8 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     setSessionComplete(true);
     phaseRef.current = "idle";
     r1CountsRef.current = { Gemini: ge.length, GPT: gp.length, Grok: grk.length, Claude: cla.length };
-    // Resume: all stages complete — research/factcheck collapsed, synthesis expanded
-    setResearchOpen(false);
-    setFactcheckOpen(false);
+    // Resume: synthesis auto-expanded
     setSynthesisOpen(true);
-    researchAutoCollapsedRef.current = true;
-    factcheckAutoCollapsedRef.current = true;
     synthesisAutoExpandedRef.current = true;
   }, [resumeTranscript, sessionConfig]);
 
@@ -497,12 +485,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     setSessionComplete(false);
     setAnnotations([]);
     setAnnotationsOpen(false);
-    setResearchOpen(true);
-    setFactcheckOpen(true);
     setSynthesisOpen(false);
-    setModelOpen({ claude: true, gemini: true, gpt: true, grok: true });
-    researchAutoCollapsedRef.current = false;
-    factcheckAutoCollapsedRef.current = false;
     synthesisAutoExpandedRef.current = false;
 
     const url = wsUrlFromApiBase();
@@ -791,22 +774,6 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     (synthesisPhaseEntered && perplexityPhase !== "thinking");
   const synthesisStageDone = isResume || synthesisFinal;
 
-  // Auto-collapse research when complete (fires once on transition)
-  useEffect(() => {
-    if (researchStageDone && !researchAutoCollapsedRef.current) {
-      researchAutoCollapsedRef.current = true;
-      setResearchOpen(false);
-    }
-  }, [researchStageDone]);
-
-  // Auto-collapse factcheck when complete (fires once on transition)
-  useEffect(() => {
-    if (factcheckStageDone && !factcheckAutoCollapsedRef.current) {
-      factcheckAutoCollapsedRef.current = true;
-      setFactcheckOpen(false);
-    }
-  }, [factcheckStageDone]);
-
   // Auto-expand synthesis when complete (fires once on transition)
   useEffect(() => {
     if (synthesisStageDone && !synthesisAutoExpandedRef.current) {
@@ -940,9 +907,9 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
         {/* ── PROMPT — fixed, always visible ── */}
         <section aria-label="Session prompt">
           <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-secondary">
-            Prompt
+            Optimized Prompt
           </h2>
-          <div className="bubble-scroll max-h-[200px] rounded-lg border border-border bg-surface px-4 py-3 text-sm leading-relaxed text-text-primary whitespace-pre-wrap">
+          <div className="bubble-scroll max-h-[3rem] overflow-y-auto rounded-lg border border-border bg-surface px-4 py-3 text-sm leading-relaxed text-text-primary whitespace-pre-wrap">
             {displayPrompt || "—"}
           </div>
         </section>
@@ -1007,203 +974,131 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
         {/* ── FACT-CHECK — shown when Perplexity started ── */}
         {perplexityPhase !== "off" && (
           <section aria-label="Fact-check" className="space-y-3">
-            <StageHeader
-              label="FACT-CHECK"
-              summary="Perplexity · audit complete"
-              done={factcheckStageDone}
-              open={factcheckOpen}
-              onToggle={() => setFactcheckOpen((o) => !o)}
-              active={perplexityPhase === "thinking"}
-            />
-            {/* Content: show when active OR when done+open */}
-            {(!factcheckStageDone || factcheckOpen) && (
-              <div className="space-y-2">
-                {perplexityPhase === "thinking" && (
-                  <ThinkingDotsBubble label="🔎 PERPLEXITY" color={MODEL_HEX.Perplexity} />
-                )}
-                {perplexityPhase === "content" && String(perplexityContent).trim() && (
-                  <ModelBubble
-                    sender="Perplexity"
-                    content={perplexityContent}
-                    isStreaming={false}
-                    round="audit"
-                    complete
-                    titleOverride="🔎 PERPLEXITY"
-                  />
-                )}
-              </div>
-            )}
+            <h2 className={`text-xs font-semibold uppercase tracking-wide text-text-secondary${perplexityPhase === "thinking" ? " animate-pulse" : ""}`}>
+              Fact-Check
+            </h2>
+            <div className="overflow-y-auto space-y-2" style={{ maxHeight: "300px" }}>
+              {perplexityPhase === "thinking" && (
+                <ThinkingDotsBubble label="🔎 PERPLEXITY" color={MODEL_HEX.Perplexity} />
+              )}
+              {perplexityPhase === "content" && String(perplexityContent).trim() && (
+                <ModelBubble
+                  sender="Perplexity"
+                  content={perplexityContent}
+                  isStreaming={false}
+                  round="audit"
+                  complete
+                  titleOverride="🔎 PERPLEXITY"
+                />
+              )}
+            </div>
           </section>
         )}
 
-        {/* ── RESEARCH — shown when session started; collapses when fact-check begins ── */}
+        {/* ── RESEARCH — shown when session started ── */}
         {showTranscriptRoundtable && (
           <section aria-label="Research" className="space-y-3">
-            <StageHeader
-              label="RESEARCH"
-              summary="Claude · Gemini · GPT · Grok"
-              done={researchStageDone}
-              open={researchOpen}
-              onToggle={() => setResearchOpen((o) => !o)}
-              active={!researchStageDone}
-            />
-            {/* Content: show when active OR when done+open */}
-            {(!researchStageDone || researchOpen) && (
-              <div className="space-y-4">
-                {/* Alphabetical order: Claude, Gemini, GPT, Grok */}
+            <h2 className={`text-xs font-semibold uppercase tracking-wide text-text-secondary${!researchStageDone ? " animate-pulse" : ""}`}>
+              Research
+            </h2>
+            <div className="overflow-y-auto space-y-4" style={{ maxHeight: "400px" }}>
+              {/* Alphabetical order: Claude, Gemini, GPT, Grok */}
 
-                {/* Claude */}
-                {claudeR1RoundActive && (
-                  <div className="min-w-0">
-                    {researchStageDone && (
-                      <button
-                        type="button"
-                        onClick={() => setModelOpen((s) => ({ ...s, claude: !s.claude }))}
-                        className="mb-1 flex items-center gap-1 text-xs text-[#555555] hover:text-text-secondary focus:outline-none"
-                      >
-                        <span aria-hidden style={{ display: "inline-block", transform: modelOpen.claude ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.15s" }}>▾</span>
-                        Claude
-                      </button>
-                    )}
-                    {(!researchStageDone || modelOpen.claude) && (
-                      <div className="space-y-1">
-                        {showClaudeR1Thinking ? (
-                          <ThinkingDotsBubble label="🟠 CLAUDE" color={MODEL_HEX.Claude} />
-                        ) : claudeR1Complete && isSkipNotice(claudeR1) ? (
-                          <p className="text-xs text-[#888888]" role="status">Claude is unavailable right now — skipped this round.</p>
-                        ) : (
-                          <ModelBubble
-                            sender="Claude"
-                            titleOverride="🟠 CLAUDE"
-                            content={bubbleBody(claudeR1, claudeR1Complete)}
-                            isStreaming={claudeR1Streaming}
-                            round="round1"
-                            complete={claudeR1Complete}
-                          />
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )}
+              {/* Claude */}
+              {claudeR1RoundActive && (
+                <div className="min-w-0 space-y-1">
+                  {showClaudeR1Thinking ? (
+                    <ThinkingDotsBubble label="🟠 CLAUDE" color={MODEL_HEX.Claude} />
+                  ) : claudeR1Complete && isSkipNotice(claudeR1) ? (
+                    <p className="text-xs text-[#888888]" role="status">Claude is unavailable right now — skipped this round.</p>
+                  ) : (
+                    <ModelBubble
+                      sender="Claude"
+                      titleOverride="🟠 CLAUDE"
+                      content={bubbleBody(claudeR1, claudeR1Complete)}
+                      isStreaming={claudeR1Streaming}
+                      round="round1"
+                      complete={claudeR1Complete}
+                    />
+                  )}
+                </div>
+              )}
 
-                {/* Gemini */}
-                {geminiRoundActive && (
-                  <div className="min-w-0">
-                    {researchStageDone && (
-                      <button
-                        type="button"
-                        onClick={() => setModelOpen((s) => ({ ...s, gemini: !s.gemini }))}
-                        className="mb-1 flex items-center gap-1 text-xs text-[#555555] hover:text-text-secondary focus:outline-none"
-                      >
-                        <span aria-hidden style={{ display: "inline-block", transform: modelOpen.gemini ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.15s" }}>▾</span>
-                        Gemini
-                      </button>
-                    )}
-                    {(!researchStageDone || modelOpen.gemini) && (
-                      <div className="space-y-1">
-                        {showGeminiThinking ? (
-                          <ThinkingDotsBubble label="🔵 GEMINI" color={MODEL_HEX.Gemini} />
-                        ) : geminiR1Complete && isSkipNotice(geminiR1) ? (
-                          <p className="text-xs text-[#888888]" role="status">Gemini is unavailable right now — skipped this round.</p>
-                        ) : (
-                          <>
-                            <ModelBubble
-                              sender="Gemini"
-                              titleOverride="🔵 GEMINI"
-                              content={bubbleBody(geminiR1, geminiR1Complete)}
-                              isStreaming={geminiR1Streaming}
-                              round="round1"
-                              complete={geminiR1Complete}
-                            />
-                            {geminiAdvisorReviewing && (
-                              <p className="text-xs text-[#888888]" role="status" aria-live="polite">⚖ advisor reviewing...</p>
-                            )}
-                          </>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )}
+              {/* Gemini */}
+              {geminiRoundActive && (
+                <div className="min-w-0 space-y-1">
+                  {showGeminiThinking ? (
+                    <ThinkingDotsBubble label="🔵 GEMINI" color={MODEL_HEX.Gemini} />
+                  ) : geminiR1Complete && isSkipNotice(geminiR1) ? (
+                    <p className="text-xs text-[#888888]" role="status">Gemini is unavailable right now — skipped this round.</p>
+                  ) : (
+                    <>
+                      <ModelBubble
+                        sender="Gemini"
+                        titleOverride="🔵 GEMINI"
+                        content={bubbleBody(geminiR1, geminiR1Complete)}
+                        isStreaming={geminiR1Streaming}
+                        round="round1"
+                        complete={geminiR1Complete}
+                      />
+                      {geminiAdvisorReviewing && (
+                        <p className="text-xs text-[#888888]" role="status" aria-live="polite">⚖ advisor reviewing...</p>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
 
-                {/* GPT */}
-                {gptRoundActive && (
-                  <div className="min-w-0">
-                    {researchStageDone && (
-                      <button
-                        type="button"
-                        onClick={() => setModelOpen((s) => ({ ...s, gpt: !s.gpt }))}
-                        className="mb-1 flex items-center gap-1 text-xs text-[#555555] hover:text-text-secondary focus:outline-none"
-                      >
-                        <span aria-hidden style={{ display: "inline-block", transform: modelOpen.gpt ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.15s" }}>▾</span>
-                        GPT
-                      </button>
-                    )}
-                    {(!researchStageDone || modelOpen.gpt) && (
-                      <div className="space-y-1">
-                        {showGptThinking ? (
-                          <ThinkingDotsBubble label="🟢 GPT" color={MODEL_HEX.GPT} />
-                        ) : gptR1Complete && isSkipNotice(gptR1) ? (
-                          <p className="text-xs text-[#888888]" role="status">GPT is unavailable right now — skipped this round.</p>
-                        ) : (
-                          <>
-                            <ModelBubble
-                              sender="GPT"
-                              titleOverride="🟢 GPT"
-                              content={bubbleBody(gptR1, gptR1Complete)}
-                              isStreaming={gptR1Streaming}
-                              round="round1"
-                              complete={gptR1Complete}
-                            />
-                            {gptAdvisorReviewing && (
-                              <p className="text-xs text-[#888888]" role="status" aria-live="polite">⚖ advisor reviewing...</p>
-                            )}
-                          </>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )}
+              {/* GPT */}
+              {gptRoundActive && (
+                <div className="min-w-0 space-y-1">
+                  {showGptThinking ? (
+                    <ThinkingDotsBubble label="🟢 GPT" color={MODEL_HEX.GPT} />
+                  ) : gptR1Complete && isSkipNotice(gptR1) ? (
+                    <p className="text-xs text-[#888888]" role="status">GPT is unavailable right now — skipped this round.</p>
+                  ) : (
+                    <>
+                      <ModelBubble
+                        sender="GPT"
+                        titleOverride="🟢 GPT"
+                        content={bubbleBody(gptR1, gptR1Complete)}
+                        isStreaming={gptR1Streaming}
+                        round="round1"
+                        complete={gptR1Complete}
+                      />
+                      {gptAdvisorReviewing && (
+                        <p className="text-xs text-[#888888]" role="status" aria-live="polite">⚖ advisor reviewing...</p>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
 
-                {/* Grok */}
-                {grokRoundActive && (
-                  <div className="min-w-0">
-                    {researchStageDone && (
-                      <button
-                        type="button"
-                        onClick={() => setModelOpen((s) => ({ ...s, grok: !s.grok }))}
-                        className="mb-1 flex items-center gap-1 text-xs text-[#555555] hover:text-text-secondary focus:outline-none"
-                      >
-                        <span aria-hidden style={{ display: "inline-block", transform: modelOpen.grok ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.15s" }}>▾</span>
-                        Grok
-                      </button>
-                    )}
-                    {(!researchStageDone || modelOpen.grok) && (
-                      <div className="space-y-1">
-                        {showGrokThinking ? (
-                          <ThinkingDotsBubble label={<><span style={{ fontSize: "1.15em", lineHeight: 1, verticalAlign: "middle" }}>●</span>{" GROK"}</>} color={MODEL_HEX.Grok} />
-                        ) : grokR1Complete && isSkipNotice(grokR1) ? (
-                          <p className="text-xs text-[#888888]" role="status">Grok is unavailable right now — skipped this round.</p>
-                        ) : (
-                          <>
-                            <ModelBubble
-                              sender="Grok"
-                              titleOverride={<><span style={{ fontSize: "1.15em", lineHeight: 1, verticalAlign: "middle" }}>●</span>{" GROK"}</>}
-                              content={bubbleBody(grokR1, grokR1Complete)}
-                              isStreaming={grokR1Streaming}
-                              round="round1"
-                              complete={grokR1Complete}
-                            />
-                            {grokAdvisorReviewing && (
-                              <p className="text-xs text-[#888888]" role="status" aria-live="polite">⚖ advisor reviewing...</p>
-                            )}
-                          </>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
+              {/* Grok */}
+              {grokRoundActive && (
+                <div className="min-w-0 space-y-1">
+                  {showGrokThinking ? (
+                    <ThinkingDotsBubble label={<><span style={{ fontSize: "1.15em", lineHeight: 1, verticalAlign: "middle" }}>●</span>{" GROK"}</>} color={MODEL_HEX.Grok} />
+                  ) : grokR1Complete && isSkipNotice(grokR1) ? (
+                    <p className="text-xs text-[#888888]" role="status">Grok is unavailable right now — skipped this round.</p>
+                  ) : (
+                    <>
+                      <ModelBubble
+                        sender="Grok"
+                        titleOverride={<><span style={{ fontSize: "1.15em", lineHeight: 1, verticalAlign: "middle" }}>●</span>{" GROK"}</>}
+                        content={bubbleBody(grokR1, grokR1Complete)}
+                        isStreaming={grokR1Streaming}
+                        round="round1"
+                        complete={grokR1Complete}
+                      />
+                      {grokAdvisorReviewing && (
+                        <p className="text-xs text-[#888888]" role="status" aria-live="polite">⚖ advisor reviewing...</p>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
           </section>
         )}
 
