@@ -46,6 +46,10 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
   const [tierChoice, setTierChoice] = useState("smart");
   /** Once deep is selected, this locks — no return to smart. */
   const [tierLocked, setTierLocked] = useState(false);
+  /** Whether the model breakdown is expanded */
+  const [breakdownOpen, setBreakdownOpen] = useState(false);
+  /** Model info from /api/model-info — null until fetched */
+  const [modelInfo, setModelInfo] = useState(null);
   const [error, setError] = useState(null);
   const answerRef = useRef(null);
   const hasFiredRef = useRef(false);
@@ -54,6 +58,15 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
   useEffect(() => {
     if (phase === "clarifying") answerRef.current?.focus();
   }, [phase]);
+
+  // Fetch model info when badge phase is shown (for expandable breakdown)
+  useEffect(() => {
+    if (phase !== "badge" || modelInfo) return;
+    fetch(`${API_BASE}/api/model-info`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => { if (data) setModelInfo(data); })
+      .catch(() => {/* non-critical — breakdown will just not render */});
+  }, [phase, modelInfo]);
 
   // On mount: call /api/intake/start with the prompt
   useEffect(() => {
@@ -276,6 +289,84 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
                 <p className="mt-1 text-xs text-[#555555]">
                   Deep selected — session will run at full depth.
                 </p>
+              )}
+
+              {/* Expandable model breakdown */}
+              {modelInfo && (
+                <div className="mt-3">
+                  <button
+                    type="button"
+                    onClick={() => setBreakdownOpen((o) => !o)}
+                    className="flex items-center gap-1 text-xs text-[#555555] hover:text-[#888888] focus:outline-none transition-colors"
+                    aria-expanded={breakdownOpen}
+                  >
+                    <span aria-hidden>{breakdownOpen ? "▼" : "▶"}</span>
+                    <span>What does this mean?</span>
+                  </button>
+
+                  {breakdownOpen && (
+                    <div className="mt-2 rounded-lg border border-[#2a2a2a] bg-[#161616] px-3 py-2.5 text-xs space-y-1.5">
+                      {tierChoice === "smart" ? (
+                        <>
+                          <p className="text-[#888888] font-medium mb-1.5">
+                            Smart — Executor + Advisor per model
+                          </p>
+                          {[
+                            { key: "claude",  label: "Claude",     emoji: "🟠" },
+                            { key: "gemini",  label: "Gemini",     emoji: "🔵" },
+                            { key: "gpt",     label: "GPT",        emoji: "🟢" },
+                            { key: "grok",    label: "Grok",       emoji: "●" },
+                          ].map(({ key, label, emoji }) => {
+                            const m = modelInfo.smart?.[key];
+                            if (!m) return null;
+                            const exec = m.executor?.split("/").pop() || "—";
+                            const adv  = m.advisor?.split("/").pop()  || "—";
+                            return (
+                              <div key={key} className="flex items-baseline gap-2">
+                                <span className="w-20 shrink-0 text-[#888888]">{emoji} {label}</span>
+                                <span className="text-[#555555]">{exec} → {adv} review</span>
+                              </div>
+                            );
+                          })}
+                          <div className="flex items-baseline gap-2 pt-0.5 border-t border-[#2a2a2a] mt-1.5">
+                            <span className="w-20 shrink-0 text-[#888888]">🔎 Fact-check</span>
+                            <span className="text-[#555555]">
+                              {(modelInfo.smart?.factcheck || "sonar-pro").split("/").pop()} · deep audit always
+                            </span>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <p className="text-[#888888] font-medium mb-1.5">
+                            Deep — Top models throughout · extended thinking
+                          </p>
+                          {[
+                            { key: "claude",  label: "Claude",     emoji: "🟠" },
+                            { key: "gemini",  label: "Gemini",     emoji: "🔵" },
+                            { key: "gpt",     label: "GPT",        emoji: "🟢" },
+                            { key: "grok",    label: "Grok",       emoji: "●" },
+                          ].map(({ key, label, emoji }) => {
+                            const modelId = modelInfo.deep?.[key];
+                            if (!modelId) return null;
+                            const name = (typeof modelId === "string" ? modelId : "—").split("/").pop();
+                            return (
+                              <div key={key} className="flex items-baseline gap-2">
+                                <span className="w-20 shrink-0 text-[#888888]">{emoji} {label}</span>
+                                <span className="text-[#555555]">{name}</span>
+                              </div>
+                            );
+                          })}
+                          <div className="flex items-baseline gap-2 pt-0.5 border-t border-[#2a2a2a] mt-1.5">
+                            <span className="w-20 shrink-0 text-[#888888]">🔎 Fact-check</span>
+                            <span className="text-[#555555]">
+                              {(modelInfo.deep?.factcheck || "sonar-pro").split("/").pop()} · deep audit always
+                            </span>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
               )}
             </div>
 
