@@ -552,19 +552,24 @@ CHIP_GENERATION_SYSTEM = """\
 You have just read four AI research responses and a fact-check audit
 from a deliberation session.
 
-Generate exactly 3-4 perspective chips. Each chip has a short label and
-a brief evidence note that explains why this perspective is worth considering.
+Generate exactly 3-4 perspective chips. Each chip must belong to a DISTINCT
+perspective type. Assign each chip exactly one type from this list:
+  agree     — sides with the research consensus or a specific model
+  skeptical — challenges an assumption or questions cited evidence
+  action    — recommends a concrete next step
+  nuance    — surfaces a tension, trade-off, or overlooked angle
 
 Rules:
+- No two chips may share the same type (mutual exclusivity — one type per chip)
+- Maximum one "skeptical" chip per response
 - Be specific to THIS session's content — not generic
 - Reference specific models, claims, or findings where relevant
-- Include no more than one skeptical or contrarian option — vary perspectives across agreement, skepticism, action, and nuance
-- Include at least one that sides with the fact-check over round-1
-- label: under 8 words
+- Include at least one chip that sides with the fact-check over round-1
+- label: under 8 words, no type prefix in the label text
 - evidence: 2-3 sentences of specific context from the research
 - Return ONLY a valid JSON array of objects, no other text
 
-Example:
+Example (4 chips, all distinct types):
 [
   {"label": "I trust Gemini's framing on this",
    "evidence": "Gemini's analysis was the most detailed on cost structure and aligned with Perplexity's live data. GPT took a more cautious stance that may underestimate the opportunity."},
@@ -649,8 +654,7 @@ The fact-check audit was conducted by a live web search tool and \
 represents the most current grounded information available. Treat \
 it as the highest-trust source for verifiable facts.
 
-{user_take_section}
-Synthesis principles:
+{user_take_section}{citation_section}Synthesis principles:
 - Where fact-check contradicts round-1, side with fact-check and \
 state the contradiction explicitly with the corrected information
 - Where the user expresses skepticism about a model's claim, surface \
@@ -690,7 +694,7 @@ based on the research and fact-check evidence only.
 """
 
 
-def build_synthesis_system(user_take_data: dict) -> str:
+def build_synthesis_system(user_take_data: dict, citations: list = None) -> str:
     """
     Build the Philosophy B synthesis system prompt incorporating user's perspective.
 
@@ -702,6 +706,9 @@ def build_synthesis_system(user_take_data: dict) -> str:
             - "selected_chips": list[str] — chip labels the user toggled on
               (labels only — evidence is for the user's benefit, not synthesis)
             - "free_text": str — user's own typed perspective
+        citations: list of source URLs from the fact-check audit. When provided,
+            instructs Claude to use inline [n] markers that correspond to these
+            sources so the frontend can render them as clickable superscripts.
 
     Returns:
         Complete synthesis system prompt string.
@@ -724,4 +731,20 @@ def build_synthesis_system(user_take_data: dict) -> str:
             user_take="\n".join(parts)
         )
 
-    return SYNTHESIS_SYSTEM_TEMPLATE.format(user_take_section=take_section)
+    citation_section = ""
+    if citations:
+        source_lines = "\n".join(
+            f"[{i + 1}] {url}" for i, url in enumerate(citations)
+        )
+        citation_section = (
+            "Inline citations: when referencing a specific fact-check finding, "
+            "add the corresponding source number inline immediately after the claim "
+            "(e.g. 'Pricing has increased 40% since 2023 [1]'). "
+            "Only cite sources from the numbered list below — do not invent citation numbers.\n\n"
+            f"Sources:\n{source_lines}\n\n"
+        )
+
+    return SYNTHESIS_SYSTEM_TEMPLATE.format(
+        user_take_section=take_section,
+        citation_section=citation_section,
+    )
