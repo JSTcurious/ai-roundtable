@@ -114,6 +114,9 @@ function formatTierBadge(tier) {
 
 const WAIT_HEX = "#888888";
 
+/** Letter labels for YOUR TAKE chips — A through D. Payload format: "A: label". */
+const CHIP_LETTERS = ["A", "B", "C", "D"];
+
 /**
  * @param {Object} props
  * @param {{ id: string, label: string, color: string, done: boolean, active: boolean }[]} props.stages
@@ -752,6 +755,9 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     if (synthesisRequested) return;  // prevent double-click
+    // Synthesizing with no chips selected and empty free-text is intentional and valid.
+    // build_synthesis_system() handles this via _USER_TAKE_SECTION_EMPTY — synthesis
+    // runs on research + fact-check only, with no user perspective injected.
     setSynthesisRequested(true);
     setAwaitingUserTake(false);
     ws.send(JSON.stringify({
@@ -1164,33 +1170,37 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
                 </p>
               )}
 
-              {/* Chips */}
+              {/* Chips — Fix 3: label is text-xs font-semibold (was text-[11px] opacity-60) */}
               {awaitingUserTake && userTakeChips.length > 0 && (
                 <div>
-                  <p className="mb-3 text-[11px] text-text-secondary opacity-60">
+                  <p className="mb-3 text-xs font-semibold tracking-wide text-text-secondary">
                     Select what resonates:
                   </p>
                   <div className="space-y-2">
-                    {userTakeChips.map((chip) => {
+                    {userTakeChips.map((chip, idx) => {
                       const { label, evidence } = chip;
-                      const active = selectedChips.includes(label);
+                      // Fix 2: A-D letter prefix. Display uses two spaces; payload uses "A: label".
+                      const letter = CHIP_LETTERS[idx] || String(idx + 1);
+                      const prefixedLabel = `${letter}: ${label}`;
+                      const active = selectedChips.includes(prefixedLabel);
                       const expanded = expandedChip === label;
                       return (
                         <div key={label}>
-                          {/* Chip row: label button + expand toggle */}
+                          {/* Chip row — Fix 1: items-stretch so arrow spans full row height */}
                           <div
-                            className="flex items-center gap-1 rounded-full transition-colors duration-150"
+                            className="flex items-stretch gap-1 rounded-full transition-colors duration-150"
                             style={
                               expanded
-                                ? { borderColor: "#f59e0b", background: "rgba(245,158,11,0.08)", border: "1px solid #f59e0b" }
+                                ? { border: "1px solid #f59e0b", background: "rgba(245,158,11,0.08)" }
                                 : {}
                             }
                           >
+                            {/* Label button — Fix 2: bold letter prefix + two-space gap */}
                             <button
                               type="button"
-                              onClick={() => !synthesisRequested && toggleChip(label)}
+                              onClick={() => !synthesisRequested && toggleChip(prefixedLabel)}
                               disabled={synthesisRequested}
-                              className="flex-1 rounded-full px-4 py-1.5 text-sm text-left transition-all duration-150 focus:outline-none disabled:opacity-50"
+                              className="flex flex-1 items-center rounded-full px-4 py-1.5 text-sm text-left transition-all duration-150 focus:outline-none disabled:opacity-50"
                               style={
                                 active
                                   ? { background: "#F5A623", color: "#111111", fontWeight: 500, border: "1px solid #F5A623" }
@@ -1198,14 +1208,16 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
                               }
                               aria-pressed={active}
                             >
-                              {label}
+                              <span style={{ fontWeight: "bold" }}>{letter}</span>
+                              {"  "}{label}
                             </button>
+                            {/* Expand arrow — Fix 1: full height, min 44px wide, always gold */}
                             {evidence && (
                               <button
                                 type="button"
                                 onClick={() => toggleExpanded(label)}
-                                className="shrink-0 rounded-full px-2.5 py-1 text-base leading-none transition-colors focus:outline-none"
-                                style={{ color: expanded ? "#F5A623" : "#666666" }}
+                                className="min-w-[44px] self-stretch flex items-center justify-center rounded-full text-base transition-colors focus:outline-none"
+                                style={{ color: "#F5A623" }}
                                 aria-label={expanded ? "Hide evidence" : "Show evidence"}
                                 aria-expanded={expanded}
                               >
@@ -1261,6 +1273,12 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
                       {synthesisRequested ? "Synthesizing…" : "Synthesize →"}
                     </button>
                   </div>
+                  {/* Hint: shown when nothing is selected — synthesis without a take is valid */}
+                  {!synthesisRequested && selectedChips.length === 0 && !userTakeFreeText.trim() && (
+                    <p className="mt-2 text-center text-xs text-text-secondary">
+                      Nothing selected? Synthesis will reflect the research only.
+                    </p>
+                  )}
                 </>
               )}
             </div>
