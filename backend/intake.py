@@ -1,18 +1,17 @@
 """
 backend/intake.py
 
-Gemini Flash-powered intake for ai-roundtable v2.
-
-Analyzes the user's prompt in a single API call. Asks at most one clarifying
-question. Auto-assigns tier (quick / smart / deep) and returns an optimized
-prompt ready for the roundtable.
+Claude Sonnet-powered intake. Captures full user intent across 2-4 turns
+before routing to the research pipeline.
+Fallback: GPT-4o Mini → Qwen 2.5 72B → passthrough.
 
 Classes:
     IntakeSession  — manages a single intake session (at most two turns)
 
 Functions:
-    sanitize_text   — strip Unicode bidi control characters
-    sanitize_config — recursively sanitize string values in a config dict
+    call_intake_sonnet — primary intake via Claude Sonnet (Anthropic)
+    sanitize_text      — strip Unicode bidi control characters
+    sanitize_config    — recursively sanitize string values in a config dict
 """
 
 import logging
@@ -23,6 +22,43 @@ from backend.models.intake_decision import IntakeDecision
 from backend.models.resilient_caller import call_with_fallback
 
 logger = logging.getLogger(__name__)
+
+
+def call_intake_sonnet(prompt: str) -> IntakeDecision:
+    """
+    Primary intake via Claude Sonnet (Anthropic direct API).
+
+    Uses the same system prompt and JSON schema as all other intake providers.
+    Sonnet is the quality ceiling for intake — full intent capture drives
+    everything downstream.
+
+    Raises:
+        ValueError:   if response fails IntakeDecision schema validation.
+        Exception:    on any Anthropic API error (raised immediately; retried
+                      by call_with_fallback via call_with_retry).
+    """
+    from backend.models.anthropic_client import _get_client
+    from backend.models.model_config import INTAKE_PRIMARY
+    from backend.models.openai_client import _build_intake_system_prompt
+
+    system_prompt = _build_intake_system_prompt().strip()
+    response = _get_client().messages.create(
+        model=INTAKE_PRIMARY,
+        max_tokens=512,
+        system=system_prompt,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    raw = response.content[0].text.strip()
+    # Strip markdown fences if Claude wrapped the JSON
+    if raw.startswith("```"):
+        parts = raw.split("```")
+        raw = parts[1].lstrip("json").strip() if len(parts) > 1 else raw
+    try:
+        return IntakeDecision.model_validate_json(raw)
+    except Exception as e:
+        raise ValueError(
+            f"Claude Sonnet intake schema validation failed: {e}. Raw: {raw!r}"
+        )
 
 # Unicode bidi overrides, directional formatting, and other invisible control characters.
 # Ranges covered:
@@ -82,20 +118,19 @@ def call_intake(prompt: str) -> tuple:
     Run intake with fallback chain. Returns (IntakeDecision, provider_used).
 
     Chain:
-        Primary:   INTAKE_PRIMARY   (gpt-4o-mini, OpenAI)
-        Fallback1: INTAKE_FALLBACK1 (qwen-2.5-72b, OpenRouter)
-        Fallback2: INTAKE_FALLBACK2 (claude-haiku, Anthropic)
-        Emergency: Passthrough      (smart tier defaults, never fails)
+        Primary:   Claude Sonnet  (call_intake_sonnet — quality ceiling)
+        Fallback1: GPT-4o Mini    (call_gpt4o_mini_intake — fast, reliable)
+        Fallback2: Qwen 2.5 72B   (OpenRouter — third-provider diversity)
+        Emergency: Passthrough    (smart tier defaults, never fails)
     """
     from backend.models.openai_client import call_gpt4o_mini_intake
     from backend.models.openrouter_client import call_intake_fallback1
-    from backend.models.anthropic_client import call_intake_fallback2
 
     return call_with_fallback(
-        primary_fn=lambda: call_gpt4o_mini_intake(prompt),
+        primary_fn=lambda: call_intake_sonnet(prompt),
         fallback_fns=[
+            lambda: call_gpt4o_mini_intake(prompt),
             lambda: call_intake_fallback1(prompt),
-            lambda: call_intake_fallback2(prompt),
         ],
         emergency_fn=lambda: _intake_passthrough(prompt),
         role="intake",

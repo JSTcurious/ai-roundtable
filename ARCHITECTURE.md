@@ -13,6 +13,25 @@ This is not a tagline. It is a constraint that eliminates a large class of featu
 
 ---
 
+## Model Philosophy
+
+ai-roundtable targets high-stakes decisions where getting it
+right once is worth more than iterating cheaply. Cost is not
+a design constraint. Model choices are made for quality
+ceiling, not cost floor.
+
+### Model assignments by stage
+| Stage            | Model              | Rationale                              |
+|------------------|--------------------|----------------------------------------|
+| Intake           | Claude Sonnet      | Full intent capture drives everything downstream |
+| Research (Smart) | Sonnet → Opus      | Executor/advisor split for depth       |
+| YOUR TAKE chips  | Claude Sonnet      | Chip quality determines user engagement |
+| Synthesis        | Claude Opus        | This is the deliverable                |
+| Fact-check       | Perplexity         | Live web grounding                     |
+| Fallback (intake)| GPT-4o Mini → Qwen | Resilience, not quality targets        |
+
+---
+
 ## v1 Architecture
 
 ### Core Design Principle

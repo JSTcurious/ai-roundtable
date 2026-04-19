@@ -267,7 +267,7 @@ class TestResearchAvailabilityStatus:
                    return_value=self._make_gemini_response()):
             import asyncio
             from backend.models.google_client import call_research_gemini_async
-            result = asyncio.get_event_loop().run_until_complete(
+            result = asyncio.run(
                 call_research_gemini_async(
                     [{"role": "user", "content": "test"}],
                     "system",
@@ -292,7 +292,7 @@ class TestResearchAvailabilityStatus:
         with patch("backend.models.openai_client.call_gpt", return_value=resp):
             import asyncio
             from backend.models.openai_client import call_research_gpt_async
-            result = asyncio.get_event_loop().run_until_complete(
+            result = asyncio.run(
                 call_research_gpt_async(
                     [{"role": "user", "content": "test"}],
                     "system",
@@ -314,7 +314,7 @@ class TestResearchAvailabilityStatus:
         with patch("backend.models.grok_client.call_grok", return_value=resp):
             import asyncio
             from backend.models.grok_client import call_research_grok_async
-            result = asyncio.get_event_loop().run_until_complete(
+            result = asyncio.run(
                 call_research_grok_async(
                     [{"role": "user", "content": "test"}],
                     "system",
@@ -330,7 +330,7 @@ class TestResearchAvailabilityStatus:
                    side_effect=RuntimeError("API down")):
             import asyncio
             from backend.models.google_client import call_research_gemini_async
-            text, status = asyncio.get_event_loop().run_until_complete(
+            text, status = asyncio.run(
                 call_research_gemini_async(
                     [{"role": "user", "content": "test"}],
                     "system",
@@ -466,10 +466,10 @@ class TestGenerateUserTakeChips:
         """Fails open — returns [] when the API call raises."""
         import asyncio
         from unittest.mock import patch
-        with patch("backend.models.openai_client.call_for_chips",
+        with patch("backend.models.anthropic_client.call_for_chips",
                    side_effect=RuntimeError("API down")):
             from backend.router import generate_user_take_chips
-            result = asyncio.get_event_loop().run_until_complete(
+            result = asyncio.run(
                 generate_user_take_chips(self._ROUND1, self._AUDIT)
             )
             assert result == []
@@ -478,10 +478,10 @@ class TestGenerateUserTakeChips:
         """Fails open — returns [] when response is not valid JSON."""
         import asyncio
         from unittest.mock import patch
-        with patch("backend.models.openai_client.call_for_chips",
+        with patch("backend.models.anthropic_client.call_for_chips",
                    return_value="not json at all"):
             from backend.router import generate_user_take_chips
-            result = asyncio.get_event_loop().run_until_complete(
+            result = asyncio.run(
                 generate_user_take_chips(self._ROUND1, self._AUDIT)
             )
             assert result == []
@@ -490,10 +490,10 @@ class TestGenerateUserTakeChips:
         """Fails open — returns [] when JSON is valid but not a list."""
         import asyncio
         from unittest.mock import patch
-        with patch("backend.models.openai_client.call_for_chips",
+        with patch("backend.models.anthropic_client.call_for_chips",
                    return_value='{"chips": ["a", "b"]}'):
             from backend.router import generate_user_take_chips
-            result = asyncio.get_event_loop().run_until_complete(
+            result = asyncio.run(
                 generate_user_take_chips(self._ROUND1, self._AUDIT)
             )
             assert result == []
@@ -503,10 +503,10 @@ class TestGenerateUserTakeChips:
         import asyncio
         import json
         from unittest.mock import patch
-        with patch("backend.models.openai_client.call_for_chips",
+        with patch("backend.models.anthropic_client.call_for_chips",
                    return_value=json.dumps(["Chip A", "Chip B"])):
             from backend.router import generate_user_take_chips
-            result = asyncio.get_event_loop().run_until_complete(
+            result = asyncio.run(
                 generate_user_take_chips(self._ROUND1, self._AUDIT)
             )
             assert result == []
@@ -520,10 +520,10 @@ class TestGenerateUserTakeChips:
             {"label": "Chip A", "evidence": "Evidence for A."},
             {"label": "Chip B", "evidence": "Evidence for B."},
         ]
-        with patch("backend.models.openai_client.call_for_chips",
+        with patch("backend.models.anthropic_client.call_for_chips",
                    return_value=json.dumps(chips)):
             from backend.router import generate_user_take_chips
-            result = asyncio.get_event_loop().run_until_complete(
+            result = asyncio.run(
                 generate_user_take_chips(self._ROUND1, self._AUDIT)
             )
             assert len(result) == 2
@@ -536,10 +536,10 @@ class TestGenerateUserTakeChips:
         import json
         from unittest.mock import patch
         chips = [{"label": f"Chip {x}", "evidence": "Some evidence."} for x in "ABCDEF"]
-        with patch("backend.models.openai_client.call_for_chips",
+        with patch("backend.models.anthropic_client.call_for_chips",
                    return_value=json.dumps(chips)):
             from backend.router import generate_user_take_chips
-            result = asyncio.get_event_loop().run_until_complete(
+            result = asyncio.run(
                 generate_user_take_chips(self._ROUND1, self._AUDIT)
             )
             assert len(result) <= 4
@@ -554,10 +554,10 @@ class TestGenerateUserTakeChips:
             {"label": "", "evidence": "Some evidence."},
             {"label": "Another chip", "evidence": ""},
         ]
-        with patch("backend.models.openai_client.call_for_chips",
+        with patch("backend.models.anthropic_client.call_for_chips",
                    return_value=json.dumps(chips)):
             from backend.router import generate_user_take_chips
-            result = asyncio.get_event_loop().run_until_complete(
+            result = asyncio.run(
                 generate_user_take_chips(self._ROUND1, self._AUDIT)
             )
             assert len(result) == 1

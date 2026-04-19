@@ -147,13 +147,14 @@ SYNTHESIS_FALLBACK   = os.getenv("SYNTHESIS_FALLBACK",   "qwen/qwen-2.5-72b-inst
 #
 # Fallback chain uses provider diversity:
 #   Primary:   GPT-4o Mini  (OpenAI — 16/16 eval, $0.23/1K sessions)
-#   Fallback1: Qwen 2.5 72B (OpenRouter — 16/16 eval, different provider)
-#   Fallback2: Claude Haiku (Anthropic — 10/16 eval, last resort)
+#   Primary:   Claude Sonnet (Anthropic — quality ceiling, full intent capture)
+#   Fallback1: GPT-4o Mini  (OpenAI — fast, reliable second choice)
+#   Fallback2: Qwen 2.5 72B (OpenRouter — third provider for diversity)
 #   Emergency: Passthrough  (smart tier defaults, never fails user)
 
-INTAKE_PRIMARY   = os.getenv("INTAKE_PRIMARY",   "gpt-4o-mini")
-INTAKE_FALLBACK1 = os.getenv("INTAKE_FALLBACK1", "qwen/qwen-2.5-72b-instruct")
-INTAKE_FALLBACK2 = os.getenv("INTAKE_FALLBACK2", "claude-haiku-4-5-20251001")
+INTAKE_PRIMARY   = os.getenv("INTAKE_PRIMARY",   "claude-sonnet-4-6")
+INTAKE_FALLBACK1 = os.getenv("INTAKE_FALLBACK1", "gpt-4o-mini")
+INTAKE_FALLBACK2 = os.getenv("INTAKE_FALLBACK2", "qwen/qwen-2.5-72b-instruct")
 
 
 # ── Tier helper functions ─────────────────────────────────────────────────────
