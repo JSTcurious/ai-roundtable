@@ -60,6 +60,7 @@ from backend.router import (
     get_round1_system_prompt,
     build_synthesis_prompt,
     build_synthesis_system,
+    generate_user_take_chips,
     select_synthesis_model,
     USE_CASE_LIBRARY,
     get_use_case,
@@ -836,7 +837,11 @@ async def _drain_client_messages(
                 and isinstance(data, dict)
                 and data.get("type") == "submit_user_take"
             ):
-                await take_queue.put(data.get("user_take", ""))
+                # Route the full payload so session handler gets chips + free_text
+                await take_queue.put({
+                    "selected_chips": data.get("selected_chips", []) or [],
+                    "free_text": data.get("free_text", "") or "",
+                })
     except WebSocketDisconnect:
         return
     except asyncio.CancelledError:
@@ -1098,6 +1103,18 @@ async def session_websocket(websocket: WebSocket):
         health.factcheck_degraded = (factcheck_provider != "primary")
         transcript.add_model_message("Perplexity", audit_text, round="audit")
 
+        # Start chip generation in parallel — runs while frontend reads research.
+        # Fail-open: chips_task always resolves to a list (empty on any error).
+        round1_for_chips = {
+            "gemini": gemini_text,
+            "gpt":    gpt_text,
+            "grok":   grok_text,
+            "claude": claude_r1_text,
+        }
+        chips_task = asyncio.create_task(
+            generate_user_take_chips(round1_for_chips, audit_text)
+        )
+
         # Determine factcheck display info for frontend transparency
         _factcheck_display = {
             "primary":   ("sonar-pro",  "primary"),
@@ -1115,16 +1132,23 @@ async def session_websocket(websocket: WebSocket):
             "factcheck_availability": _fc_avail,
         })
 
+        # Await chips — should be ready by the time frontend finishes rendering
+        # factcheck_complete. Returns [] on any chip generation failure.
+        chips = await chips_task
+
         # ── Philosophy B: wait for user's perspective before synthesis ─────────
-        await websocket.send_json({"type": "awaiting_user_take"})
-        try:
-            user_take = await asyncio.wait_for(user_take_queue.get(), timeout=600.0)
-        except asyncio.TimeoutError:
-            user_take = ""
+        # No timeout — synthesis must ONLY run when the user explicitly clicks
+        # Synthesize. If the user steps away for an hour, we wait an hour.
+        await websocket.send_json({
+            "type": "awaiting_user_take",
+            "chips": chips,
+            "message": "Here are some perspectives to consider:" if chips else "",
+        })
+        user_take_data = await user_take_queue.get()
 
         # ── Synthesis: route to analytical or factual model based on audit ────
         synthesis_model_id, synthesis_route = select_synthesis_model(audit_text)
-        synthesis_system = build_synthesis_system(user_take)
+        synthesis_system = build_synthesis_system(user_take_data)
         synthesis_messages = [{"role": "user", "content": prompt}]
 
         await websocket.send_json({"type": "synthesis_thinking"})

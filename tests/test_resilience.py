@@ -355,33 +355,55 @@ class TestIntakePassthrough:
 class TestBuildSynthesisSystem:
     """build_synthesis_system() generates the correct provider-agnostic prompt."""
 
-    def _build(self, user_take: str = "") -> str:
+    def _build(self, selected_chips=None, free_text="") -> str:
         from backend.router import build_synthesis_system
-        return build_synthesis_system(user_take)
+        return build_synthesis_system({
+            "selected_chips": selected_chips or [],
+            "free_text": free_text,
+        })
 
     def test_empty_take_produces_empty_variant(self):
-        """Empty user_take → 'did not add additional perspective' language."""
-        result = self._build("")
+        """No chips, no free text → 'did not add additional perspective' language."""
+        result = self._build()
         assert "did not add additional perspective" in result
 
-    def test_whitespace_only_take_treated_as_empty(self):
-        """Whitespace-only user_take → same as empty."""
-        result = self._build("   ")
+    def test_whitespace_only_free_text_treated_as_empty(self):
+        """Whitespace-only free_text → same as empty."""
+        result = self._build(free_text="   ")
         assert "did not add additional perspective" in result
 
-    def test_user_text_included_in_prompt(self):
-        """Non-empty user_take → user's text injected verbatim."""
-        result = self._build("I trust Gemini more on this one.")
+    def test_free_text_included_in_prompt(self):
+        """Non-empty free_text → user's text injected verbatim."""
+        result = self._build(free_text="I trust Gemini more on this one.")
         assert "I trust Gemini more on this one." in result
 
-    def test_user_text_triggers_with_input_variant(self):
-        """Non-empty user_take → 'primary input alongside the research' language."""
-        result = self._build("Weight the fact-check heavily.")
+    def test_free_text_triggers_with_input_variant(self):
+        """Non-empty free_text → 'primary input alongside the research' language."""
+        result = self._build(free_text="Weight the fact-check heavily.")
         assert "primary input alongside the research" in result
+
+    def test_selected_chips_included_in_prompt(self):
+        """Selected chips appear in the synthesis prompt."""
+        result = self._build(selected_chips=["I trust Gemini's framing"])
+        assert "I trust Gemini's framing" in result
+
+    def test_selected_chips_trigger_with_input_variant(self):
+        """Chips alone (no free text) still use the with-input variant."""
+        result = self._build(selected_chips=["Perplexity's correction changes my view"])
+        assert "primary input alongside the research" in result
+
+    def test_both_chips_and_free_text_included(self):
+        """When both chips and free text are present, both appear in prompt."""
+        result = self._build(
+            selected_chips=["I'm skeptical of the statistics"],
+            free_text="Also weight the fact-check heavily.",
+        )
+        assert "I'm skeptical of the statistics" in result
+        assert "Also weight the fact-check heavily." in result
 
     def test_no_provider_names_in_template(self):
         """System prompt template must not name specific AI providers."""
-        result = self._build("")
+        result = self._build()
         # Provider names must not appear in the role template or section headers
         assert "Perplexity" not in result
         assert "Claude" not in result
@@ -389,13 +411,13 @@ class TestBuildSynthesisSystem:
 
     def test_confidence_tags_in_prompt(self):
         """Confidence tags [VERIFIED], [LIKELY], [UNCERTAIN], [DEFER] present."""
-        result = self._build("")
+        result = self._build()
         for tag in ("[VERIFIED]", "[LIKELY]", "[UNCERTAIN]", "[DEFER]"):
             assert tag in result
 
     def test_synthesis_does_not_auto_trigger(self):
         """
-        Structural test: build_synthesis_system() requires an explicit user_take
+        Structural test: build_synthesis_system() requires an explicit user_take_data
         parameter — there is no automatic call path without it.
         The function signature enforces the HITL gate at the call site.
         """
@@ -403,6 +425,100 @@ class TestBuildSynthesisSystem:
         from backend.router import build_synthesis_system
         sig = inspect.signature(build_synthesis_system)
         params = list(sig.parameters)
-        assert "user_take" in params
+        assert "user_take_data" in params
         # No default that would bypass the gate — caller must pass a value
-        assert sig.parameters["user_take"].default is inspect.Parameter.empty
+        assert sig.parameters["user_take_data"].default is inspect.Parameter.empty
+
+
+# ── Chip generation ───────────────────────────────────────────────────────────
+
+class TestGenerateUserTakeChips:
+    """generate_user_take_chips() returns session-specific perspective options."""
+
+    _ROUND1 = {
+        "gemini": "Gemini analysis here.",
+        "gpt":    "GPT analysis here.",
+        "grok":   "Grok analysis here.",
+        "claude": "Claude analysis here.",
+    }
+    _AUDIT = "Perplexity found no contradictions."
+
+    def test_returns_empty_list_on_api_error(self):
+        """Fails open — returns [] when the API call raises."""
+        import asyncio
+        from unittest.mock import patch
+        with patch("backend.models.openai_client.call_for_chips",
+                   side_effect=RuntimeError("API down")):
+            from backend.router import generate_user_take_chips
+            result = asyncio.get_event_loop().run_until_complete(
+                generate_user_take_chips(self._ROUND1, self._AUDIT)
+            )
+            assert result == []
+
+    def test_returns_empty_list_on_bad_json(self):
+        """Fails open — returns [] when response is not valid JSON."""
+        import asyncio
+        from unittest.mock import patch
+        with patch("backend.models.openai_client.call_for_chips",
+                   return_value="not json at all"):
+            from backend.router import generate_user_take_chips
+            result = asyncio.get_event_loop().run_until_complete(
+                generate_user_take_chips(self._ROUND1, self._AUDIT)
+            )
+            assert result == []
+
+    def test_returns_empty_list_on_non_list_json(self):
+        """Fails open — returns [] when JSON is valid but not a list."""
+        import asyncio
+        from unittest.mock import patch
+        with patch("backend.models.openai_client.call_for_chips",
+                   return_value='{"chips": ["a", "b"]}'):
+            from backend.router import generate_user_take_chips
+            result = asyncio.get_event_loop().run_until_complete(
+                generate_user_take_chips(self._ROUND1, self._AUDIT)
+            )
+            assert result == []
+
+    def test_valid_response_returns_list_of_strings(self):
+        """Valid JSON array of strings → returned as-is (up to 4)."""
+        import asyncio
+        import json
+        from unittest.mock import patch
+        chips = ["Chip A", "Chip B", "Chip C"]
+        with patch("backend.models.openai_client.call_for_chips",
+                   return_value=json.dumps(chips)):
+            from backend.router import generate_user_take_chips
+            result = asyncio.get_event_loop().run_until_complete(
+                generate_user_take_chips(self._ROUND1, self._AUDIT)
+            )
+            assert result == chips
+            assert all(isinstance(c, str) for c in result)
+
+    def test_caps_at_four_chips(self):
+        """Returns at most 4 chips even if model returns more."""
+        import asyncio
+        import json
+        from unittest.mock import patch
+        chips = ["A", "B", "C", "D", "E", "F"]
+        with patch("backend.models.openai_client.call_for_chips",
+                   return_value=json.dumps(chips)):
+            from backend.router import generate_user_take_chips
+            result = asyncio.get_event_loop().run_until_complete(
+                generate_user_take_chips(self._ROUND1, self._AUDIT)
+            )
+            assert len(result) <= 4
+
+    def test_filters_empty_strings(self):
+        """Empty string chips are filtered out."""
+        import asyncio
+        import json
+        from unittest.mock import patch
+        chips = ["Good chip", "", "Another chip", "  "]
+        with patch("backend.models.openai_client.call_for_chips",
+                   return_value=json.dumps(chips)):
+            from backend.router import generate_user_take_chips
+            result = asyncio.get_event_loop().run_until_complete(
+                generate_user_take_chips(self._ROUND1, self._AUDIT)
+            )
+            assert "" not in result
+            assert all(c.strip() for c in result)

@@ -286,11 +286,17 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
   const [citations, setCitations] = useState([]);
 
   // ── Philosophy B: YOUR TAKE HITL step ────────────────────────────────────
-  /** True after fact-check completes — YOUR TAKE step is visible */
+  /** True after awaiting_user_take received — YOUR TAKE step is visible */
   const [awaitingUserTake, setAwaitingUserTake] = useState(false);
-  /** User's optional perspective text */
-  const [userTake, setUserTake] = useState("");
-  /** True after user clicks Synthesize — input becomes read-only */
+  /** Chips from backend — session-specific perspective options */
+  const [userTakeChips, setUserTakeChips] = useState([]);
+  /** Chips the user has toggled on */
+  const [selectedChips, setSelectedChips] = useState([]);
+  /** True after perplexity_complete, before awaiting_user_take — chips loading */
+  const [chipsLoading, setChipsLoading] = useState(false);
+  /** User's optional free-text perspective */
+  const [userTakeFreeText, setUserTakeFreeText] = useState("");
+  /** True after user clicks Synthesize — inputs become read-only */
   const [synthesisRequested, setSynthesisRequested] = useState(false);
 
   // ── Model transparency — metadata received with model_complete ───────────
@@ -568,8 +574,11 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
             setPerplexityContent(data.content ?? "");
             setCitations(data.citations || []);
             setPerplexityPhase("content");
+            setChipsLoading(true);  // chips are generating on backend
             break;
           case "awaiting_user_take":
+            setChipsLoading(false);
+            setUserTakeChips(data.chips || []);
             setAwaitingUserTake(true);
             break;
           case "synthesis_thinking":
@@ -702,13 +711,24 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     URL.revokeObjectURL(url);
   }, [synthesisText]);
 
+  const toggleChip = useCallback((chip) => {
+    setSelectedChips((prev) =>
+      prev.includes(chip) ? prev.filter((c) => c !== chip) : [...prev, chip]
+    );
+  }, []);
+
   const handleSynthesize = useCallback(() => {
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (synthesisRequested) return;  // prevent double-click
     setSynthesisRequested(true);
     setAwaitingUserTake(false);
-    ws.send(JSON.stringify({ type: "submit_user_take", user_take: userTake }));
-  }, [userTake]);
+    ws.send(JSON.stringify({
+      type: "submit_user_take",
+      selected_chips: selectedChips,
+      free_text: userTakeFreeText.trim(),
+    }));
+  }, [selectedChips, userTakeFreeText, synthesisRequested]);
 
   const requestHome = useCallback(() => {
     if (!onNavigateHome) return;
@@ -803,9 +823,9 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     const factDone = isResume || perplexityPhase === "content" || (synthesisPhaseEntered && perplexityPhase !== "thinking");
     const factActive = perplexityPhase === "thinking";
 
-    // YOUR TAKE — active when awaiting user input, done when user clicks Synthesize
+    // YOUR TAKE — lights when chips loading, stays active until Synthesize clicked
     const yourTakeDone = isResume || synthesisRequested || synthesisFinal;
-    const yourTakeActive = awaitingUserTake && !synthesisRequested;
+    const yourTakeActive = (chipsLoading || awaitingUserTake) && !synthesisRequested;
 
     // SYNTHESIS — active during synthesis thinking/streaming, done when final
     const sDone = isResume || synthesisFinal;
@@ -813,7 +833,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     const sLabel = synthesisThinking || synthesisStreaming ? "SYNTHESIZING..." : "FINAL ANSWER";
 
     return { promptDone, transcriptDone, transcriptActive, factDone, factActive, yourTakeDone, yourTakeActive, sDone, sActive, sLabel };
-  }, [isResume, sessionStarted, synthesisPhaseEntered, perplexityPhase, synthesisThinking, synthesisStreaming, synthesisFinal, awaitingUserTake, synthesisRequested]);
+  }, [isResume, sessionStarted, synthesisPhaseEntered, perplexityPhase, synthesisThinking, synthesisStreaming, synthesisFinal, awaitingUserTake, synthesisRequested, chipsLoading]);
 
   // ── Pipeline stage done flags ─────────────────────────────────────────────
   const researchStageDone = isResume || perplexityPhase !== "off" || synthesisPhaseEntered;
@@ -1094,36 +1114,82 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
           </section>
         )}
 
-        {/* ── YOUR TAKE — shown after fact-check completes ── */}
-        {awaitingUserTake && (
+        {/* ── YOUR TAKE — shown while chips load or after awaiting_user_take ── */}
+        {(chipsLoading || awaitingUserTake) && (
           <section aria-label="Your take" className="space-y-3">
-            <h2 className="text-xs font-semibold uppercase tracking-wide text-text-secondary animate-pulse">
+            <h2
+              className={`text-xs font-semibold uppercase tracking-wide text-text-secondary${awaitingUserTake && !synthesisRequested ? " animate-pulse" : ""}`}
+            >
               Your Take
             </h2>
-            <div className="rounded-lg border border-border bg-surface px-4 py-4 space-y-3">
-              <label htmlFor="user-take-input" className="sr-only">
-                Your perspective (optional)
-              </label>
-              <textarea
-                id="user-take-input"
-                rows={3}
-                value={userTake}
-                onChange={(e) => setUserTake(e.target.value)}
-                disabled={synthesisRequested}
-                placeholder="What's your read on this? Any model you trust more? Anything you want weighted differently? (optional)"
-                className="w-full resize-y rounded-md border border-border bg-bg px-3 py-2 text-sm leading-relaxed text-text-primary placeholder:text-text-secondary focus:border-border-focus focus:outline-none disabled:opacity-50"
-              />
-              <div className="flex justify-end">
-                <button
-                  type="button"
-                  onClick={handleSynthesize}
-                  disabled={synthesisRequested}
-                  className="rounded-lg px-5 py-2 text-sm font-bold transition-opacity hover:opacity-90 focus:outline-none disabled:opacity-40"
-                  style={{ background: "#F5A623", color: "#0d0d0d" }}
-                >
-                  {synthesisRequested ? "Synthesizing…" : "Synthesize →"}
-                </button>
-              </div>
+            <div className="rounded-lg border border-border bg-surface px-4 py-4 space-y-4">
+
+              {/* Chips loading state */}
+              {chipsLoading && !awaitingUserTake && (
+                <p className="text-xs text-text-secondary animate-pulse">
+                  Reading the research…
+                </p>
+              )}
+
+              {/* Chips */}
+              {awaitingUserTake && userTakeChips.length > 0 && (
+                <div>
+                  <p className="mb-2 text-xs text-text-secondary">
+                    Here are some perspectives to consider:
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {userTakeChips.map((chip, i) => {
+                      const active = selectedChips.includes(chip);
+                      return (
+                        <button
+                          key={i}
+                          type="button"
+                          onClick={() => !synthesisRequested && toggleChip(chip)}
+                          disabled={synthesisRequested}
+                          className="rounded-full px-4 py-1.5 text-sm transition-all duration-150 focus:outline-none disabled:opacity-50"
+                          style={
+                            active
+                              ? { background: "#F5A623", color: "#111111", fontWeight: 500, border: "1px solid #F5A623" }
+                              : { background: "transparent", color: "#F5A623", border: "1px solid #F5A623" }
+                          }
+                          aria-pressed={active}
+                        >
+                          {chip}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Free-text input */}
+              {awaitingUserTake && (
+                <>
+                  <label htmlFor="user-take-input" className="sr-only">
+                    Your perspective (optional)
+                  </label>
+                  <textarea
+                    id="user-take-input"
+                    rows={3}
+                    value={userTakeFreeText}
+                    onChange={(e) => setUserTakeFreeText(e.target.value)}
+                    disabled={synthesisRequested}
+                    placeholder="What's your read on this? Any model you trust more? Anything you want weighted differently? (optional)"
+                    className="w-full resize-y rounded-md border border-border bg-bg px-3 py-2 text-sm leading-relaxed text-text-primary placeholder:text-text-secondary focus:border-border-focus focus:outline-none disabled:opacity-50"
+                  />
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      onClick={handleSynthesize}
+                      disabled={synthesisRequested}
+                      className="rounded-lg px-5 py-2 text-sm font-bold transition-opacity hover:opacity-90 focus:outline-none disabled:opacity-40"
+                      style={{ background: "#F5A623", color: "#0d0d0d" }}
+                    >
+                      {synthesisRequested ? "Synthesizing…" : "Synthesize →"}
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           </section>
         )}
