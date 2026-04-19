@@ -485,7 +485,10 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     setSessionComplete(false);
     setCitations([]);
     setAwaitingUserTake(false);
-    setUserTake("");
+    setUserTakeChips([]);
+    setSelectedChips([]);
+    setUserTakeFreeText("");
+    setChipsLoading(false);
     setSynthesisRequested(false);
     setModelMeta({});
 
