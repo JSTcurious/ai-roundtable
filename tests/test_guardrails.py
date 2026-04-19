@@ -197,9 +197,14 @@ def test_synthesis_trust_hierarchy_absent_from_round1(model):
 
 # ---------------------------------------------------------------------------
 # Synthesis prompt block ordering:
-# role → ANTI_HALLUCINATION_BLOCK → CASCADING_GUARD →
-# CONFIDENCE_CONVENTION → SYNTHESIS_SKEPTICISM → SYNTHESIS_TRUST_HIERARCHY
-# → task instructions
+# role → ANTI_HALLUCINATION_BLOCK → CONFIDENCE_CONVENTION →
+# SYNTHESIS_SKEPTICISM → SYNTHESIS_TRUST_HIERARCHY → task instructions
+#
+# CASCADING_GUARD is intentionally absent from synthesis. It belongs in
+# round-1 prompts only. In synthesis, SYNTHESIS_TRUST_HIERARCHY partitions
+# Perplexity (trusted, Tier 1) from round-1 models (unverified, Tier 2).
+# Including CASCADING_GUARD here caused Claude to suppress Perplexity's
+# verified findings. See: transcript 002, issue #2.
 # ---------------------------------------------------------------------------
 
 def test_synthesis_role_precedes_anti_hallucination():
@@ -208,16 +213,20 @@ def test_synthesis_role_precedes_anti_hallucination():
     assert 0 <= role_pos < guard_pos, "role must precede ANTI_HALLUCINATION_BLOCK"
 
 
-def test_synthesis_anti_hallucination_precedes_cascading_guard():
+def test_synthesis_cascading_guard_absent():
+    # "shared transcript" is the unique phrase in CASCADING_GUARD not present in
+    # SYNTHESIS_SKEPTICISM (which also uses "independently verify").
+    assert "shared transcript" not in _SAMPLE_SYNTHESIS, (
+        "CASCADING_GUARD must not appear in synthesis prompt — it suppresses "
+        "Perplexity grounded data. Use SYNTHESIS_TRUST_HIERARCHY instead. "
+        "See transcript 002, issue #2."
+    )
+
+
+def test_synthesis_anti_hallucination_precedes_confidence_convention():
     anti_pos = _SAMPLE_SYNTHESIS.find("Response Accuracy Guidelines")
-    cascade_pos = _SAMPLE_SYNTHESIS.find("independently verify")
-    assert anti_pos < cascade_pos, "ANTI_HALLUCINATION_BLOCK must precede CASCADING_GUARD"
-
-
-def test_synthesis_cascading_guard_precedes_confidence_convention():
-    cascade_pos = _SAMPLE_SYNTHESIS.find("independently verify")
     confidence_pos = _SAMPLE_SYNTHESIS.find("Confidence Qualifiers")
-    assert cascade_pos < confidence_pos, "CASCADING_GUARD must precede CONFIDENCE_CONVENTION"
+    assert anti_pos < confidence_pos, "ANTI_HALLUCINATION_BLOCK must precede CONFIDENCE_CONVENTION"
 
 
 def test_synthesis_confidence_convention_precedes_skepticism():
