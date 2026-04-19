@@ -37,6 +37,17 @@ const LOADING_DELAYS = [2000, 5000];
 const TIMEOUT_MS = 15000;
 
 /**
+ * Quick-reply chips shown above the clarifying answer textarea.
+ * Clicking a chip fills the textarea so the user can submit as-is or edit.
+ */
+const QUICK_CHIPS = [
+  "Still early — just exploring",
+  "Need a decision soon",
+  "No hard constraints",
+  "Let me give more context",
+];
+
+/**
  * @param {Object}   props
  * @param {string}   props.initialUserMessage  — prompt from landing page
  * @param {function} props.onComplete          — (session_config) => void
@@ -205,6 +216,24 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
               <p className="text-[0.9375rem] leading-relaxed text-[#e8e8e8]">{clarifyingQuestion}</p>
             </div>
 
+            {/* Quick-reply chips */}
+            <div className="flex flex-wrap gap-2">
+              {QUICK_CHIPS.map((chip) => (
+                <button
+                  key={chip}
+                  type="button"
+                  disabled={submittingAnswer}
+                  onClick={() => {
+                    setAnswer(chip);
+                    answerRef.current?.focus();
+                  }}
+                  className="rounded-full border border-[#3a3a3a] bg-[#1e1e1e] px-3 py-1 text-xs text-[#aaaaaa] transition-colors hover:border-[#F5A623] hover:text-[#F5A623] focus:outline-none disabled:opacity-40"
+                >
+                  {chip}
+                </button>
+              ))}
+            </div>
+
             {/* Answer input */}
             <form
               onSubmit={(e) => { e.preventDefault(); submitAnswer(); }}
@@ -230,7 +259,8 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
               <button
                 type="submit"
                 disabled={submittingAnswer || !answer.trim()}
-                className="inline-flex h-10 shrink-0 items-center justify-center self-start rounded-lg border border-[#6B6B6B] bg-[#1e1e1e] px-3 text-[#e8e8e8] focus:outline-none disabled:opacity-40"
+                style={{ background: "#F5A623", color: "#0d0d0d" }}
+                className="inline-flex h-10 w-10 shrink-0 items-center justify-center self-start rounded-lg font-bold transition-opacity hover:opacity-90 focus:outline-none disabled:opacity-40"
                 aria-label={submittingAnswer ? "Submitting" : "Submit answer"}
               >
                 <span aria-hidden>{submittingAnswer ? "…" : "→"}</span>

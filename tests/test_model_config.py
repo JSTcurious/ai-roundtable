@@ -281,7 +281,7 @@ class TestModelInfoEndpoint:
         """Call get_model_info() directly (no HTTP round-trip needed)."""
         import asyncio
         from backend.main import get_model_info
-        return asyncio.get_event_loop().run_until_complete(get_model_info())
+        return asyncio.run(get_model_info())
 
     def test_returns_smart_and_deep_keys(self):
         result = self._call()
