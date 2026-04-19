@@ -22,17 +22,11 @@ function LandingPage({ onSubmitDescription }) {
   );
 
   const panelRows = [
-    { key: "you", name: "User", role: "Chair — you decide", nameColor: "#e8e8e8" },
-    { key: "claude", name: "Claude", role: "Orchestrator + synthesizer", nameColor: "#E8712A" },
-    { key: "gemini", name: "Gemini", role: "Deep reasoner", nameColor: "#4285F4" },
-    { key: "gpt", name: "GPT", role: "Structured thinker", nameColor: "#10A37F" },
-    { key: "grok", name: "Grok", role: "Lateral thinker + live trends", nameColor: "#1DA1F2" },
-    {
-      key: "perplexity",
-      name: "Perplexity",
-      role: "Live fact-checker",
-      nameColor: "#20808D",
-    },
+    { key: "claude",     name: "Claude",     role: "Lead synthesizer",              nameColor: "#E8712A" },
+    { key: "gemini",     name: "Gemini",     role: "Analytical challenger",         nameColor: "#4285F4" },
+    { key: "gpt",        name: "GPT",        role: "Structured thinker",            nameColor: "#10A37F" },
+    { key: "grok",       name: "Grok",       role: "Lateral thinker + live trends", nameColor: "#1DA1F2" },
+    { key: "perplexity", name: "Perplexity", role: "Independent fact-checker",      nameColor: "#20808D" },
   ];
 
   return (
@@ -44,18 +38,17 @@ function LandingPage({ onSubmitDescription }) {
             AI-ROUNDTABLE
           </h1>
           <p className="mt-2 text-base" style={{ color: "#F5A623" }}>
-            You and the right experts. One room. No FOMO.
+            The deliberation layer for decisions that matter.
           </p>
           {/* Philosophy block */}
           <div
             className="mx-auto mt-6 max-w-[480px] rounded-lg text-center"
             style={{ background: "#1a1a1a", padding: "16px" }}
           >
-            <p style={{ color: "#cccccc", fontSize: "0.85rem", lineHeight: "1.8" }}>Five models. One perspective that&rsquo;s yours.</p>
-            <p style={{ color: "#888888", fontSize: "0.85rem", lineHeight: "1.8", marginTop: "0.5rem" }}>Gemini, GPT, Grok, and Claude research independently — no groupthink.</p>
-            <p style={{ color: "#888888", fontSize: "0.85rem", lineHeight: "1.8" }}>Perplexity fact-checks everything against live web data.</p>
-            <p style={{ color: "#888888", fontSize: "0.85rem", lineHeight: "1.8" }}>Claude synthesizes all four — you see exactly how.</p>
-            <p style={{ color: "#aaaaaa", fontSize: "0.85rem", lineHeight: "1.8", marginTop: "0.5rem" }}>The final answer is yours.</p>
+            <p style={{ color: "#cccccc", fontSize: "0.85rem", lineHeight: "1.8" }}>Four researchers. One fact-checker. You in the chair.</p>
+            <p style={{ color: "#888888", fontSize: "0.85rem", lineHeight: "1.8", marginTop: "0.5rem" }}>Four frontier models research independently — no groupthink.</p>
+            <p style={{ color: "#888888", fontSize: "0.85rem", lineHeight: "1.8" }}>An independent search tool fact-checks every claim against live web data.</p>
+            <p style={{ color: "#888888", fontSize: "0.85rem", lineHeight: "1.8" }}>Claude synthesizes all four. You add your perspective. Then you decide.</p>
           </div>
         </header>
 
@@ -67,7 +60,7 @@ function LandingPage({ onSubmitDescription }) {
                 type="text"
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
-                placeholder="What would you like to ask the experts?"
+                placeholder="What decision are you working through?"
                 className="w-full rounded-lg bg-surface py-3 pl-4 pr-14 text-sm text-text-primary caret-chrome placeholder:text-text-secondary focus:outline-none"
                 style={{ border: "1px solid #2a2a2a" }}
                 autoFocus
@@ -89,24 +82,34 @@ function LandingPage({ onSubmitDescription }) {
         {/* 3. Divider */}
         <hr className="my-12 border-0 border-t" style={{ borderColor: "#333333" }} />
 
-        {/* 4. THE PANEL — single column, centered */}
-        <div className="mx-auto max-w-xs">
-          <h2 className="mb-4 text-center text-sm font-semibold uppercase tracking-wide leading-snug text-text-primary">
-            THE PANEL
-          </h2>
-          <div className="space-y-2">
-            {panelRows.map((row) => (
-              <div key={row.key} className="flex items-center gap-x-2 text-sm leading-relaxed">
-                <span className="shrink-0 text-sm text-[#888888]" aria-hidden>
-                  •
-                </span>
-                <span className="font-semibold" style={{ color: row.nameColor }}>
-                  {row.name}
-                </span>
-                <span style={{ color: "#e8e8e8" }}>:</span>{" "}
-                <span className="text-[#888888]">{row.role}</span>
-              </div>
-            ))}
+        {/* 4. You above the panel */}
+        <div className="mx-auto max-w-xs space-y-5">
+          {/* User — above the team */}
+          <div className="text-center">
+            <p className="text-sm font-semibold uppercase tracking-wide" style={{ color: "#e8e8e8" }}>
+              You are in the Chair.
+            </p>
+          </div>
+
+          {/* THE PANEL */}
+          <div>
+            <h2 className="mb-3 text-center text-xs font-semibold uppercase tracking-wide text-text-secondary">
+              The Panel
+            </h2>
+            <div className="space-y-2">
+              {panelRows.map((row) => (
+                <div key={row.key} className="flex items-center gap-x-2 text-sm leading-relaxed">
+                  <span className="shrink-0 text-sm text-[#888888]" aria-hidden>
+                    •
+                  </span>
+                  <span className="font-semibold" style={{ color: row.nameColor }}>
+                    {row.name}
+                  </span>
+                  <span style={{ color: "#e8e8e8" }}>:</span>{" "}
+                  <span className="text-[#888888]">{row.role}</span>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
 
