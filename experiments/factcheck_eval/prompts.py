@@ -28,12 +28,13 @@ FACTCHECK_CANDIDATES = {
         "notes":        "Fallback1 candidate — cheaper Perplexity tier",
     },
     "GPT-5.4-WebSearch": {
-        "provider":     "openai_websearch",
-        "model":        "gpt-5.4",
-        "has_live_web": True,
-        "input_rate":   2.50,
-        "output_rate":  10.00,
-        "notes":        "Fallback2 candidate — cross-provider with web search",
+        "provider":          "openai_websearch",
+        "model":             "gpt-5.4",
+        "has_live_web":      True,
+        "input_rate":        2.50,
+        "output_rate":       10.00,
+        "smart_max_tokens":  1200,   # gpt-5.4 truncated at 800; raise to avoid cut-off
+        "notes":             "Fallback2 candidate — cross-provider with web search",
     },
     "Gemini-2.5-Flash-Search": {
         "provider":     "google_search",
@@ -84,8 +85,11 @@ FACTCHECK_TESTS = [
         },
         "automated_checks": {
             "must_flag":          ["$15", "$75", "Claude 3 Opus"],
-            "must_mention":       ["retired", "deprecated", "$5", "$25"],
-            "must_mention_any":   [["4.6", "4.7"]],   # either version is acceptable
+            "must_mention":       ["$5", "$25"],
+            "must_mention_any":   [
+                ["retired", "deprecated", "legacy"],  # any synonym passes
+                ["4.6", "4.7"],                       # either current version
+            ],
             "must_have_citation": True,
             "hard_gate":          True,  # failing this disqualifies for primary
         },

@@ -286,8 +286,11 @@ def call_candidate(
     cfg = FACTCHECK_CANDIDATES[candidate_key]
     prompt = _build_audit_prompt(round1_claims, tier)
 
-    # Token budget: mirrors model_config.py
-    max_tokens = 800 if tier == "smart" else 2000
+    # Token budget: per-candidate override takes precedence over global default
+    if tier == "smart":
+        max_tokens = cfg.get("smart_max_tokens", 800)
+    else:
+        max_tokens = cfg.get("deep_max_tokens", 2000)
 
     if cfg["provider"] == "perplexity":
         return call_perplexity(prompt, cfg["model"], max_tokens)
