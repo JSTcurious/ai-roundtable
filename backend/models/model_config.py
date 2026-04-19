@@ -114,13 +114,13 @@ RESEARCH_CLAUDE_FALLBACK = os.getenv(
 #   Deep:  comprehensive, adversarial (~2000 token output)
 
 FACTCHECK_PRIMARY   = os.getenv(
-    "FACTCHECK_PRIMARY",   "llama-3.1-sonar-large-128k-online"  # Sonar Pro
+    "FACTCHECK_PRIMARY",   "sonar-pro"  # Perplexity Sonar Pro — confirmed working Apr 2026
 )
 FACTCHECK_FALLBACK1 = os.getenv(
-    "FACTCHECK_FALLBACK1", "llama-3.1-sonar-small-128k-online"  # Sonar (cheaper)
+    "FACTCHECK_FALLBACK1", "sonar"      # Perplexity Sonar — cheaper tier, same grounding
 )
 FACTCHECK_FALLBACK2 = os.getenv(
-    "FACTCHECK_FALLBACK2", "gpt-5.4"  # cross-provider last resort with web search
+    "FACTCHECK_FALLBACK2", "gpt-5.4"   # cross-provider last resort with web search
 )
 
 # Audit depth token limits — enforced at API level
