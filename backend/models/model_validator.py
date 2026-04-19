@@ -47,14 +47,19 @@ def _list_openai_models() -> set:
 
 def _list_google_models() -> set:
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=os.environ.get("GOOGLE_API_KEY", ""))
-        models = genai.list_models()
-        return {
-            m.name.replace("models/", "")
-            for m in models
-            if "generateContent" in m.supported_generation_methods
-        }
+        from google import genai
+        client = genai.Client(api_key=os.environ.get("GOOGLE_API_KEY", ""))
+        result = set()
+        for m in client.models.list():
+            name = m.name.replace("models/", "") if m.name else ""
+            if not name:
+                continue
+            # Include if generateContent is supported; fall back to including all
+            # if the attribute is absent (SDK version difference).
+            methods = getattr(m, "supported_generation_methods", None) or []
+            if not methods or "generateContent" in methods:
+                result.add(name)
+        return result
     except Exception as e:
         logger.warning(f"Could not fetch Google model list: {e}")
         return set()
