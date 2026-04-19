@@ -1,129 +1,132 @@
 # ADR 003: Intake Model Selection
 
-**Status:** Accepted
+**Status:** Accepted  
 **Date:** 2026-04-17
 
 ## Context
 
-The intake model is the first AI the user interacts with. It runs before any
-frontier model is invoked and makes three decisions that gate session quality:
+ai-roundtable uses an intake stage to:
 
-1. **Clarification** — does the user's prompt have enough context to run the
-   roundtable, or does it need a single focused follow-up question?
-2. **Tier assignment** — should the session use Quick / Smart / Deep models?
-3. **Prompt optimization** — rewrite the user's raw input as a precise,
-   context-rich prompt that eliminates assumptions before passing to round-1.
+1. Detect whether a prompt needs clarification before the roundtable runs
+2. Preserve user-provided proper nouns exactly as typed
+3. Optimize the prompt for multi-model research
+4. Assign session tier (always "smart" — deep is user opt-in via the frontend modal)
 
-The intake model must also follow a **proper noun preservation rule**: any
-model name, product name, version number, or named entity provided by the user
-must survive into the optimized prompt unchanged. A model that substitutes
-"Claude Opus 4.7" with "Claude 3 Opus" (its training-data equivalent) corrupts
-the session before the first frontier model is called.
+The original intake model was Claude (via `IntakeSession`). This was replaced
+during development due to over-engineering for a classification task and cost.
+Gemini 2.5 Flash was the interim replacement. A discovered bug then forced a
+further change: intake was substituting user-provided model names with its own
+training-data alternatives, corrupting sessions before the first frontier model
+was called.
 
-Constraints specific to the intake role:
+An empirical evaluation harness was built and run against five candidates
+(see `experiments/intake_eval/`).
 
-- **Low latency** — intake runs synchronously before the roundtable. Every
-  millisecond here is felt by the user. Target < 2s.
-- **Structured output required** — must return a valid `IntakeDecision` JSON
-  object on every call. No graceful degradation to free text.
-- **Cost efficiency** — intake runs on every session, including Quick-tier
-  sessions that cost pennies end-to-end. High intake cost breaks the model.
-- **Reliability** — 503s or rate limits at intake abort the session before it
-  starts. Production must tolerate at least one retry.
+## The Proper Noun Bug
 
-## Evaluation
+During production use of Gemini 2.5 Flash as the interim intake model, the
+following was observed:
 
-The `experiments/intake_eval/` harness tests five candidates across six
-scenarios with automated assertion scoring.
+- User typed: "Compare Claude Opus 4.7 and GPT-5 for enterprise coding use cases"
+- Gemini Flash rewrote as: "Compare Claude 3 Opus and GPT-4 for enterprise coding use cases"
 
-### Candidates
+The entire research session ran against models the user did not ask about.
+Root cause: Gemini Flash's training data treats "Claude Opus 4.7" and "GPT-5"
+as unannounced future models and substitutes the nearest known alternatives.
+The `PROPER NOUN PRESERVATION` rule in the system prompt was insufficient —
+training data overrode the instruction at the point of token generation.
 
-| Candidate | Provider | Input rate | Output rate |
-|-----------|----------|-----------|------------|
-| Gemini 2.5 Flash | Google | $0.15/MTok | $0.60/MTok |
-| Gemini 2.0 Flash | Google | $0.10/MTok | $0.40/MTok |
-| GPT-4o Mini | OpenAI | $0.15/MTok | $0.60/MTok |
-| Claude Haiku 4.5 | Anthropic | $0.80/MTok | $4.00/MTok |
-| Qwen 2.5 72B | OpenRouter | $0.40/MTok | $1.20/MTok |
+This was confirmed in production transcript 013 and became the hard gate
+criterion for the intake eval.
 
-### Test Coverage
+## Evaluation Results
+
+Six tests with automated assertion scoring (see `experiments/intake_eval/results/`):
 
 | Test | Capability |
 |------|-----------|
-| test1-simple | Proceeds without clarification; smart tier |
-| test2-vague | Triggers exactly one clarifying question |
-| test3-proper-nouns | User-provided model names survive unchanged |
-| test4a-tier-quick | Factual lookup → quick tier |
-| test4b-tier-deep | Architecture decision → deep tier |
-| test5-two-turn | Proper nouns survive across clarification round-trip |
-| test6-consistency | Same borderline prompt → same tier across 3 runs |
+| T1 — Simple | Proceeds without clarification; assigns smart tier |
+| T2 — Vague | Triggers exactly one clarifying question |
+| T3 — Proper nouns | User-provided model names survive into optimized_prompt unchanged |
+| T4a — Tier quick | Factual lookup → quick tier |
+| T4b — Tier deep | Architecture decision → deep tier |
+| T5 — Two-turn | Proper nouns survive across clarification round-trip |
+| T6 — Consistency | Same borderline prompt → same tier across 3 runs |
 
-### Critical Failure Conditions
+| Model | Score | Cost/session | 1K sessions | Verdict |
+|-------|-------|--------------|-------------|---------|
+| GPT-4o Mini | 16/16 (100%) | $0.000226 | $0.23 | ✅ PASS |
+| Qwen 2.5 72B | 16/16 (100%) | $0.000583 | $0.58 | ✅ PASS |
+| Claude Haiku 4.5 | 10/16 (62%) | $0.002094 | $2.09 | ⚠️ PARTIAL |
+| Gemini 2.5 Flash | 4/14 (29%) | $0.000159 | $0.16 | ❌ FAIL |
+| Gemini 2.0 Flash | 0/14 (0%) | $0.000000 | $0.00 | ❌ API ERROR |
 
-- Any proper noun substitution in `optimized_prompt` → hard fail
-- JSON parse error on any test → hard fail for that test
-- Tier instability across consistency runs → hard fail
+Gemini 2.5 Flash returned `None` on T1, T3, T5, T6 — JSON parse failures
+(structured output not enforced). It passed only T2 and T4a. Its 29% score
+is not a marginal miss; it failed the proper noun test that motivated the eval.
+Gemini 2.0 Flash had a complete API failure.
 
-_Fill in results from `experiments/intake_eval/results/summary-*.md` after
-running the eval harness:_
-```
-python -m experiments.intake_eval.run_eval
-```
+GPT-4o Mini and Qwen 2.5 72B both scored 16/16. The consistency test showed
+GPT-4o Mini assigns `"smart"` stably across 3 runs; Claude Haiku assigned `"deep"`
+stably — an overcall for the borderline prompt used.
 
 ## Decision
 
-**Gemini 2.5 Flash is the production intake model.**
+**Intake fallback chain with provider diversity:**
 
-Key reasons:
+```
+Primary:   GPT-4o Mini      (OpenAI)
+Fallback1: Qwen 2.5 72B     (OpenRouter — different provider)
+Fallback2: Claude Haiku 4.5 (Anthropic — last resort)
+Emergency: Passthrough       (raw prompt, smart tier, never fails the user)
+```
 
-1. **Native structured output** — the Google Generative AI SDK's
-   `response_schema` parameter enforces the `IntakeDecision` Pydantic schema
-   at the API level. Parse errors are structurally impossible; no JSON
-   extraction logic is needed.
-2. **Low latency** — Gemini Flash is optimized for fast single-turn calls.
-   Typical intake call completes in < 1.5s.
-3. **Low cost** — at $0.15/$0.60 per MTok, intake cost is negligible relative
-   to round-1 and synthesis calls on Smart and Deep tiers. On Quick tier,
-   intake cost is within the same order of magnitude as synthesis.
-4. **Proper noun preservation** — with the `PROPER NOUN PRESERVATION` rule
-   added to `GEMINI_INTAKE_SYSTEM` and the preservation instruction in the
-   Turn 1 combined prompt, Gemini 2.5 Flash passes the preservation assertions.
+**Why GPT-4o Mini as primary:** 100% assertion score, stable `"smart"` tier
+assignment, passes proper noun preservation, $0.23/1K sessions. Uses
+`response_format: json_object` with `temperature: 0.1` for reliable structured
+output. No observed training-data substitution of user-provided model names.
 
-The intake model is intentionally pinned separately from round-1 Gemini via
-`INTAKE_MODEL = os.getenv("GEMINI_INTAKE_MODEL", "gemini-2.5-flash")` in
-`backend/models/google_client.py`. This allows the intake model to be upgraded
-or swapped without touching the research model configuration.
+**Why Qwen 2.5 72B as Fallback1:** Also 100% — identical quality to primary,
+on OpenRouter (different provider), $0.58/1K. If OpenAI is down, Qwen has no
+shared failure mode.
 
-## Alternatives Considered
+**Why Claude Haiku as Fallback2:** 62% score — lower than primary candidates
+but acceptable as last resort. Third distinct provider. Higher cost ($2.09/1K)
+is only incurred during OpenAI+OpenRouter simultaneous failure.
 
-**Claude Haiku 4.5** — produces good intake quality but costs 5–6x more per
-call than Gemini Flash at intake token volumes. Lacks native structured output
-enforcement; requires JSON extraction. Excluded for cost.
+**Why passthrough emergency exists:** Intake failure should never block a session.
+The passthrough returns the raw user prompt at smart tier — research quality
+degrades but the session runs.
 
-**GPT-4o Mini** — viable quality, comparable cost to Gemini Flash. Lacks
-`response_schema` enforcement; uses `response_format: {"type": "json_object"}`
-which reduces but does not eliminate parse errors. Acceptable as fallback.
-
-**Gemini 2.0 Flash** — previous generation. Marginally cheaper than 2.5 Flash
-but lower quality on complex clarification decisions. Only relevant if 2.5
-Flash becomes unavailable.
-
-**Qwen 2.5 72B (OpenRouter)** — open-weight model with lower cost than Haiku
-but higher than Gemini Flash. No structured output enforcement. OpenRouter
-latency is less predictable for synchronous intake use. Excluded.
+**Intake always returns `tier: "smart"`:** Deep sessions require explicit user
+confirmation via the frontend modal. `IntakeDecision.tier` is `Literal["smart"]`
+in `backend/models/intake_decision.py` — schema enforces this at the type level,
+not just the prompt level. The eval was run before this simplification (T4a/T4b
+tested quick and deep tier assignment); those tests are now superseded.
 
 ## Consequences
 
-- `GEMINI_INTAKE_MODEL` env var allows intake model override without a
-  code deploy. Can switch to Gemini 2.0 Flash or GPT-4o Mini as fallback.
-- The `PROPER NOUN PRESERVATION` rule must be maintained in `GEMINI_INTAKE_SYSTEM`
-  for all future iterations of the system prompt.
-- The two-turn flow (Turn 0 → clarifying question → Turn 1 → optimized prompt)
-  must preserve proper nouns across both turns. The Turn 1 combined string must
-  include the preservation instruction (verified in test5-two-turn).
-- Gemini 503 errors during intake abort the session. `backend/models/
-  google_client.py` implements retry logic (`call_gemini_intake` retries up
-  to 3 times with 2s backoff on 503).
-- The eval harness (`experiments/intake_eval/`) is a regression guard. Run it
-  when changing `GEMINI_INTAKE_SYSTEM` or switching intake models.
-- Cost analysis is automated via `experiments/generate_cost_report.py`.
+- Intake cost: ~$0.23/1K sessions (negligible at any scale)
+- Provider diversity across the fallback chain — no single provider outage
+  can block intake
+- Passthrough emergency ensures sessions always run even if all intake models fail
+- `IntakeDecision.tier: Literal["smart"]` makes the two-tier architecture
+  enforceable at the type system level, not just by convention
+- The eval harness (`experiments/intake_eval/`) is the regression guard — run it
+  when changing `INTAKE_SYSTEM_PROMPT` or adding intake model candidates
+
+## Alternatives Considered
+
+**Gemini 2.5 Flash as primary:** Was the interim primary after Claude replacement.
+Rejected after eval — 29% score, failed proper noun preservation. The bug was
+confirmed in production transcript 013.
+
+**Claude Sonnet 4.6 as primary:** Considered for brand consistency. Rejected —
+GPT-4o Mini scored identically (100%) at 23× lower cost. Brand consistency at
+the intake layer is invisible to users; they see the optimized prompt, not which
+model processed their input.
+
+**End-to-end quality eval (intake prompt → research output quality):** Proposed
+but deferred to reduce complexity. The mechanical correctness eval (100% on
+GPT-4o Mini) is sufficient for the intake classification task. Measure intake
+quality by research output quality only if intake becomes a bottleneck.
