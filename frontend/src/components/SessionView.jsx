@@ -206,6 +206,39 @@ function ThinkingDotsBubble({ label, color, uppercase = true, subtitle }) {
 }
 
 /**
+ * Build the display string for a model bubble header, incorporating model
+ * transparency metadata received from the backend.
+ *
+ * @param {string} _lab        — "claude" | "gemini" | "gpt" | "grok"
+ * @param {string} emoji       — emoji prefix, e.g. "🟠"
+ * @param {string} name        — display name, e.g. "CLAUDE"
+ * @param {Object|undefined} meta — modelMeta entry for this lab
+ * @param {string|undefined} [tier] — session tier from sessionConfig
+ * @returns {string}
+ */
+function buildModelHeader(_lab, emoji, name, meta, tier) {
+  if (!meta || !meta.model_used) return `${emoji} ${name}`;
+  const execId = meta.model_used;
+  const advisorId = meta.advisor_model || "";
+  const metaTier = meta.tier || tier || "smart";
+  const avail = meta.availability || "primary";
+
+  // Strip any vendor prefix (e.g. "anthropic/claude-sonnet-4-6" → "claude-sonnet-4-6")
+  const shortExec   = execId.split("/").pop();
+  const shortAdvisor = advisorId.split("/").pop();
+
+  let header = `${emoji} ${name} · ${shortExec}`;
+  if (metaTier === "smart" && shortAdvisor && shortAdvisor !== shortExec) {
+    header += ` → ${shortAdvisor}`;
+  }
+  header += ` · ${metaTier.charAt(0).toUpperCase() + metaTier.slice(1)}`;
+  if (avail !== "primary") {
+    header += " ⚠ Fallback";
+  }
+  return header;
+}
+
+/**
  * @param {Object} props
  * @param {Object} props.sessionConfig
  * @param {Object | null} [props.resumeTranscript] — saved `{ messages, intake_summary? }`; skips WebSocket and shows static session + export
@@ -251,6 +284,21 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
 
   // ── Perplexity citations — shown below FINAL ANSWER ─────────────────────
   const [citations, setCitations] = useState([]);
+
+  // ── Philosophy B: YOUR TAKE HITL step ────────────────────────────────────
+  /** True after fact-check completes — YOUR TAKE step is visible */
+  const [awaitingUserTake, setAwaitingUserTake] = useState(false);
+  /** User's optional perspective text */
+  const [userTake, setUserTake] = useState("");
+  /** True after user clicks Synthesize — input becomes read-only */
+  const [synthesisRequested, setSynthesisRequested] = useState(false);
+
+  // ── Model transparency — metadata received with model_complete ───────────
+  /** { claude: {model_used, advisor_model, tier, availability}, gemini: {...}, ... } */
+  const [modelMeta, setModelMeta] = useState({});
+
+  // ── Live WS ref — used by Synthesize button to send submit_user_take ─────
+  const wsRef = useRef(/** @type {WebSocket|null} */ (null));
 
   const r1CountsRef = useRef({ Gemini: 0, GPT: 0, Grok: 0, Claude: 0 });
 
@@ -430,6 +478,10 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     setSynthesisFinal(false);
     setSessionComplete(false);
     setCitations([]);
+    setAwaitingUserTake(false);
+    setUserTake("");
+    setSynthesisRequested(false);
+    setModelMeta({});
 
     const url = wsUrlFromApiBase();
 
@@ -445,6 +497,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
 
       const ws = new WebSocket(url);
       wsHolder.current = ws;
+      wsRef.current = ws;
 
       const connectTimeoutId = window.setTimeout(() => {
         if (cancelled) return;
@@ -480,6 +533,17 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
             break;
           case "model_complete":
             handleModelComplete(data.sender);
+            if (data.model_used) {
+              setModelMeta((prev) => ({
+                ...prev,
+                [data.sender.toLowerCase()]: {
+                  model_used:    data.model_used    || "",
+                  advisor_model: data.advisor_model || "",
+                  tier:          data.tier          || "",
+                  availability:  data.availability  || "primary",
+                },
+              }));
+            }
             break;
           case "advisor_thinking": {
             const advSender = data.sender;
@@ -504,6 +568,9 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
             setPerplexityContent(data.content ?? "");
             setCitations(data.citations || []);
             setPerplexityPhase("content");
+            break;
+          case "awaiting_user_take":
+            setAwaitingUserTake(true);
             break;
           case "synthesis_thinking":
             setSynthesisThinking(true);
@@ -586,6 +653,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
       cancelled = true;
       window.clearTimeout(reconnectTimeoutId);
       if (pingIntervalId) window.clearInterval(pingIntervalId);
+      wsRef.current = null;
       const ws = wsHolder.current;
       if (ws) {
         ws.onmessage = null;
@@ -633,6 +701,14 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     a.remove();
     URL.revokeObjectURL(url);
   }, [synthesisText]);
+
+  const handleSynthesize = useCallback(() => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    setSynthesisRequested(true);
+    setAwaitingUserTake(false);
+    ws.send(JSON.stringify({ type: "submit_user_take", user_take: userTake }));
+  }, [userTake]);
 
   const requestHome = useCallback(() => {
     if (!onNavigateHome) return;
@@ -727,13 +803,17 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     const factDone = isResume || perplexityPhase === "content" || (synthesisPhaseEntered && perplexityPhase !== "thinking");
     const factActive = perplexityPhase === "thinking";
 
-    // SYNTHESIS — active during observations + synthesis thinking/streaming, done when final
+    // YOUR TAKE — active when awaiting user input, done when user clicks Synthesize
+    const yourTakeDone = isResume || synthesisRequested || synthesisFinal;
+    const yourTakeActive = awaitingUserTake && !synthesisRequested;
+
+    // SYNTHESIS — active during synthesis thinking/streaming, done when final
     const sDone = isResume || synthesisFinal;
     const sActive = synthesisPhaseEntered && !synthesisFinal;
     const sLabel = synthesisThinking || synthesisStreaming ? "SYNTHESIZING..." : "FINAL ANSWER";
 
-    return { promptDone, transcriptDone, transcriptActive, factDone, factActive, sDone, sActive, sLabel };
-  }, [isResume, sessionStarted, synthesisPhaseEntered, perplexityPhase, synthesisThinking, synthesisStreaming, synthesisFinal]);
+    return { promptDone, transcriptDone, transcriptActive, factDone, factActive, yourTakeDone, yourTakeActive, sDone, sActive, sLabel };
+  }, [isResume, sessionStarted, synthesisPhaseEntered, perplexityPhase, synthesisThinking, synthesisStreaming, synthesisFinal, awaitingUserTake, synthesisRequested]);
 
   // ── Pipeline stage done flags ─────────────────────────────────────────────
   const researchStageDone = isResume || perplexityPhase !== "off" || synthesisPhaseEntered;
@@ -846,6 +926,13 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
           </span>
           <span className="mx-1" style={{ color: "#F5A623" }}>→</span>
           <span
+            className={breadcrumbState.yourTakeActive ? "animate-pulse" : ""}
+            style={{ color: breadcrumbState.yourTakeDone || breadcrumbState.yourTakeActive ? "#F5A623" : "#666666" }}
+          >
+            {breadcrumbState.yourTakeDone ? "✓" : breadcrumbState.yourTakeActive ? "●" : "○"} YOUR TAKE
+          </span>
+          <span className="mx-1" style={{ color: "#F5A623" }}>→</span>
+          <span
             className={breadcrumbState.sActive ? "animate-pulse" : ""}
             style={{ color: breadcrumbState.sDone || breadcrumbState.sActive ? "#F5A623" : "#666666" }}
           >
@@ -871,7 +958,177 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
           </div>
         </section>
 
-        {/* ── FINAL ANSWER — shown when phase entered; always expanded ── */}
+        {/* ── RESEARCH — shown when session started ── */}
+        {showTranscriptRoundtable && (
+          <section aria-label="Research" className="space-y-3">
+            <h2 className={`text-xs font-semibold uppercase tracking-wide text-text-secondary${!researchStageDone ? " animate-pulse" : ""}`}>
+              Research
+            </h2>
+            {/* Alphabetical order: Claude, Gemini, GPT, Grok */}
+            <div className="space-y-4">
+
+              {/* Claude */}
+              {claudeR1RoundActive && (
+                <div className="min-w-0 space-y-1">
+                  {showClaudeR1Thinking ? (
+                    <ThinkingDotsBubble label="🟠 CLAUDE" color={MODEL_HEX.Claude} />
+                  ) : claudeR1Complete && isSkipNotice(claudeR1) ? (
+                    <p className="text-xs text-[#888888]" role="status">Claude is unavailable right now — skipped this round.</p>
+                  ) : (
+                    <ModelBubble
+                      sender="Claude"
+                      titleOverride={buildModelHeader("claude", "🟠", "CLAUDE", modelMeta.claude, sessionConfig?.tier)}
+                      content={bubbleBody(claudeR1, claudeR1Complete)}
+                      isStreaming={claudeR1Streaming}
+                      round="round1"
+                      complete={claudeR1Complete}
+                      contentMaxHeight="200px"
+                    />
+                  )}
+                </div>
+              )}
+
+              {/* Gemini */}
+              {geminiRoundActive && (
+                <div className="min-w-0 space-y-1">
+                  {showGeminiThinking ? (
+                    <ThinkingDotsBubble label="🔵 GEMINI" color={MODEL_HEX.Gemini} />
+                  ) : geminiR1Complete && isSkipNotice(geminiR1) ? (
+                    <p className="text-xs text-[#888888]" role="status">Gemini is unavailable right now — skipped this round.</p>
+                  ) : (
+                    <>
+                      <ModelBubble
+                        sender="Gemini"
+                        titleOverride={buildModelHeader("gemini", "🔵", "GEMINI", modelMeta.gemini, sessionConfig?.tier)}
+                        content={bubbleBody(geminiR1, geminiR1Complete)}
+                        isStreaming={geminiR1Streaming}
+                        round="round1"
+                        complete={geminiR1Complete}
+                        contentMaxHeight="200px"
+                      />
+                      {geminiAdvisorReviewing && (
+                        <p className="text-xs text-[#888888]" role="status" aria-live="polite">⚖ advisor reviewing...</p>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* GPT */}
+              {gptRoundActive && (
+                <div className="min-w-0 space-y-1">
+                  {showGptThinking ? (
+                    <ThinkingDotsBubble label="🟢 GPT" color={MODEL_HEX.GPT} />
+                  ) : gptR1Complete && isSkipNotice(gptR1) ? (
+                    <p className="text-xs text-[#888888]" role="status">GPT is unavailable right now — skipped this round.</p>
+                  ) : (
+                    <>
+                      <ModelBubble
+                        sender="GPT"
+                        titleOverride={buildModelHeader("gpt", "🟢", "GPT", modelMeta.gpt, sessionConfig?.tier)}
+                        content={bubbleBody(gptR1, gptR1Complete)}
+                        isStreaming={gptR1Streaming}
+                        round="round1"
+                        complete={gptR1Complete}
+                        contentMaxHeight="200px"
+                      />
+                      {gptAdvisorReviewing && (
+                        <p className="text-xs text-[#888888]" role="status" aria-live="polite">⚖ advisor reviewing...</p>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* Grok */}
+              {grokRoundActive && (
+                <div className="min-w-0 space-y-1">
+                  {showGrokThinking ? (
+                    <ThinkingDotsBubble label="● GROK" color={MODEL_HEX.Grok} />
+                  ) : grokR1Complete && isSkipNotice(grokR1) ? (
+                    <p className="text-xs text-[#888888]" role="status">Grok is unavailable right now — skipped this round.</p>
+                  ) : (
+                    <>
+                      <ModelBubble
+                        sender="Grok"
+                        titleOverride={buildModelHeader("grok", "●", "GROK", modelMeta.grok, sessionConfig?.tier)}
+                        content={bubbleBody(grokR1, grokR1Complete)}
+                        isStreaming={grokR1Streaming}
+                        round="round1"
+                        complete={grokR1Complete}
+                        contentMaxHeight="200px"
+                      />
+                      {grokAdvisorReviewing && (
+                        <p className="text-xs text-[#888888]" role="status" aria-live="polite">⚖ advisor reviewing...</p>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          </section>
+        )}
+
+        {/* ── FACT-CHECK — shown when Perplexity started ── */}
+        {perplexityPhase !== "off" && (
+          <section aria-label="Fact-check" className="space-y-3">
+            <h2 className={`text-xs font-semibold uppercase tracking-wide text-text-secondary${perplexityPhase === "thinking" ? " animate-pulse" : ""}`}>
+              Fact-Check
+            </h2>
+            <div className="space-y-2">
+              {perplexityPhase === "thinking" && (
+                <ThinkingDotsBubble label="🔎 PERPLEXITY" color={MODEL_HEX.Perplexity} />
+              )}
+              {perplexityPhase === "content" && String(perplexityContent).trim() && (
+                <ModelBubble
+                  sender="Perplexity"
+                  content={perplexityContent}
+                  isStreaming={false}
+                  round="audit"
+                  complete
+                  titleOverride="🔎 PERPLEXITY · Sonar Pro"
+                  contentMaxHeight="300px"
+                />
+              )}
+            </div>
+          </section>
+        )}
+
+        {/* ── YOUR TAKE — shown after fact-check completes ── */}
+        {awaitingUserTake && (
+          <section aria-label="Your take" className="space-y-3">
+            <h2 className="text-xs font-semibold uppercase tracking-wide text-text-secondary animate-pulse">
+              Your Take
+            </h2>
+            <div className="rounded-lg border border-border bg-surface px-4 py-4 space-y-3">
+              <label htmlFor="user-take-input" className="sr-only">
+                Your perspective (optional)
+              </label>
+              <textarea
+                id="user-take-input"
+                rows={3}
+                value={userTake}
+                onChange={(e) => setUserTake(e.target.value)}
+                disabled={synthesisRequested}
+                placeholder="What's your read on this? Any model you trust more? Anything you want weighted differently? (optional)"
+                className="w-full resize-y rounded-md border border-border bg-bg px-3 py-2 text-sm leading-relaxed text-text-primary placeholder:text-text-secondary focus:border-border-focus focus:outline-none disabled:opacity-50"
+              />
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={handleSynthesize}
+                  disabled={synthesisRequested}
+                  className="rounded-lg px-5 py-2 text-sm font-bold transition-opacity hover:opacity-90 focus:outline-none disabled:opacity-40"
+                  style={{ background: "#F5A623", color: "#0d0d0d" }}
+                >
+                  {synthesisRequested ? "Synthesizing…" : "Synthesize →"}
+                </button>
+              </div>
+            </div>
+          </section>
+        )}
+
+        {/* ── FINAL ANSWER — shown after user clicks Synthesize ── */}
         {synthesisPhaseEntered && (
           <section aria-label="Final answer" className="space-y-3">
             <div className="flex items-center gap-3">
@@ -923,142 +1180,6 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
                       </li>
                     ))}
                   </ol>
-                </div>
-              )}
-            </div>
-          </section>
-        )}
-
-        {/* ── FACT-CHECK — shown when Perplexity started ── */}
-        {perplexityPhase !== "off" && (
-          <section aria-label="Fact-check" className="space-y-3">
-            <h2 className={`text-xs font-semibold uppercase tracking-wide text-text-secondary${perplexityPhase === "thinking" ? " animate-pulse" : ""}`}>
-              Fact-Check
-            </h2>
-            <div className="space-y-2">
-              {perplexityPhase === "thinking" && (
-                <ThinkingDotsBubble label="🔎 PERPLEXITY" color={MODEL_HEX.Perplexity} />
-              )}
-              {perplexityPhase === "content" && String(perplexityContent).trim() && (
-                <ModelBubble
-                  sender="Perplexity"
-                  content={perplexityContent}
-                  isStreaming={false}
-                  round="audit"
-                  complete
-                  titleOverride="🔎 PERPLEXITY"
-                  contentMaxHeight="300px"
-                />
-              )}
-            </div>
-          </section>
-        )}
-
-        {/* ── RESEARCH — shown when session started ── */}
-        {showTranscriptRoundtable && (
-          <section aria-label="Research" className="space-y-3">
-            <h2 className={`text-xs font-semibold uppercase tracking-wide text-text-secondary${!researchStageDone ? " animate-pulse" : ""}`}>
-              Research
-            </h2>
-            {/* Alphabetical order: Claude, Gemini, GPT, Grok — each with its own scrollable bubble */}
-            <div className="space-y-4">
-
-              {/* Claude */}
-              {claudeR1RoundActive && (
-                <div className="min-w-0 space-y-1">
-                  {showClaudeR1Thinking ? (
-                    <ThinkingDotsBubble label="🟠 CLAUDE" color={MODEL_HEX.Claude} />
-                  ) : claudeR1Complete && isSkipNotice(claudeR1) ? (
-                    <p className="text-xs text-[#888888]" role="status">Claude is unavailable right now — skipped this round.</p>
-                  ) : (
-                    <ModelBubble
-                      sender="Claude"
-                      titleOverride="🟠 CLAUDE"
-                      content={bubbleBody(claudeR1, claudeR1Complete)}
-                      isStreaming={claudeR1Streaming}
-                      round="round1"
-                      complete={claudeR1Complete}
-                      contentMaxHeight="200px"
-                    />
-                  )}
-                </div>
-              )}
-
-              {/* Gemini */}
-              {geminiRoundActive && (
-                <div className="min-w-0 space-y-1">
-                  {showGeminiThinking ? (
-                    <ThinkingDotsBubble label="🔵 GEMINI" color={MODEL_HEX.Gemini} />
-                  ) : geminiR1Complete && isSkipNotice(geminiR1) ? (
-                    <p className="text-xs text-[#888888]" role="status">Gemini is unavailable right now — skipped this round.</p>
-                  ) : (
-                    <>
-                      <ModelBubble
-                        sender="Gemini"
-                        titleOverride="🔵 GEMINI"
-                        content={bubbleBody(geminiR1, geminiR1Complete)}
-                        isStreaming={geminiR1Streaming}
-                        round="round1"
-                        complete={geminiR1Complete}
-                        contentMaxHeight="200px"
-                      />
-                      {geminiAdvisorReviewing && (
-                        <p className="text-xs text-[#888888]" role="status" aria-live="polite">⚖ advisor reviewing...</p>
-                      )}
-                    </>
-                  )}
-                </div>
-              )}
-
-              {/* GPT */}
-              {gptRoundActive && (
-                <div className="min-w-0 space-y-1">
-                  {showGptThinking ? (
-                    <ThinkingDotsBubble label="🟢 GPT" color={MODEL_HEX.GPT} />
-                  ) : gptR1Complete && isSkipNotice(gptR1) ? (
-                    <p className="text-xs text-[#888888]" role="status">GPT is unavailable right now — skipped this round.</p>
-                  ) : (
-                    <>
-                      <ModelBubble
-                        sender="GPT"
-                        titleOverride="🟢 GPT"
-                        content={bubbleBody(gptR1, gptR1Complete)}
-                        isStreaming={gptR1Streaming}
-                        round="round1"
-                        complete={gptR1Complete}
-                        contentMaxHeight="200px"
-                      />
-                      {gptAdvisorReviewing && (
-                        <p className="text-xs text-[#888888]" role="status" aria-live="polite">⚖ advisor reviewing...</p>
-                      )}
-                    </>
-                  )}
-                </div>
-              )}
-
-              {/* Grok */}
-              {grokRoundActive && (
-                <div className="min-w-0 space-y-1">
-                  {showGrokThinking ? (
-                    <ThinkingDotsBubble label={<><span style={{ fontSize: "1.15em", lineHeight: 1, verticalAlign: "middle" }}>●</span>{" GROK"}</>} color={MODEL_HEX.Grok} />
-                  ) : grokR1Complete && isSkipNotice(grokR1) ? (
-                    <p className="text-xs text-[#888888]" role="status">Grok is unavailable right now — skipped this round.</p>
-                  ) : (
-                    <>
-                      <ModelBubble
-                        sender="Grok"
-                        titleOverride={<><span style={{ fontSize: "1.15em", lineHeight: 1, verticalAlign: "middle" }}>●</span>{" GROK"}</>}
-                        content={bubbleBody(grokR1, grokR1Complete)}
-                        isStreaming={grokR1Streaming}
-                        round="round1"
-                        complete={grokR1Complete}
-                        contentMaxHeight="200px"
-                      />
-                      {grokAdvisorReviewing && (
-                        <p className="text-xs text-[#888888]" role="status" aria-live="polite">⚖ advisor reviewing...</p>
-                      )}
-                    </>
-                  )}
                 </div>
               )}
             </div>
