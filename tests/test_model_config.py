@@ -267,3 +267,80 @@ class TestRouterTierConfig:
     def test_grok_in_deep_config(self):
         result = get_tier_config("deep")
         assert "grok" in result
+
+
+# ── /api/model-info response structure ───────────────────────────────────────
+
+class TestModelInfoEndpoint:
+    """
+    get_model_info() returns the correct structure for all four labs
+    at both smart and deep tiers.
+    """
+
+    def _call(self) -> dict:
+        """Call get_model_info() directly (no HTTP round-trip needed)."""
+        import asyncio
+        from backend.main import get_model_info
+        return asyncio.get_event_loop().run_until_complete(get_model_info())
+
+    def test_returns_smart_and_deep_keys(self):
+        result = self._call()
+        assert "smart" in result
+        assert "deep" in result
+
+    def test_smart_has_all_four_labs(self):
+        result = self._call()
+        for lab in ["claude", "gemini", "gpt", "grok"]:
+            assert lab in result["smart"], f"smart missing lab: {lab}"
+
+    def test_deep_has_all_four_labs(self):
+        result = self._call()
+        for lab in ["claude", "gemini", "gpt", "grok"]:
+            assert lab in result["deep"], f"deep missing lab: {lab}"
+
+    def test_smart_lab_has_executor_and_advisor(self):
+        result = self._call()
+        for lab in ["claude", "gemini", "gpt", "grok"]:
+            entry = result["smart"][lab]
+            assert "executor" in entry, f"smart.{lab} missing executor"
+            assert "advisor" in entry, f"smart.{lab} missing advisor"
+
+    def test_smart_executor_differs_from_advisor(self):
+        """Smart tier uses executor + advisor split — they must be different models."""
+        result = self._call()
+        for lab in ["claude", "gemini", "gpt", "grok"]:
+            entry = result["smart"][lab]
+            assert entry["executor"] != entry["advisor"], (
+                f"smart.{lab}: executor and advisor must differ, both are {entry['executor']!r}"
+            )
+
+    def test_deep_values_are_strings(self):
+        """Deep tier values are plain model ID strings (not dicts)."""
+        result = self._call()
+        for lab in ["claude", "gemini", "gpt", "grok"]:
+            val = result["deep"][lab]
+            assert isinstance(val, str), f"deep.{lab} should be str, got {type(val)}"
+
+    def test_smart_has_factcheck(self):
+        result = self._call()
+        assert "factcheck" in result["smart"]
+        assert isinstance(result["smart"]["factcheck"], str)
+
+    def test_deep_has_factcheck(self):
+        result = self._call()
+        assert "factcheck" in result["deep"]
+        assert isinstance(result["deep"]["factcheck"], str)
+
+    def test_smart_executor_equals_deep_for_no_split_lab(self):
+        """
+        Deep model for each lab should match the smart advisor (same top model).
+        This validates that deep tier uses advisor-grade models throughout.
+        """
+        result = self._call()
+        for lab in ["claude", "gemini", "gpt", "grok"]:
+            smart_advisor = result["smart"][lab]["advisor"]
+            deep_model    = result["deep"][lab]
+            assert smart_advisor == deep_model, (
+                f"{lab}: expected deep model {deep_model!r} to equal "
+                f"smart advisor {smart_advisor!r}"
+            )

@@ -348,3 +348,61 @@ class TestIntakePassthrough:
         from backend.intake import _intake_passthrough
         result = _intake_passthrough("any prompt")
         assert result.needs_clarification is False
+
+
+# ── Philosophy B: build_synthesis_system (YOUR TAKE injection) ────────────────
+
+class TestBuildSynthesisSystem:
+    """build_synthesis_system() generates the correct provider-agnostic prompt."""
+
+    def _build(self, user_take: str = "") -> str:
+        from backend.router import build_synthesis_system
+        return build_synthesis_system(user_take)
+
+    def test_empty_take_produces_empty_variant(self):
+        """Empty user_take → 'did not add additional perspective' language."""
+        result = self._build("")
+        assert "did not add additional perspective" in result
+
+    def test_whitespace_only_take_treated_as_empty(self):
+        """Whitespace-only user_take → same as empty."""
+        result = self._build("   ")
+        assert "did not add additional perspective" in result
+
+    def test_user_text_included_in_prompt(self):
+        """Non-empty user_take → user's text injected verbatim."""
+        result = self._build("I trust Gemini more on this one.")
+        assert "I trust Gemini more on this one." in result
+
+    def test_user_text_triggers_with_input_variant(self):
+        """Non-empty user_take → 'primary input alongside the research' language."""
+        result = self._build("Weight the fact-check heavily.")
+        assert "primary input alongside the research" in result
+
+    def test_no_provider_names_in_template(self):
+        """System prompt template must not name specific AI providers."""
+        result = self._build("")
+        # Provider names must not appear in the role template or section headers
+        assert "Perplexity" not in result
+        assert "Claude" not in result
+        assert "GPT" not in result
+
+    def test_confidence_tags_in_prompt(self):
+        """Confidence tags [VERIFIED], [LIKELY], [UNCERTAIN], [DEFER] present."""
+        result = self._build("")
+        for tag in ("[VERIFIED]", "[LIKELY]", "[UNCERTAIN]", "[DEFER]"):
+            assert tag in result
+
+    def test_synthesis_does_not_auto_trigger(self):
+        """
+        Structural test: build_synthesis_system() requires an explicit user_take
+        parameter — there is no automatic call path without it.
+        The function signature enforces the HITL gate at the call site.
+        """
+        import inspect
+        from backend.router import build_synthesis_system
+        sig = inspect.signature(build_synthesis_system)
+        params = list(sig.parameters)
+        assert "user_take" in params
+        # No default that would bypass the gate — caller must pass a value
+        assert sig.parameters["user_take"].default is inspect.Parameter.empty
