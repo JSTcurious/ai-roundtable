@@ -23,10 +23,18 @@ import Header from "./common/Header";
 
 const API_BASE = process.env.REACT_APP_API_URL || "http://localhost:8000";
 
-const TIER_LABELS = {
-  smart: "⚖ Smart",
-  deep:  "🔍 Deep",
-};
+/** Progressive loading messages — shown in order during the analyzing phase. */
+const LOADING_MESSAGES = [
+  "Analyzing your prompt...",
+  "Optimizing for research...",
+  "Almost ready...",
+];
+
+/** Delays (ms) before switching to each subsequent message. Index 0 fires at 2s, index 1 at 5s. */
+const LOADING_DELAYS = [2000, 5000];
+
+/** After this many ms, show the "taking longer" fallback with a cancel option. */
+const TIMEOUT_MS = 15000;
 
 /**
  * @param {Object}   props
@@ -35,22 +43,17 @@ const TIER_LABELS = {
  * @param {function} [props.onBack]            — optional return to landing
  */
 function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
-  /** "analyzing" | "clarifying" | "badge" | "error" */
+  /** "analyzing" | "clarifying" | "error" — badge phase removed; intake calls onComplete directly */
   const [phase, setPhase] = useState("analyzing");
   const [sessionId, setSessionId] = useState(null);
   const [clarifyingQuestion, setClarifyingQuestion] = useState("");
   const [answer, setAnswer] = useState("");
   const [submittingAnswer, setSubmittingAnswer] = useState(false);
-  const [config, setConfig] = useState(null);
-  /** User's current tier selection — always starts at "smart", can only move to "deep". */
-  const [tierChoice, setTierChoice] = useState("smart");
-  /** Once deep is selected, this locks — no return to smart. */
-  const [tierLocked, setTierLocked] = useState(false);
-  /** Whether the model breakdown is expanded */
-  const [breakdownOpen, setBreakdownOpen] = useState(false);
-  /** Model info from /api/model-info — null until fetched */
-  const [modelInfo, setModelInfo] = useState(null);
   const [error, setError] = useState(null);
+  /** Index into LOADING_MESSAGES — advances on a schedule while analyzing. */
+  const [loadingMsgIdx, setLoadingMsgIdx] = useState(0);
+  /** True when intake has exceeded TIMEOUT_MS with no response. */
+  const [timedOut, setTimedOut] = useState(false);
   const answerRef = useRef(null);
   const hasFiredRef = useRef(false);
 
@@ -59,16 +62,32 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
     if (phase === "clarifying") answerRef.current?.focus();
   }, [phase]);
 
-  // Fetch model info when badge phase is shown (for expandable breakdown)
+  // Progressive loading messages — advance through LOADING_MESSAGES while analyzing.
+  // Timers are cleared as soon as phase changes (intake returned or error).
   useEffect(() => {
-    if (phase !== "badge" || modelInfo) return;
-    fetch(`${API_BASE}/api/model-info`)
-      .then((r) => r.ok ? r.json() : null)
-      .then((data) => { if (data) setModelInfo(data); })
-      .catch(() => {/* non-critical — breakdown will just not render */});
-  }, [phase, modelInfo]);
+    if (phase !== "analyzing") return;
 
-  // On mount: call /api/intake/start with the prompt
+    const ids = [];
+    let cumulative = 0;
+    for (let i = 1; i < LOADING_MESSAGES.length; i++) {
+      cumulative += LOADING_DELAYS[i - 1];
+      const idx = i; // capture
+      const id = setTimeout(() => {
+        // Only advance if still analyzing (guard against race with fast intake)
+        setLoadingMsgIdx((prev) => Math.max(prev, idx));
+      }, cumulative);
+      ids.push(id);
+    }
+
+    // Timeout sentinel — if intake hasn't returned in TIMEOUT_MS, show fallback.
+    const timeoutId = setTimeout(() => setTimedOut(true), TIMEOUT_MS);
+    ids.push(timeoutId);
+
+    return () => ids.forEach(clearTimeout);
+  }, [phase]);
+
+  // On mount: call /api/intake/start with the prompt.
+  // On success, call onComplete directly — no badge confirmation screen.
   useEffect(() => {
     if (hasFiredRef.current) return;
     hasFiredRef.current = true;
@@ -91,17 +110,17 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
           setClarifyingQuestion(data.clarifying_question || "");
           setPhase("clarifying");
         } else {
-          const cfg = data.config || {};
-          setConfig(cfg);
-          setTierChoice("smart");
-          setPhase("badge");
+          // Fix 3: transition immediately — don't wait for user to confirm badge screen.
+          if (typeof onComplete === "function") {
+            onComplete({ ...(data.config || {}), tier: "smart" });
+          }
         }
       } catch (e) {
         setError(e.message || "Intake failed — please go back and try again.");
         setPhase("error");
       }
     })();
-  }, [initialUserMessage]);
+  }, [initialUserMessage, onComplete]);
 
   const submitAnswer = useCallback(async () => {
     const text = answer.trim();
@@ -120,28 +139,16 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
         throw new Error(body.detail || `HTTP ${res.status}`);
       }
       const data = await res.json();
-      const cfg = data.config || {};
-      setConfig(cfg);
-      setTierChoice("smart");
-      setPhase("badge");
+      // Fix 3: immediate transition after clarifying answer too.
+      if (typeof onComplete === "function") {
+        onComplete({ ...(data.config || {}), tier: "smart" });
+      }
     } catch (e) {
       setError(e.message || "Submit failed");
     } finally {
       setSubmittingAnswer(false);
     }
-  }, [answer, sessionId, submittingAnswer]);
-
-  const handleSliderChange = useCallback(() => {
-    // Only allow smart → deep. Deep → smart is never permitted.
-    if (tierLocked) return;
-    setTierChoice("deep");
-    setTierLocked(true);
-  }, [tierLocked]);
-
-  const handleConfirm = useCallback(() => {
-    if (!config || typeof onComplete !== "function") return;
-    onComplete({ ...config, tier: tierChoice });
-  }, [config, tierChoice, onComplete]);
+  }, [answer, sessionId, submittingAnswer, onComplete]);
 
   return (
     <div className="flex h-[100dvh] min-h-0 flex-col bg-[#0d0d0d] text-[#e8e8e8]">
@@ -153,11 +160,33 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
       <div className="mx-auto flex w-full max-w-xl flex-1 flex-col items-center justify-center px-6">
         {/* ── Analyzing ── */}
         {phase === "analyzing" && (
-          <div className="space-y-3 text-center">
-            <p className="text-sm text-[#888888]">Analyzing your prompt…</p>
-            <div className="mx-auto h-1 w-24 overflow-hidden rounded-full bg-[#2a2a2a]">
-              <div className="h-full animate-pulse rounded-full bg-[#F5A623]" />
-            </div>
+          <div className="space-y-4 text-center">
+            {timedOut ? (
+              /* Fix 2: timeout fallback */
+              <div className="space-y-4">
+                <p className="text-sm text-[#888888]">Taking longer than usual...</p>
+                {typeof onBack === "function" && (
+                  <button
+                    type="button"
+                    onClick={onBack}
+                    className="rounded-lg border border-[#444444] px-5 py-2 text-sm text-[#e8e8e8] transition-colors hover:border-[#F5A623] hover:text-[#F5A623] focus:outline-none"
+                  >
+                    Cancel and try again
+                  </button>
+                )}
+              </div>
+            ) : (
+              /* Fix 1: progressive messages */
+              <>
+                <div>
+                  <p className="text-sm text-[#e8e8e8]">{LOADING_MESSAGES[loadingMsgIdx]}</p>
+                  <p className="mt-1 text-xs text-[#555555]">This usually takes 3-5 seconds</p>
+                </div>
+                <div className="mx-auto h-1 w-24 overflow-hidden rounded-full bg-[#2a2a2a]">
+                  <div className="h-full animate-pulse rounded-full bg-[#F5A623]" />
+                </div>
+              </>
+            )}
           </div>
         )}
 
@@ -209,178 +238,6 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
             </form>
 
             {error && <p className="text-sm text-red-400" role="alert">{error}</p>}
-          </div>
-        )}
-
-        {/* ── Tier badge ── */}
-        {phase === "badge" && config && (
-          <div className="w-full space-y-5">
-            {/* Optimized prompt */}
-            <div>
-              <p className="mb-1 text-xs font-medium uppercase tracking-wide text-[#888888]">Optimized prompt</p>
-              <div className="max-h-[180px] overflow-y-auto rounded-lg border border-[#2a2a2a] bg-[#1e1e1e] px-4 py-3 text-sm leading-relaxed text-[#e8e8e8] whitespace-pre-wrap break-words">
-                {config.optimized_prompt || <span className="text-[#888888]">(no prompt)</span>}
-              </div>
-            </div>
-
-            {/* Tier badge — always reflects current tierChoice */}
-            <div className="rounded-lg border border-[#2a2a2a] bg-[#1e1e1e] px-4 py-3">
-              <div className="flex items-center gap-2">
-                <span
-                  className="inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-semibold"
-                  style={{ background: "#F5A623", color: "#0d0d0d" }}
-                >
-                  {TIER_LABELS[tierChoice] || tierChoice}
-                </span>
-                <span className="text-sm font-medium text-[#e8e8e8]">
-                  {config.output_type
-                    ? config.output_type.charAt(0).toUpperCase() + config.output_type.slice(1)
-                    : ""}
-                </span>
-              </div>
-              <p className="mt-1.5 text-sm text-[#888888]">{config.reasoning}</p>
-            </div>
-
-            {/* RESEARCH DEPTH — slider always shown; user upgrades smart → deep (one-way) */}
-            <div>
-              <p className="mb-3 text-xs font-medium uppercase tracking-wide text-[#888888]">Research Depth</p>
-              <div className="flex items-center gap-4">
-                {/* Smart label */}
-                <span
-                  className="text-sm font-medium transition-colors duration-200"
-                  style={{ color: tierChoice === "smart" ? "#e8e8e8" : "#555555" }}
-                >
-                  Smart
-                </span>
-
-                {/* Pill toggle track */}
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={tierChoice === "deep"}
-                  aria-label="Research depth — slide right to upgrade to Deep"
-                  onClick={handleSliderChange}
-                  disabled={tierLocked}
-                  className="relative h-7 w-14 flex-shrink-0 rounded-full transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623] disabled:cursor-not-allowed"
-                  style={{ background: tierChoice === "deep" ? "#F5A623" : "#2a2a2a" }}
-                >
-                  <span
-                    className="absolute top-0.5 left-0.5 h-6 w-6 rounded-full bg-[#e8e8e8] shadow transition-transform duration-200"
-                    style={{ transform: tierChoice === "deep" ? "translateX(28px)" : "translateX(0)" }}
-                  />
-                </button>
-
-                {/* Deep label */}
-                <span
-                  className="text-sm font-medium transition-colors duration-200"
-                  style={{ color: tierChoice === "deep" ? "#e8e8e8" : "#555555" }}
-                >
-                  Deep
-                </span>
-              </div>
-
-              {/* Description — changes on toggle, locked notice when deep selected */}
-              <p className="mt-2 text-sm text-[#888888]">
-                {tierChoice === "smart"
-                  ? "Executor + advisor per model · recommended for most sessions"
-                  : "Top models · extended thinking · for high-stakes decisions"}
-              </p>
-              {tierLocked && tierChoice === "deep" && (
-                <p className="mt-1 text-xs text-[#555555]">
-                  Deep selected — session will run at full depth.
-                </p>
-              )}
-
-              {/* Expandable model breakdown */}
-              {modelInfo && (
-                <div className="mt-3">
-                  <button
-                    type="button"
-                    onClick={() => setBreakdownOpen((o) => !o)}
-                    className="flex items-center gap-1 text-xs text-[#555555] hover:text-[#888888] focus:outline-none transition-colors"
-                    aria-expanded={breakdownOpen}
-                  >
-                    <span aria-hidden>{breakdownOpen ? "▼" : "▶"}</span>
-                    <span>What does this mean?</span>
-                  </button>
-
-                  {breakdownOpen && (
-                    <div className="mt-2 rounded-lg border border-[#2a2a2a] bg-[#161616] px-3 py-2.5 text-xs space-y-1.5">
-                      {tierChoice === "smart" ? (
-                        <>
-                          <p className="text-[#888888] font-medium mb-1.5">
-                            Smart — Executor + Advisor per model
-                          </p>
-                          {[
-                            { key: "claude",  label: "Claude",     emoji: "🟠" },
-                            { key: "gemini",  label: "Gemini",     emoji: "🔵" },
-                            { key: "gpt",     label: "GPT",        emoji: "🟢" },
-                            { key: "grok",    label: "Grok",       emoji: "●" },
-                          ].map(({ key, label, emoji }) => {
-                            const m = modelInfo.smart?.[key];
-                            if (!m) return null;
-                            const exec = m.executor?.split("/").pop() || "—";
-                            const adv  = m.advisor?.split("/").pop()  || "—";
-                            return (
-                              <div key={key} className="flex items-baseline gap-2">
-                                <span className="w-20 shrink-0 text-[#888888]">{emoji} {label}</span>
-                                <span className="text-[#555555]">{exec} → {adv} review</span>
-                              </div>
-                            );
-                          })}
-                          <div className="flex items-baseline gap-2 pt-0.5 border-t border-[#2a2a2a] mt-1.5">
-                            <span className="w-20 shrink-0 text-[#888888]">🔎 Fact-check</span>
-                            <span className="text-[#555555]">
-                              {(modelInfo.smart?.factcheck || "sonar-pro").split("/").pop()} · deep audit always
-                            </span>
-                          </div>
-                        </>
-                      ) : (
-                        <>
-                          <p className="text-[#888888] font-medium mb-1.5">
-                            Deep — Top models throughout · extended thinking
-                          </p>
-                          {[
-                            { key: "claude",  label: "Claude",     emoji: "🟠" },
-                            { key: "gemini",  label: "Gemini",     emoji: "🔵" },
-                            { key: "gpt",     label: "GPT",        emoji: "🟢" },
-                            { key: "grok",    label: "Grok",       emoji: "●" },
-                          ].map(({ key, label, emoji }) => {
-                            const modelId = modelInfo.deep?.[key];
-                            if (!modelId) return null;
-                            const name = (typeof modelId === "string" ? modelId : "—").split("/").pop();
-                            return (
-                              <div key={key} className="flex items-baseline gap-2">
-                                <span className="w-20 shrink-0 text-[#888888]">{emoji} {label}</span>
-                                <span className="text-[#555555]">{name}</span>
-                              </div>
-                            );
-                          })}
-                          <div className="flex items-baseline gap-2 pt-0.5 border-t border-[#2a2a2a] mt-1.5">
-                            <span className="w-20 shrink-0 text-[#888888]">🔎 Fact-check</span>
-                            <span className="text-[#555555]">
-                              {(modelInfo.deep?.factcheck || "sonar-pro").split("/").pop()} · deep audit always
-                            </span>
-                          </div>
-                        </>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* Confirm */}
-            <div className="flex justify-end">
-              <button
-                type="button"
-                onClick={handleConfirm}
-                className="rounded-lg px-6 py-2.5 text-sm font-bold transition-opacity hover:opacity-90 focus:outline-none"
-                style={{ background: "#F5A623", color: "#0d0d0d" }}
-              >
-                Start roundtable →
-              </button>
-            </div>
           </div>
         )}
 
