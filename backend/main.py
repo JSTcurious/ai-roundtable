@@ -1136,7 +1136,9 @@ async def session_websocket(websocket: WebSocket):
 
         # ── Synthesis: route to analytical or factual model based on audit ────
         synthesis_model_id, synthesis_route = select_synthesis_model(audit_text)
-        synthesis_system = build_synthesis_system(user_take_data, citations=citations)
+        synthesis_system = build_synthesis_system(
+            user_take_data, citations=citations, audit_text=audit_text
+        )
         synthesis_messages = [{"role": "user", "content": prompt}]
 
         await websocket.send_json({"type": "synthesis_thinking"})

@@ -640,75 +640,128 @@ async def generate_user_take_chips(
 
 
 # ---------------------------------------------------------------------------
-# Philosophy B — provider-agnostic synthesis system prompt with YOUR TAKE
-# Used in the HITL flow where the user reviews research before triggering
-# synthesis. build_synthesis_system() replaces build_synthesis_prompt() as
-# the primary synthesis system prompt builder.
+# Philosophy B — synthesis system prompt with YOUR TAKE
+# build_synthesis_system() is the sole entry point. It assembles the prompt
+# from the user's take, the Perplexity audit text, and optional source URLs.
+#
+# Design principles (from real session diagnosis):
+#   - No [VERIFIED]/[LIKELY]/[UNCERTAIN]/[DEFER] tags — system metadata,
+#     must not appear in user-facing output
+#   - Audit additions treated as first-class input, not just corrections
+#   - Synthesis must open with a position, not a warm-up
+#   - [n] inline citation markers are distinct from the noise tags and kept
 # ---------------------------------------------------------------------------
 
-SYNTHESIS_SYSTEM_TEMPLATE = """\
-You are synthesizing research from four AI models and an independent \
-fact-check audit into a final answer for a deliberation session.
+SYNTHESIS_SYSTEM_PROMPT = """\
+You are the synthesis layer of a deliberation tool for high-stakes
+decisions. You have received:
+- Research responses from multiple AI models
+- A Perplexity fact-check audit that both validates the research
+  AND surfaces new information the research models missed
+- The user's own perspective (their take), if provided
 
-The fact-check audit was conducted by a live web search tool and \
-represents the most current grounded information available. Treat \
-it as the highest-trust source for verifiable facts.
+Your job is to produce a final answer that a thoughtful senior
+advisor would be proud to put their name on.
 
-{user_take_section}{citation_section}Synthesis principles:
-- Where fact-check contradicts round-1, side with fact-check and \
-state the contradiction explicitly with the corrected information
-- Where the user expresses skepticism about a model's claim, surface \
-it and address it directly
-- Where the user requests specific weighting, honor it and note it
-- Where models agree and fact-check confirms, mark [VERIFIED]
-- Where uncertainty remains after all sources, say so clearly — \
-do not paper over genuine disagreement
-- The final answer should reflect the user's thinking informed by \
-the evidence, not replace their judgment
+## What synthesis means here
 
-Use confidence tags throughout:
-[VERIFIED]  — confirmed by fact-check with live citations
-[LIKELY]    — well-supported by round-1, not fact-checked
-[UNCERTAIN] — conflicting signals or low confidence
-[DEFER]     — recommend the user verify independently
+Synthesis is not summary. Do not restate each model's position
+in sequence. Do not present a numbered list of "factors to consider."
+
+Synthesis means:
+- Reading all inputs and forming an integrated position
+- Incorporating the Perplexity audit's NEW findings, not just
+  its corrections — if Perplexity surfaced data the research
+  models missed, that data belongs in your synthesis
+- Naming where the research models disagreed and what you make
+  of that disagreement
+- Giving the user a clear, defensible recommendation — not a
+  list of considerations
+- If the user provided their take, engage with it directly:
+  validate it if the research supports it, challenge it if
+  it doesn't, and say why
+
+## What the final answer must contain
+
+Write in integrated prose. No numbered lists of factors.
+Headers are permitted for major sections but use them sparingly.
+
+The answer must include:
+
+1. A clear opening position — one or two sentences that state
+   what you think the user should do and the primary reason why.
+   This is not the conclusion — it is the first thing the user reads.
+   You are not warming up. You are starting with your answer.
+
+2. The reasoning — 3-4 paragraphs of integrated analysis that
+   draws on research, audit findings, and the user's take.
+   This is where you show the work. Reference specific model
+   positions when they matter. Name the Perplexity data when
+   it changes the picture.
+
+3. Where models disagreed — one paragraph. Be specific.
+   E.g.: "One model prioritized X; another prioritized Y; the
+   audit suggests Z is the real variable." Do not smooth over
+   disagreements. Surfacing them is part of the value.
+
+4. The recommendation — specific and actionable. Not "consider
+   consulting an attorney." Tell them what to do, in what order,
+   and why that sequence matters. If there is a precondition
+   (e.g., immigration status must be confirmed before anything
+   else), say so plainly and put it first.
+
+5. What this synthesis does not resolve — one or two sentences.
+   What would change your recommendation? What information does
+   the user still need to get? This is honest, not hedging.
+   Hedging says "be cautious." Honest says "this recommendation
+   changes if X turns out to be true."
+
+## What you must never do
+
+- Never use [DEFER] as an ending or anywhere in the response
+- Never end with "proceed with caution" or equivalent hedges
+- Never write "ultimately, your decision should align with..."
+  — this is filler that adds no information
+- Never include [VERIFIED], [LIKELY], [UNCERTAIN], or [DEFER]
+  tags anywhere in your output — these are internal system
+  metadata and must not appear in the user-facing synthesis
+- Never produce a numbered list of factors to consider as the
+  primary structure — that is a summary, not a synthesis
+- Never ignore what Perplexity found — if the audit surfaced
+  data that changes the picture, use it
+
+## Tone
+
+Direct. Senior. Confident without being dismissive.
+You have read everything the user gave you. You have a view.
+State it. The user is capable of disagreeing with you —
+they have your reasoning, they have the full session,
+they can push back. Your job is to give them something
+worth pushing back on.
 """
 
-_USER_TAKE_SECTION_WITH_INPUT = """\
-The user has reviewed the research and fact-check and provided \
-their own perspective before requesting synthesis:
 
-User's perspective:
-{user_take}
-
-Weight this as a primary input alongside the research. Where the \
-user agrees with a model, note the convergence. Where the user \
-expresses doubt, flag it in the synthesis.
-
-"""
-
-_USER_TAKE_SECTION_EMPTY = """\
-The user reviewed the research and fact-check before requesting \
-synthesis but did not add additional perspective. Synthesize \
-based on the research and fact-check evidence only.
-
-"""
-
-
-def build_synthesis_system(user_take_data: dict, citations: list = None) -> str:
+def build_synthesis_system(
+    user_take_data: dict,
+    citations: list = None,
+    audit_text: str = None,
+) -> str:
     """
-    Build the Philosophy B synthesis system prompt incorporating user's perspective.
-
-    Provider-agnostic — no specific model names (Perplexity, Claude, GPT)
-    appear in this template. Only roles (fact-check audit, round-1 research).
+    Assemble the synthesis system prompt from all available inputs.
 
     Args:
         user_take_data: dict with optional keys:
-            - "selected_chips": list[str] — chip labels the user toggled on
-              (labels only — evidence is for the user's benefit, not synthesis)
+            - "selected_chips": list[str] — chip labels (A: label format)
             - "free_text": str — user's own typed perspective
-        citations: list of source URLs from the fact-check audit. When provided,
-            instructs Claude to use inline [n] markers that correspond to these
-            sources so the frontend can render them as clickable superscripts.
+        citations: list of source URLs from the Perplexity audit. When
+            provided, Claude is instructed to place [n] inline markers
+            so the frontend can render them as clickable superscripts.
+            Distinct from the [VERIFIED]/[DEFER] noise tags (which are
+            explicitly prohibited by the prompt).
+        audit_text: the full Perplexity fact-check audit string. When
+            provided, appended as a clearly labeled section so Claude
+            treats audit additions as first-class input, not just
+            corrections to the research.
 
     Returns:
         Complete synthesis system prompt string.
@@ -719,32 +772,57 @@ def build_synthesis_system(user_take_data: dict, citations: list = None) -> str:
     has_chips = len(selected_chips) > 0
     has_text = bool(free_text)
 
+    # ── User take section ─────────────────────────────────────────────────────
     if not has_chips and not has_text:
-        take_section = _USER_TAKE_SECTION_EMPTY
+        take_section = (
+            "\nThe user did not provide a take. Synthesize from research "
+            "and audit only. Do not speculate about the user's position.\n"
+        )
     else:
         parts = []
         if has_chips:
             parts.append(f"Selected perspectives: {' · '.join(selected_chips)}")
         if has_text:
             parts.append(f"User's own words: {free_text}")
-        take_section = _USER_TAKE_SECTION_WITH_INPUT.format(
-            user_take="\n".join(parts)
+        user_take = "\n".join(parts)
+        take_section = (
+            f"\nThe user's perspective: {user_take}\n"
+            "Engage with this directly in your synthesis.\n"
         )
 
+    # ── Perplexity audit section ──────────────────────────────────────────────
+    # Explicitly labeled so Claude treats audit additions as first-class input.
+    # The audit both corrects research-model claims AND surfaces new data those
+    # models missed — both types of finding belong in the synthesis.
+    perplexity_section = ""
+    if audit_text and audit_text.strip():
+        perplexity_section = (
+            "\n## What Perplexity found that the research models missed\n\n"
+            "The following is the full Perplexity fact-check audit. It contains "
+            "both corrections to research-model claims AND new data those models "
+            "did not surface. Both types of finding are first-class inputs — "
+            "do not treat this section as validation only.\n\n"
+            f"{audit_text.strip()}\n"
+        )
+
+    # ── Citation section ──────────────────────────────────────────────────────
+    # [n] inline markers are distinct from the prohibited [VERIFIED]/[DEFER] tags.
     citation_section = ""
     if citations:
         source_lines = "\n".join(
             f"[{i + 1}] {url}" for i, url in enumerate(citations)
         )
         citation_section = (
-            "Inline citations: when referencing a specific fact-check finding, "
+            "\nInline citations: when referencing a specific fact-check finding, "
             "add the corresponding source number inline immediately after the claim "
             "(e.g. 'Pricing has increased 40% since 2023 [1]'). "
             "Only cite sources from the numbered list below — do not invent citation numbers.\n\n"
-            f"Sources:\n{source_lines}\n\n"
+            f"Sources:\n{source_lines}\n"
         )
 
-    return SYNTHESIS_SYSTEM_TEMPLATE.format(
-        user_take_section=take_section,
-        citation_section=citation_section,
+    return (
+        SYNTHESIS_SYSTEM_PROMPT
+        + take_section
+        + perplexity_section
+        + citation_section
     )

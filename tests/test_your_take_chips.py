@@ -117,25 +117,105 @@ class TestAwaitingUserTakeMessage:
         assert user_take_chips == []
 
 
-# ── Synthesize payload ────────────────────────────────────────────────────────
+# ── Synthesis system prompt quality ──────────────────────────────────────────
 
-class TestSynthesizePayload:
+class TestBuildSynthesisSystem:
+    """
+    Quality assertions for the synthesis system prompt.
+
+    Covers the four failure modes diagnosed from a real session:
+    1. Audit additions silently discarded
+    2. Restatement instead of synthesis (prompt structure, not tested here)
+    3. [DEFER] ending
+    4. [VERIFIED]/[LIKELY]/[UNCERTAIN] noise tags in output
+
+    Also covers the user-take empty and non-empty paths.
+    """
+
+    def test_build_synthesis_system_with_take(self):
+        """
+        When the user provides chips and free text, the prompt engages with them
+        directly and does not contain prohibited tags or hedges.
+        """
+        from backend.router import build_synthesis_system
+
+        user_take_data = {
+            "selected_chips": ["A: chip A label"],
+            "free_text": "my perspective",
+        }
+        prompt = build_synthesis_system(user_take_data)
+
+        assert isinstance(prompt, str) and len(prompt) > 0
+        # User take data appears in the prompt
+        assert "A: chip A label" in prompt
+        assert "my perspective" in prompt
+        # Prompt instructs direct engagement with the user's take
+        assert "Engage with this directly" in prompt
+        # Old "use these tags" instruction must be gone
+        assert "Use confidence tags" not in prompt
+        # New prohibition must be present (tags appear only as things to avoid)
+        assert "Never use [DEFER]" in prompt
+        assert "Never include [VERIFIED]" in prompt
+        # Prohibition against closing hedges must be present
+        assert 'Never end with "proceed with caution"' in prompt
+
+    def test_build_synthesis_system_empty_take(self):
+        """
+        When the user provides no take, the prompt says so explicitly
+        and does not instruct the model to speculate about their position.
+        """
+        from backend.router import build_synthesis_system
+
+        prompt = build_synthesis_system({})
+
+        assert isinstance(prompt, str) and len(prompt) > 0
+        # Explicit empty-take instruction
+        assert "did not provide a take" in prompt
+        # Old "use these tags" instruction must be gone
+        assert "Use confidence tags" not in prompt
+        # New prohibition must be present
+        assert "Never use [DEFER]" in prompt
+
+    def test_synthesis_prompt_contains_perplexity_new_findings_label(self):
+        """
+        When audit_text is provided, build_synthesis_system appends a clearly
+        labeled section so Claude treats audit additions as first-class input,
+        not just corrections to the research models' claims.
+        """
+        from backend.router import build_synthesis_system
+
+        audit = "Frontier AI comp: $500K–$1M total. Labs sponsor 80% of immigration cases."
+        prompt = build_synthesis_system({}, audit_text=audit)
+
+        # The label that signals audit additions are first-class, not validation-only
+        assert "What Perplexity found that the research models missed" in prompt
+        # The audit text itself appears in the prompt
+        assert audit in prompt
+
+    def test_build_synthesis_system_citation_section_preserved(self):
+        """
+        [n] inline citation markers are distinct from the prohibited noise tags
+        and must still be passed through to the synthesis prompt.
+        """
+        from backend.router import build_synthesis_system
+
+        citations = ["https://example.com/source-1", "https://example.com/source-2"]
+        prompt = build_synthesis_system({}, citations=citations)
+
+        assert "https://example.com/source-1" in prompt
+        assert "[1]" in prompt
+        assert "[2]" in prompt
+
     def test_synthesize_payload_includes_selected_chips_and_free_text(self):
-        """
-        build_synthesis_system receives a dict with selected_chips and free_text.
-        Verify both keys are present and used.
-        """
+        """Backward-compat: original test renamed into this class."""
         from backend.router import build_synthesis_system
 
         user_take_data = {
             "selected_chips": ["chip A"],
             "free_text": "my perspective",
         }
-        system_prompt = build_synthesis_system(user_take_data)
+        prompt = build_synthesis_system(user_take_data)
 
-        # The system prompt must incorporate the user's take data
-        assert isinstance(system_prompt, str)
-        assert len(system_prompt) > 0
-        # selected_chips labels and free_text both appear in the synthesis prompt
-        assert "chip A" in system_prompt
-        assert "my perspective" in system_prompt
+        assert isinstance(prompt, str) and len(prompt) > 0
+        assert "chip A" in prompt
+        assert "my perspective" in prompt

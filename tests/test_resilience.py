@@ -382,14 +382,14 @@ class TestBuildSynthesisSystem:
         })
 
     def test_empty_take_produces_empty_variant(self):
-        """No chips, no free text → 'did not add additional perspective' language."""
+        """No chips, no free text → 'did not provide a take' language."""
         result = self._build()
-        assert "did not add additional perspective" in result
+        assert "did not provide a take" in result
 
     def test_whitespace_only_free_text_treated_as_empty(self):
         """Whitespace-only free_text → same as empty."""
         result = self._build(free_text="   ")
-        assert "did not add additional perspective" in result
+        assert "did not provide a take" in result
 
     def test_free_text_included_in_prompt(self):
         """Non-empty free_text → user's text injected verbatim."""
@@ -397,9 +397,9 @@ class TestBuildSynthesisSystem:
         assert "I trust Gemini more on this one." in result
 
     def test_free_text_triggers_with_input_variant(self):
-        """Non-empty free_text → 'primary input alongside the research' language."""
+        """Non-empty free_text → 'Engage with this directly' language."""
         result = self._build(free_text="Weight the fact-check heavily.")
-        assert "primary input alongside the research" in result
+        assert "Engage with this directly" in result
 
     def test_selected_chips_included_in_prompt(self):
         """Selected chips appear in the synthesis prompt."""
@@ -409,7 +409,7 @@ class TestBuildSynthesisSystem:
     def test_selected_chips_trigger_with_input_variant(self):
         """Chips alone (no free text) still use the with-input variant."""
         result = self._build(selected_chips=["Perplexity's correction changes my view"])
-        assert "primary input alongside the research" in result
+        assert "Engage with this directly" in result
 
     def test_both_chips_and_free_text_included(self):
         """When both chips and free text are present, both appear in prompt."""
@@ -421,10 +421,16 @@ class TestBuildSynthesisSystem:
         assert "Also weight the fact-check heavily." in result
 
     def test_no_provider_names_in_template(self):
-        """System prompt template must not name specific AI providers."""
+        """
+        The synthesis prompt may name Perplexity for the fact-checker role
+        (intentional — it's the sole auditor) but must not name research-seat
+        providers (Gemini, GPT, Grok) in the base template.
+        """
         result = self._build()
-        # Provider names must not appear in the role template or section headers
-        assert "Perplexity" not in result
+        # Research-seat providers must not appear in the base template
+        assert "Gemini" not in result
+        assert "GPT" not in result
+        # Perplexity is intentionally named — it's the fact-checker role, not a research seat
         assert "Claude" not in result
         assert "GPT" not in result
 
