@@ -31,21 +31,9 @@ import uuid
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from dotenv import load_dotenv
 
-def _load_env():
-    """Load backend/.env at import time so API keys are available regardless of how the server is started."""
-    env_path = Path(__file__).parent / ".env"
-    if not env_path.exists():
-        return
-    with open(env_path) as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            k, _, v = line.partition("=")
-            os.environ.setdefault(k.strip(), v.strip())
-
-_load_env()
+load_dotenv(Path(__file__).parent / ".env", override=False)
 
 from fastapi import FastAPI, HTTPException, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
@@ -1148,7 +1136,7 @@ async def session_websocket(websocket: WebSocket):
 
         # ── Synthesis: route to analytical or factual model based on audit ────
         synthesis_model_id, synthesis_route = select_synthesis_model(audit_text)
-        synthesis_system = build_synthesis_system(user_take_data)
+        synthesis_system = build_synthesis_system(user_take_data, citations=citations)
         synthesis_messages = [{"role": "user", "content": prompt}]
 
         await websocket.send_json({"type": "synthesis_thinking"})
