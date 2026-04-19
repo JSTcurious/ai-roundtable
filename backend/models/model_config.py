@@ -20,10 +20,10 @@ Deep tier uses top models throughout:
 Grok participates in both Smart and Deep.
 Deep sessions are never auto-assigned by intake — user opt-in only.
 
-Factcheck has Smart and Deep audit depths:
-    Smart: targeted, signal-focused, fast (~800 tokens output)
-    Deep:  comprehensive, adversarial, thorough (~2000 tokens output)
-    Both use Perplexity as primary — same model, different prompt depth.
+Factcheck always uses deep audit depth (~2000 tokens output).
+The Smart/Deep audit prompt distinction is preserved in perplexity_client.py
+for future flexibility, but get_factcheck_max_tokens() always returns
+FACTCHECK_DEEP_MAX_TOKENS. See ADR 004 addendum.
 """
 
 import os
@@ -231,7 +231,16 @@ def get_all_labs() -> list:
 
 
 def get_factcheck_max_tokens(tier: str) -> int:
-    """Return max output tokens for factcheck audit by tier."""
-    if tier == "deep":
-        return FACTCHECK_DEEP_MAX_TOKENS
-    return FACTCHECK_SMART_MAX_TOKENS
+    """
+    Always use deep audit depth regardless of session tier.
+
+    Rationale: fact-check is the grounding layer for synthesis.
+    Shallow fact-check produces shallow grounding regardless of
+    research tier. The cost difference (~$0.0008/session) is
+    negligible. Latency addition (~10-15s) is acceptable for a
+    tool positioned as serious deliberation.
+
+    The tier parameter is kept for future flexibility but is
+    intentionally ignored.
+    """
+    return FACTCHECK_DEEP_MAX_TOKENS  # always 2000 tokens
