@@ -9,6 +9,8 @@ import logging
 import time
 from typing import Any, Callable, Optional
 
+# DEBUG: extra timing logs — remove after root cause confirmed
+
 logger = logging.getLogger(__name__)
 
 RETRYABLE_PATTERNS = [
@@ -44,7 +46,7 @@ def call_with_retry(
                 logger.warning(
                     f"{role}: attempt {attempt + 1}/{max_attempts} failed "
                     f"({exc.__class__.__name__}: {exc}). "
-                    f"Retrying in {delay}s..."
+                    f"Retrying in {delay}s... [wall={time.time():.2f}]"
                 )
                 if attempt < max_attempts - 1:
                     time.sleep(delay)

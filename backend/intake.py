@@ -17,6 +17,7 @@ Functions:
 
 import logging
 import re
+import time
 from typing import Any, Optional
 
 from backend.models.intake_decision import IntakeDecision
@@ -91,12 +92,32 @@ def call_intake(prompt: str) -> tuple:
     from backend.models.openrouter_client import call_intake_fallback1
     from backend.models.anthropic_client import call_intake_fallback2
 
+    logger.info(f"[INTAKE] call_intake() entering call_with_fallback at {time.time():.2f}")
+
+    def _timed_primary():
+        t0 = time.time()
+        logger.info(f"[INTAKE] primary (gpt-4o-mini) attempt starting at {t0:.2f}")
+        result = call_gpt4o_mini_intake(prompt)
+        logger.info(f"[INTAKE] primary returned in {time.time() - t0:.2f}s")
+        return result
+
+    def _timed_fallback1():
+        t0 = time.time()
+        logger.info(f"[INTAKE] fallback1 (openrouter/qwen) attempt starting at {t0:.2f}")
+        result = call_intake_fallback1(prompt)
+        logger.info(f"[INTAKE] fallback1 returned in {time.time() - t0:.2f}s")
+        return result
+
+    def _timed_fallback2():
+        t0 = time.time()
+        logger.info(f"[INTAKE] fallback2 (anthropic/haiku) attempt starting at {t0:.2f}")
+        result = call_intake_fallback2(prompt)
+        logger.info(f"[INTAKE] fallback2 returned in {time.time() - t0:.2f}s")
+        return result
+
     return call_with_fallback(
-        primary_fn=lambda: call_gpt4o_mini_intake(prompt),
-        fallback_fns=[
-            lambda: call_intake_fallback1(prompt),
-            lambda: call_intake_fallback2(prompt),
-        ],
+        primary_fn=_timed_primary,
+        fallback_fns=[_timed_fallback1, _timed_fallback2],
         emergency_fn=lambda: _intake_passthrough(prompt),
         role="intake",
     )
@@ -161,7 +182,9 @@ class IntakeSession:
                 "config": dict,
             }
         """
+        logger.info(f"[INTAKE] Starting API call at {time.time():.2f}")
         decision, provider_used = call_intake(prompt)
+        logger.info(f"[INTAKE] API call returned at {time.time():.2f} (provider={provider_used})")
         self._intake_provider = provider_used
 
         if decision.needs_clarification:
@@ -215,7 +238,9 @@ class IntakeSession:
             "Incorporate the user's clarification answer to add context and specificity, "
             "but keep the original proper nouns intact."
         )
+        logger.info(f"[INTAKE] Starting API call at {time.time():.2f}")
         decision, provider_used = call_intake(combined)
+        logger.info(f"[INTAKE] API call returned at {time.time():.2f} (provider={provider_used})")
         self._intake_provider = provider_used
         self.complete = True
         self.session_config = _decision_to_config(decision)
