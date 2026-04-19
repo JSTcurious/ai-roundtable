@@ -169,7 +169,13 @@ Sections required:
 # ── API call functions ────────────────────────────────────────────────────────
 
 def call_perplexity(prompt: str, model: str, max_tokens: int) -> dict:
-    """Call Perplexity Sonar API. Returns {text, input_tokens, output_tokens}."""
+    """
+    Call Perplexity Sonar API. Returns {text, input_tokens, output_tokens, actual_cost}.
+
+    actual_cost: pulled from usage.cost['total_cost'] when available, which includes
+    Perplexity's per-request search fee ($0.005-0.006) on top of token costs.
+    Falls back to token-based calculation if not present.
+    """
     from openai import OpenAI
     client = OpenAI(
         api_key=os.environ["PERPLEXITY_API_KEY"],
@@ -181,60 +187,52 @@ def call_perplexity(prompt: str, model: str, max_tokens: int) -> dict:
         messages=[{"role": "user", "content": prompt}],
     )
     usage = response.usage
+    # Perplexity returns cost breakdown including search fee in usage.cost
+    actual_cost = None
+    if usage and hasattr(usage, "cost") and isinstance(usage.cost, dict):
+        actual_cost = usage.cost.get("total_cost")
     return {
         "text":          response.choices[0].message.content.strip(),
         "input_tokens":  usage.prompt_tokens if usage else 0,
         "output_tokens": usage.completion_tokens if usage else 0,
+        "actual_cost":   actual_cost,
     }
 
 
 def call_openai_websearch(prompt: str, model: str, max_tokens: int) -> dict:
     """
-    Call OpenAI with web search tool enabled.
-    Falls back to plain completion if web_search_preview not available.
-    Returns {text, input_tokens, output_tokens}.
+    Call OpenAI GPT with a web-grounding instruction in the prompt.
+
+    gpt-5.4 requires max_completion_tokens (not max_tokens) and does not
+    support the web_search_preview tool type via Chat Completions.
+    The grounding instruction in the prompt is consistent with how
+    backend/models/perplexity_client.py handles the GPT fallback.
+
+    Returns {text, input_tokens, output_tokens, actual_cost}.
     """
     from openai import OpenAI
     client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
-    # Append grounding instruction to prompt
+    # Append web-grounding instruction (mirrors perplexity_client._call_gpt_audit_with_web_search)
     grounded_prompt = (
         prompt +
-        "\n\nNote: You are acting as fact-checker. "
-        "Search the web to verify all factual claims before responding."
+        "\n\nNote: You are acting as fact-checker. Search the web to verify claims."
     )
 
-    # Try with web search tool first
-    try:
-        response = client.chat.completions.create(
-            model=model,
-            max_tokens=max_tokens,
-            tools=[{"type": "web_search_preview"}],
-            messages=[{"role": "user", "content": grounded_prompt}],
-        )
-    except Exception:
-        # Fall back to plain completion if tool not available for this model
-        response = client.chat.completions.create(
-            model=model,
-            max_tokens=max_tokens,
-            messages=[{"role": "user", "content": grounded_prompt}],
-        )
+    response = client.chat.completions.create(
+        model=model,
+        max_completion_tokens=max_tokens,   # gpt-5.4 requires max_completion_tokens
+        messages=[{"role": "user", "content": grounded_prompt}],
+    )
 
     usage = response.usage
-    # Extract text from response (may be in tool_calls for some models)
-    content = response.choices[0].message.content or ""
-    if not content:
-        # Some models return tool call results separately
-        tool_calls = getattr(response.choices[0].message, "tool_calls", None) or []
-        content = " ".join(
-            tc.function.arguments for tc in tool_calls
-            if hasattr(tc, "function")
-        ) or "[no content returned]"
+    content = (response.choices[0].message.content or "").strip()
 
     return {
-        "text":          content.strip(),
+        "text":          content,
         "input_tokens":  usage.prompt_tokens if usage else 0,
         "output_tokens": usage.completion_tokens if usage else 0,
+        "actual_cost":   None,   # OpenAI does not return cost in usage
     }
 
 
@@ -287,16 +285,20 @@ def run_single_test(
         output        = result["text"]
         input_tokens  = result["input_tokens"]
         output_tokens = result["output_tokens"]
+        actual_cost   = result.get("actual_cost")
         status = "✓"
     except Exception as e:
         output        = f"[ERROR: {e}]"
         elapsed       = 0.0
         input_tokens  = 0
         output_tokens = 0
+        actual_cost   = None
         status        = "✗"
 
     score_result = score_factcheck_result(test, output, elapsed, tier)
-    test_cost = calculate_cost(
+    # Use actual_cost when available (Perplexity includes per-request search fee);
+    # fall back to token-based calculation for OpenAI candidates.
+    test_cost = actual_cost if actual_cost is not None else calculate_cost(
         input_tokens, output_tokens, cfg["input_rate"], cfg["output_rate"]
     )
 

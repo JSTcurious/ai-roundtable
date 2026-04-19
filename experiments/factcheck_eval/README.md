@@ -47,8 +47,8 @@ Tests use fixed round-1 inputs with known ground truth:
 
 | Candidate | Model | Provider | $/MTok in | $/MTok out | Role |
 |-----------|-------|----------|-----------|------------|------|
-| Perplexity-Sonar-Pro | llama-3.1-sonar-large-128k-online | Perplexity | $1.00 | $1.00 | Primary |
-| Perplexity-Sonar | llama-3.1-sonar-small-128k-online | Perplexity | $0.20 | $0.20 | Fallback1 |
+| Perplexity-Sonar-Pro | sonar-pro | Perplexity | $1.00 | $1.00 | Primary |
+| Perplexity-Sonar | sonar | Perplexity | $0.20 | $0.20 | Fallback1 |
 | GPT-5.4-WebSearch | gpt-5.4 | OpenAI | $2.50 | $10.00 | Fallback2 |
 
 ## Results Directory

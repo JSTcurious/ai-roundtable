@@ -13,7 +13,7 @@ against fixed ground truth — no model judgment involved in scoring.
 FACTCHECK_CANDIDATES = {
     "Perplexity-Sonar-Pro": {
         "provider":     "perplexity",
-        "model":        "llama-3.1-sonar-large-128k-online",
+        "model":        "sonar-pro",   # was llama-3.1-sonar-large-128k-online (retired)
         "has_live_web": True,
         "input_rate":   1.00,   # per MTok
         "output_rate":  1.00,
@@ -21,7 +21,7 @@ FACTCHECK_CANDIDATES = {
     },
     "Perplexity-Sonar": {
         "provider":     "perplexity",
-        "model":        "llama-3.1-sonar-small-128k-online",
+        "model":        "sonar",       # was llama-3.1-sonar-small-128k-online (retired)
         "has_live_web": True,
         "input_rate":   0.20,
         "output_rate":  0.20,
