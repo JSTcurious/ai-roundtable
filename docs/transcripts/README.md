@@ -19,7 +19,10 @@ Sessions 001-011 cover the first two weeks of production testing, spanning the
 Gemini Flash intake rewrite (transcripts 009-011) and earlier direct-question sessions
 that established the baseline for guardrail behavior. Session 012 is the first
 validation transcript for the four-model round-1 architecture (Claude added as a
-research seat) and the removal of the observation gate.
+research seat) and the removal of the observation gate. Sessions 013-017 (April 18-19
+2026) validate the smart/deep tier split, the WebSocket reconnect fix, and the
+always-smart intake lock — including the first deep-tier run with a claim-by-claim
+Perplexity audit.
 
 Recurring patterns documented across the suite:
 - **Tag adoption**: 0% in sessions 001-003, first adoption in session 005 (offshore wind RCA),
@@ -51,3 +54,9 @@ Recurring patterns documented across the suite:
 - [010 — AI engineering project plan (clarifying turn — ambiguous prompt resolved in one exchange)](./010-ai-engineering-project-plan.md)
 - [011 — ISO-NE installed capacity (tier=quick, SYNTHESIS_TRUST_HIERARCHY regression pass)](./011-isone-installed-capacity.md)
 - [012 — ISO-NE offshore wind four-model round-1 validation (Claude sole contributor — all four tags used, observation gate removed)](./012-isone-offshore-wind-four-model-round1.md)
+- [013-alt — ISO-NE offshore wind four-model round-1 (stray export, same prompt as 012 — alternate run)](./013-isone-offshore-wind-four-model-round1-alt.md)
+- [013 — ISO-NE offshore wind smart tier smoke test (WebSocket fix confirmed working, Perplexity returned ISO-NE content correctly · smart · Apr 18 2026)](./013-isone-offshore-wind-smart-tier-smoke-test.md)
+- [014 — ISO-NE offshore wind deep tier validation (comprehensive claim-by-claim audit — Gemini's FERC approval fabrication caught by synthesis · deep · Apr 19 2026)](./014-isone-offshore-wind-deep-tier-validation.md)
+- [015 — MCP and agentic workflows 2026 (Perplexity confirmed 97M downloads, Linux Foundation governance shift Dec 2025, four-protocol A2A stack · smart · Apr 19 2026)](./015-mcp-agentic-workflows-2026.md)
+- [016 — Open source vs private portfolio for frontier AI roles (Perplexity flagged "frontier AI companies" term confusion — FDE vs AI PE roles, deployment skills over visibility · smart · Apr 19 2026)](./016-open-source-vs-private-portfolio.md)
+- [017 — AI engineering skills for data engineer transition (Perplexity surfaced AI fluency as hiring dividing line, pipeline commoditization finding · smart · Apr 19 2026)](./017-ai-engineering-skills-data-engineer-transition.md)
