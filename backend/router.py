@@ -552,23 +552,29 @@ CHIP_GENERATION_SYSTEM = """\
 You have just read four AI research responses and a fact-check audit
 from a deliberation session.
 
-Generate exactly 3-4 short perspective options that represent
-meaningful positions a thoughtful user might take after reading
-this specific research.
+Generate exactly 3-4 perspective chips. Each chip has a short label and
+a brief evidence note that explains why this perspective is worth considering.
 
 Rules:
 - Be specific to THIS session's content — not generic
 - Reference specific models, claims, or findings where relevant
 - Include at least one skeptical or contrarian option
 - Include at least one that sides with the fact-check over round-1
-- Keep each option under 8 words
-- Return ONLY a valid JSON array of strings, no other text
+- label: under 8 words
+- evidence: 2-3 sentences of specific context from the research
+- Return ONLY a valid JSON array of objects, no other text
 
 Example:
-["I trust Gemini's framing on this",
- "Perplexity's correction changes my view",
- "I'm skeptical of the statistics cited",
- "Deploy the portfolio project first"]
+[
+  {"label": "I trust Gemini's framing on this",
+   "evidence": "Gemini's analysis was the most detailed on cost structure and aligned with Perplexity's live data. GPT took a more cautious stance that may underestimate the opportunity."},
+  {"label": "Perplexity's correction changes my view",
+   "evidence": "Perplexity found that the pricing cited by round-1 models was 40% out of date. This materially changes the build-vs-buy calculus."},
+  {"label": "I'm skeptical of the statistics cited",
+   "evidence": "Two models cited different adoption rates (23% vs 41%) with no source. Perplexity did not resolve this contradiction."},
+  {"label": "Deploy the portfolio project first",
+   "evidence": "Grok's lateral take — shipping something visible now builds credibility faster than continued preparation, regardless of which stack you choose."}
+]
 """
 
 _logger = logging.getLogger(__name__)
@@ -603,14 +609,26 @@ async def generate_user_take_chips(
     prompt = (
         f"Research responses:\n{_format_round1_for_chips(round1_responses)}\n\n"
         f"Fact-check audit:\n{(factcheck_audit or '').strip()[:1000]}\n\n"
-        "Generate 3-4 perspective chips as a JSON array."
+        "Generate 3-4 perspective chips as a JSON array of objects."
     )
     try:
-        raw = await asyncio.to_thread(call_for_chips, prompt, CHIP_GENERATION_SYSTEM)
+        raw = await asyncio.to_thread(
+            call_for_chips, prompt, CHIP_GENERATION_SYSTEM, max_tokens=600
+        )
         chips = json.loads(raw.strip())
-        if isinstance(chips, list) and all(isinstance(c, str) for c in chips):
-            return [c for c in chips[:4] if c.strip()]
-        return []
+        if not isinstance(chips, list):
+            return []
+        valid = []
+        for c in chips[:4]:
+            if (
+                isinstance(c, dict)
+                and isinstance(c.get("label"), str)
+                and isinstance(c.get("evidence"), str)
+                and c["label"].strip()
+                and c["evidence"].strip()
+            ):
+                valid.append({"label": c["label"].strip(), "evidence": c["evidence"].strip()})
+        return valid
     except Exception as exc:
         _logger.warning("Chip generation failed: %s", exc)
         return []
@@ -681,7 +699,8 @@ def build_synthesis_system(user_take_data: dict) -> str:
 
     Args:
         user_take_data: dict with optional keys:
-            - "selected_chips": list[str] — chips the user toggled on
+            - "selected_chips": list[str] — chip labels the user toggled on
+              (labels only — evidence is for the user's benefit, not synthesis)
             - "free_text": str — user's own typed perspective
 
     Returns:

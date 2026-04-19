@@ -479,27 +479,44 @@ class TestGenerateUserTakeChips:
             )
             assert result == []
 
-    def test_valid_response_returns_list_of_strings(self):
-        """Valid JSON array of strings → returned as-is (up to 4)."""
+    def test_returns_empty_list_on_string_array(self):
+        """Fails open — returns [] when model returns old-style string array."""
         import asyncio
         import json
         from unittest.mock import patch
-        chips = ["Chip A", "Chip B", "Chip C"]
+        with patch("backend.models.openai_client.call_for_chips",
+                   return_value=json.dumps(["Chip A", "Chip B"])):
+            from backend.router import generate_user_take_chips
+            result = asyncio.get_event_loop().run_until_complete(
+                generate_user_take_chips(self._ROUND1, self._AUDIT)
+            )
+            assert result == []
+
+    def test_valid_response_returns_list_of_dicts(self):
+        """Valid JSON array of {label, evidence} dicts → returned correctly."""
+        import asyncio
+        import json
+        from unittest.mock import patch
+        chips = [
+            {"label": "Chip A", "evidence": "Evidence for A."},
+            {"label": "Chip B", "evidence": "Evidence for B."},
+        ]
         with patch("backend.models.openai_client.call_for_chips",
                    return_value=json.dumps(chips)):
             from backend.router import generate_user_take_chips
             result = asyncio.get_event_loop().run_until_complete(
                 generate_user_take_chips(self._ROUND1, self._AUDIT)
             )
-            assert result == chips
-            assert all(isinstance(c, str) for c in result)
+            assert len(result) == 2
+            assert result[0] == {"label": "Chip A", "evidence": "Evidence for A."}
+            assert all("label" in c and "evidence" in c for c in result)
 
     def test_caps_at_four_chips(self):
         """Returns at most 4 chips even if model returns more."""
         import asyncio
         import json
         from unittest.mock import patch
-        chips = ["A", "B", "C", "D", "E", "F"]
+        chips = [{"label": f"Chip {x}", "evidence": "Some evidence."} for x in "ABCDEF"]
         with patch("backend.models.openai_client.call_for_chips",
                    return_value=json.dumps(chips)):
             from backend.router import generate_user_take_chips
@@ -508,17 +525,21 @@ class TestGenerateUserTakeChips:
             )
             assert len(result) <= 4
 
-    def test_filters_empty_strings(self):
-        """Empty string chips are filtered out."""
+    def test_filters_dicts_with_empty_label(self):
+        """Dicts with empty label or evidence are filtered out."""
         import asyncio
         import json
         from unittest.mock import patch
-        chips = ["Good chip", "", "Another chip", "  "]
+        chips = [
+            {"label": "Good chip", "evidence": "Good evidence."},
+            {"label": "", "evidence": "Some evidence."},
+            {"label": "Another chip", "evidence": ""},
+        ]
         with patch("backend.models.openai_client.call_for_chips",
                    return_value=json.dumps(chips)):
             from backend.router import generate_user_take_chips
             result = asyncio.get_event_loop().run_until_complete(
                 generate_user_take_chips(self._ROUND1, self._AUDIT)
             )
-            assert "" not in result
-            assert all(c.strip() for c in result)
+            assert len(result) == 1
+            assert result[0]["label"] == "Good chip"

@@ -288,10 +288,12 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
   // ── Philosophy B: YOUR TAKE HITL step ────────────────────────────────────
   /** True after awaiting_user_take received — YOUR TAKE step is visible */
   const [awaitingUserTake, setAwaitingUserTake] = useState(false);
-  /** Chips from backend — session-specific perspective options */
+  /** Chips from backend — {label, evidence}[] */
   const [userTakeChips, setUserTakeChips] = useState([]);
-  /** Chips the user has toggled on */
+  /** Labels of chips the user has toggled on */
   const [selectedChips, setSelectedChips] = useState([]);
+  /** Label of chip whose evidence is currently expanded (null = none) */
+  const [expandedChip, setExpandedChip] = useState(null);
   /** True after perplexity_complete, before awaiting_user_take — chips loading */
   const [chipsLoading, setChipsLoading] = useState(false);
   /** User's optional free-text perspective */
@@ -487,6 +489,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     setAwaitingUserTake(false);
     setUserTakeChips([]);
     setSelectedChips([]);
+    setExpandedChip(null);
     setUserTakeFreeText("");
     setChipsLoading(false);
     setSynthesisRequested(false);
@@ -714,10 +717,14 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     URL.revokeObjectURL(url);
   }, [synthesisText]);
 
-  const toggleChip = useCallback((chip) => {
+  const toggleChip = useCallback((label) => {
     setSelectedChips((prev) =>
-      prev.includes(chip) ? prev.filter((c) => c !== chip) : [...prev, chip]
+      prev.includes(label) ? prev.filter((c) => c !== label) : [...prev, label]
     );
+  }, []);
+
+  const toggleExpanded = useCallback((label) => {
+    setExpandedChip((prev) => (prev === label ? null : label));
   }, []);
 
   const handleSynthesize = useCallback(() => {
@@ -1137,28 +1144,55 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
               {/* Chips */}
               {awaitingUserTake && userTakeChips.length > 0 && (
                 <div>
-                  <p className="mb-2 text-xs text-text-secondary">
+                  <p className="mb-3 text-xs text-text-secondary">
                     Here are some perspectives to consider:
                   </p>
-                  <div className="flex flex-wrap gap-2">
-                    {userTakeChips.map((chip, i) => {
-                      const active = selectedChips.includes(chip);
+                  <div className="space-y-2">
+                    {userTakeChips.map((chip) => {
+                      const { label, evidence } = chip;
+                      const active = selectedChips.includes(label);
+                      const expanded = expandedChip === label;
                       return (
-                        <button
-                          key={i}
-                          type="button"
-                          onClick={() => !synthesisRequested && toggleChip(chip)}
-                          disabled={synthesisRequested}
-                          className="rounded-full px-4 py-1.5 text-sm transition-all duration-150 focus:outline-none disabled:opacity-50"
-                          style={
-                            active
-                              ? { background: "#F5A623", color: "#111111", fontWeight: 500, border: "1px solid #F5A623" }
-                              : { background: "transparent", color: "#F5A623", border: "1px solid #F5A623" }
-                          }
-                          aria-pressed={active}
-                        >
-                          {chip}
-                        </button>
+                        <div key={label}>
+                          {/* Chip row: label button + expand toggle */}
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => !synthesisRequested && toggleChip(label)}
+                              disabled={synthesisRequested}
+                              className="flex-1 rounded-full px-4 py-1.5 text-sm text-left transition-all duration-150 focus:outline-none disabled:opacity-50"
+                              style={
+                                active
+                                  ? { background: "#F5A623", color: "#111111", fontWeight: 500, border: "1px solid #F5A623" }
+                                  : { background: "transparent", color: "#F5A623", border: "1px solid #F5A623" }
+                              }
+                              aria-pressed={active}
+                            >
+                              {label}
+                            </button>
+                            {evidence && (
+                              <button
+                                type="button"
+                                onClick={() => toggleExpanded(label)}
+                                className="shrink-0 rounded-full px-2 py-1 text-xs transition-colors focus:outline-none"
+                                style={{ color: expanded ? "#F5A623" : "#666666" }}
+                                aria-label={expanded ? "Hide evidence" : "Show evidence"}
+                                aria-expanded={expanded}
+                              >
+                                {expanded ? "▴" : "▾"}
+                              </button>
+                            )}
+                          </div>
+                          {/* Evidence accordion */}
+                          {expanded && evidence && (
+                            <div
+                              className="ml-4 mt-1.5 rounded-md px-3 py-2 text-xs leading-relaxed"
+                              style={{ color: "#888888", background: "#161616", borderLeft: "2px solid #2a2a2a" }}
+                            >
+                              {evidence}
+                            </div>
+                          )}
+                        </div>
                       );
                     })}
                   </div>
