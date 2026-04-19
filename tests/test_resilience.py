@@ -167,6 +167,25 @@ class TestPipelineHealth:
 
 # ── resilient_caller ──────────────────────────────────────────────────────────
 
+class TestIsRetryable:
+    """is_retryable() must exclude exhausted-inner-chain errors to prevent double-retry."""
+
+    def test_exhausted_inner_chain_not_retryable(self):
+        from backend.models.resilient_caller import is_retryable
+        assert not is_retryable(RuntimeError("GPT-4o Mini intake unavailable after 3 attempts"))
+        assert not is_retryable(RuntimeError("factcheck unavailable after 2 attempts"))
+
+    def test_normal_retryable_errors_still_retryable(self):
+        from backend.models.resilient_caller import is_retryable
+        assert is_retryable(Exception("503 service unavailable"))
+        assert is_retryable(Exception("429 rate limit exceeded"))
+
+    def test_generic_unavailable_without_after_is_retryable(self):
+        from backend.models.resilient_caller import is_retryable
+        # "unavailable" alone (without "after N attempts") stays retryable
+        assert is_retryable(Exception("service unavailable"))
+
+
 class TestResilientCaller:
     """call_with_fallback returns (result, label) and walks the chain correctly."""
 
