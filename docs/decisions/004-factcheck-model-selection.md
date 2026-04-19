@@ -168,6 +168,25 @@ FACTCHECK_FALLBACK2 = os.getenv("FACTCHECK_FALLBACK2", "gpt-5.4")
 
 ---
 
+## Addendum — April 19, 2026: Always Deep Fact-Check
+
+**Decision:** Fact-check audit depth is always Deep (2000 tokens)
+regardless of session tier (Smart or Deep).
+
+**Rationale:**
+- Fact-check is the grounding layer for synthesis. Shallow grounding
+  produces lower quality synthesis regardless of research tier depth.
+- Cost difference: ~$0.0008/session — negligible at any usage scale.
+- Latency addition: ~10-15 seconds — acceptable for a deliberation tool.
+- The Smart/Deep audit prompt distinction is preserved in code for
+  future flexibility, but `get_factcheck_max_tokens()` always returns
+  `FACTCHECK_DEEP_MAX_TOKENS` (2000).
+
+This decision aligns with the product tagline:
+"The best answer possible, with the best tools available."
+
+---
+
 ## Follow-up Items
 
 1. **Fix T1 scorer:** Change `must_mention: ["retired"]` to

@@ -1,14 +1,21 @@
 /**
  * frontend/src/components/IntakeFlow.jsx
  *
- * Screen 2 — Gemini Flash intake (two-turn max).
+ * Screen 2 — Intake analysis (two-turn max).
  *
  * Flow:
  *   1. Mount with initialUserMessage → POST /api/intake/start
  *   2a. status "clarifying" → show inline clarifying question
  *       User answers → POST /api/intake/respond → status "complete"
  *   2b. status "complete" → show tier badge + reasoning
- *   3. User confirms tier (or overrides) → onComplete(config)
+ *   3. User confirms tier → onComplete(config)
+ *
+ * Tier logic:
+ *   - Intake assigns "smart" or "deep" based on prompt complexity.
+ *   - If intake assigns deep: no slider, badge shows "🔭 Deep · Auto-selected",
+ *     user cannot downgrade.
+ *   - If intake assigns smart: pill slider shown, user can upgrade to deep
+ *     (one-directional — once deep is selected, no return to smart).
  */
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
@@ -20,47 +27,6 @@ const TIER_LABELS = {
   smart: "⚖ Smart",
   deep:  "🔍 Deep",
 };
-
-/**
- * Modal confirming the user understands the cost/time trade-off of upgrading to Deep.
- */
-function DeepConfirmationModal({ onConfirm, onCancel }) {
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="deep-modal-title"
-    >
-      <div className="w-full max-w-sm rounded-xl border border-[#2a2a2a] bg-[#1e1e1e] p-6 shadow-xl">
-        <h2 id="deep-modal-title" className="mb-2 text-base font-semibold text-[#e8e8e8]">
-          Upgrade to Deep?
-        </h2>
-        <p className="mb-5 text-sm leading-relaxed text-[#888888]">
-          Sessions take longer (10–20 min) and cost significantly more.
-          Deep uses flagship models throughout — best for reports and critical decisions.
-        </p>
-        <div className="flex gap-3 justify-end">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="rounded-lg border border-[#2a2a2a] bg-[#0d0d0d] px-4 py-2 text-sm text-[#888888] hover:text-[#e8e8e8] focus:outline-none"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={onConfirm}
-            className="rounded-lg px-4 py-2 text-sm font-bold focus:outline-none"
-            style={{ background: "#F5A623", color: "#0d0d0d" }}
-          >
-            Upgrade to Deep
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 /**
  * @param {Object}   props
@@ -76,9 +42,12 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
   const [answer, setAnswer] = useState("");
   const [submittingAnswer, setSubmittingAnswer] = useState(false);
   const [config, setConfig] = useState(null);
-  /** Whether the Deep upgrade confirmation modal is open */
-  const [showDeepConfirm, setShowDeepConfirm] = useState(false);
+  /** Tier assigned by intake — "smart" | "deep". Immutable after set. */
+  const [intakeTier, setIntakeTier] = useState("smart");
+  /** User's current tier selection — starts at intakeTier, can only move to "deep". */
   const [tierChoice, setTierChoice] = useState("smart");
+  /** Once deep is selected (by intake or user), this locks — no return to smart. */
+  const [tierLocked, setTierLocked] = useState(false);
   const [error, setError] = useState(null);
   const answerRef = useRef(null);
   const hasFiredRef = useRef(false);
@@ -112,8 +81,11 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
           setPhase("clarifying");
         } else {
           const cfg = data.config || {};
+          const tier = cfg.tier || "smart";
           setConfig(cfg);
-          setTierChoice(cfg.tier || "smart");
+          setIntakeTier(tier);
+          setTierChoice(tier);
+          setTierLocked(tier === "deep");
           setPhase("badge");
         }
       } catch (e) {
@@ -141,8 +113,11 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
       }
       const data = await res.json();
       const cfg = data.config || {};
+      const tier = cfg.tier || "smart";
       setConfig(cfg);
-      setTierChoice(cfg.tier || "smart");
+      setIntakeTier(tier);
+      setTierChoice(tier);
+      setTierLocked(tier === "deep");
       setPhase("badge");
     } catch (e) {
       setError(e.message || "Submit failed");
@@ -150,6 +125,13 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
       setSubmittingAnswer(false);
     }
   }, [answer, sessionId, submittingAnswer]);
+
+  const handleSliderChange = useCallback(() => {
+    // Only allow smart → deep. Deep → smart is never permitted.
+    if (tierLocked) return;
+    setTierChoice("deep");
+    setTierLocked(true);
+  }, [tierLocked]);
 
   const handleConfirm = useCallback(() => {
     if (!config || typeof onComplete !== "function") return;
@@ -236,41 +218,88 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
               </div>
             </div>
 
-            {/* Tier badge */}
-            <div className="flex items-start justify-between gap-3 rounded-lg border border-[#2a2a2a] bg-[#1e1e1e] px-4 py-3">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <span
-                    className="inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-semibold"
-                    style={{ background: "#F5A623", color: "#0d0d0d" }}
-                  >
-                    {TIER_LABELS[tierChoice] || tierChoice}
-                  </span>
-                  <span className="text-sm font-medium text-[#e8e8e8]">
-                    {config.output_type
-                      ? config.output_type.charAt(0).toUpperCase() + config.output_type.slice(1)
-                      : ""}
-                  </span>
-                </div>
-                <p className="mt-1.5 text-sm text-[#888888]">{config.reasoning}</p>
-              </div>
-              {tierChoice === "smart" && (
-                <button
-                  type="button"
-                  onClick={() => setShowDeepConfirm(true)}
-                  className="shrink-0 text-sm text-[#F5A623] underline-offset-2 hover:opacity-80 focus:outline-none"
+            {/* Tier badge — always reflects current tierChoice */}
+            <div className="rounded-lg border border-[#2a2a2a] bg-[#1e1e1e] px-4 py-3">
+              <div className="flex items-center gap-2">
+                <span
+                  className="inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-semibold"
+                  style={{ background: "#F5A623", color: "#0d0d0d" }}
                 >
-                  Upgrade to Deep ↑
-                </button>
-              )}
+                  {TIER_LABELS[tierChoice] || tierChoice}
+                </span>
+                <span className="text-sm font-medium text-[#e8e8e8]">
+                  {config.output_type
+                    ? config.output_type.charAt(0).toUpperCase() + config.output_type.slice(1)
+                    : ""}
+                </span>
+              </div>
+              <p className="mt-1.5 text-sm text-[#888888]">{config.reasoning}</p>
             </div>
 
-            {/* Deep upgrade confirmation modal */}
-            {showDeepConfirm && (
-              <DeepConfirmationModal
-                onConfirm={() => { setTierChoice("deep"); setShowDeepConfirm(false); }}
-                onCancel={() => setShowDeepConfirm(false)}
-              />
+            {/* RESEARCH DEPTH — slider when smart, static notice when deep-locked by intake */}
+            {intakeTier === "deep" ? (
+              /* Deep assigned by intake — no controls, no appeal */
+              <div className="rounded-lg border border-[#2a2a2a] bg-[#1e1e1e] px-4 py-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-semibold" style={{ color: "#F5A623" }}>
+                    🔭 Deep · Auto-selected
+                  </span>
+                </div>
+                <p className="mt-1.5 text-sm text-[#888888]">
+                  This question warrants deep analysis — top models with extended thinking.
+                </p>
+              </div>
+            ) : (
+              /* Smart assigned by intake — slider, user may upgrade to deep (one-way) */
+              <div>
+                <p className="mb-3 text-xs font-medium uppercase tracking-wide text-[#888888]">Research Depth</p>
+                <div className="flex items-center gap-4">
+                  {/* Smart label */}
+                  <span
+                    className="text-sm font-medium transition-colors duration-200"
+                    style={{ color: tierChoice === "smart" ? "#e8e8e8" : "#555555" }}
+                  >
+                    Smart
+                  </span>
+
+                  {/* Pill toggle track */}
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={tierChoice === "deep"}
+                    aria-label="Research depth — slide right to upgrade to Deep"
+                    onClick={handleSliderChange}
+                    disabled={tierLocked}
+                    className="relative h-7 w-14 flex-shrink-0 rounded-full transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623] disabled:cursor-not-allowed"
+                    style={{ background: tierChoice === "deep" ? "#F5A623" : "#2a2a2a" }}
+                  >
+                    <span
+                      className="absolute top-0.5 left-0.5 h-6 w-6 rounded-full bg-[#e8e8e8] shadow transition-transform duration-200"
+                      style={{ transform: tierChoice === "deep" ? "translateX(28px)" : "translateX(0)" }}
+                    />
+                  </button>
+
+                  {/* Deep label */}
+                  <span
+                    className="text-sm font-medium transition-colors duration-200"
+                    style={{ color: tierChoice === "deep" ? "#e8e8e8" : "#555555" }}
+                  >
+                    Deep
+                  </span>
+                </div>
+
+                {/* Description — changes on toggle, locked notice when deep selected */}
+                <p className="mt-2 text-sm text-[#888888]">
+                  {tierChoice === "smart"
+                    ? "Executor + advisor per model · recommended for most sessions"
+                    : "Top models · extended thinking · for high-stakes decisions"}
+                </p>
+                {tierLocked && tierChoice === "deep" && (
+                  <p className="mt-1 text-xs text-[#555555]">
+                    Deep selected — session will run at full depth.
+                  </p>
+                )}
+              </div>
             )}
 
             {/* Confirm */}

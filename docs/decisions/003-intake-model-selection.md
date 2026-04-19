@@ -130,3 +130,34 @@ model processed their input.
 but deferred to reduce complexity. The mechanical correctness eval (100% on
 GPT-4o Mini) is sufficient for the intake classification task. Measure intake
 quality by research output quality only if intake becomes a bottleneck.
+
+---
+
+## Addendum — April 19, 2026: Intake Now Assigns Deep When Warranted
+
+**Decision:** Intake assigns either "smart" or "deep" tier based on
+prompt complexity. The previous lock to `Literal["smart"]` is reversed.
+
+**Rationale:**
+The product tagline "The best answer possible, with the best tools
+available" requires the tool to select the appropriate research depth
+automatically. Asking users to choose Smart vs Deep is a compromise —
+most users cannot accurately assess whether their question needs deep
+thinking.
+
+**Tier assignment criteria:**
+- Smart: analysis, research, comparisons, factual questions (default)
+- Deep: architecture decisions, build/buy decisions, strategic choices,
+  high-stakes questions where getting it wrong has real consequences
+
+**No downgrade rule:**
+If intake assigns Deep, Deep runs. No user override. No downgrade path.
+If the user believes intake misclassified their question, they rephrase
+and resubmit — intake re-runs with the rephrased prompt.
+
+If intake assigns Smart, the user can upgrade to Deep via the slider.
+The upgrade is one-directional — once Deep is selected, no downgrade.
+
+**Schema change:**
+`IntakeDecision.tier: Literal["smart", "deep"]` (restored from
+the temporary `Literal["smart"]` lock introduced in the resilience PR).
