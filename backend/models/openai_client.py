@@ -37,7 +37,7 @@ _client = None
 def _get_client() -> OpenAI:
     global _client
     if _client is None:
-        _client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        _client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"), timeout=30.0)
     return _client
 
 MODELS = {
@@ -173,6 +173,26 @@ def call_gpt4o_mini_intake(prompt: str) -> IntakeDecision:
 
 # Role-based alias used by intake fallback chain
 call_intake_primary = call_gpt4o_mini_intake
+
+
+def call_for_chips(prompt: str, system: str, max_tokens: int = 200) -> str:
+    """
+    Call INTAKE_MODEL (GPT-4o Mini) with a custom prompt/system and return raw text.
+
+    Used by generate_user_take_chips() in router.py. Shares the same model and
+    client as intake to keep chip generation cheap and fast. No retry — chip
+    generation is best-effort; failures return empty list (fail-open).
+    """
+    response = _get_client().chat.completions.create(
+        model=INTAKE_MODEL,
+        max_tokens=max_tokens,
+        temperature=0.3,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user",   "content": prompt},
+        ],
+    )
+    return response.choices[0].message.content or ""
 
 
 # ── Round 1 call functions ────────────────────────────────────────────────────

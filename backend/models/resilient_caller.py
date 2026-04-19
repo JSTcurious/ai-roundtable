@@ -18,6 +18,10 @@ RETRYABLE_PATTERNS = [
 
 
 def is_retryable(exc: Exception) -> bool:
+    # "unavailable after N attempts" means an inner retry chain already exhausted —
+    # never re-retry these or the outer loop compounds the delay (9× instead of 3×).
+    if "unavailable after" in str(exc):
+        return False
     msg = str(exc).lower()
     return any(pattern in msg for pattern in RETRYABLE_PATTERNS)
 

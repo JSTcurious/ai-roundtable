@@ -25,6 +25,7 @@ def _get_client() -> OpenAI:
         _client = OpenAI(
             api_key=os.getenv("OPENROUTER_API_KEY"),
             base_url="https://openrouter.ai/api/v1",
+            timeout=30.0,
             default_headers={
                 "HTTP-Referer": "https://github.com/JSTcurious/ai-roundtable",
                 "X-Title": "ai-roundtable",

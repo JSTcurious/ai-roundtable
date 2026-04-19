@@ -21,6 +21,9 @@ Functions:
     build_synthesis_prompt(output_type) — synthesis prompt with output_type filled in
 """
 
+import asyncio
+import json
+import logging
 from typing import Optional
 
 from backend.models.model_config import (
@@ -538,3 +541,187 @@ def build_synthesis_prompt(
         + SYNTHESIS_TRUST_HIERARCHY
         + task
     )
+
+
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Philosophy B — YOUR TAKE chip generation
+# ---------------------------------------------------------------------------
+
+CHIP_GENERATION_SYSTEM = """\
+You have just read four AI research responses and a fact-check audit
+from a deliberation session.
+
+Generate exactly 3-4 perspective chips. Each chip has a short label and
+a brief evidence note that explains why this perspective is worth considering.
+
+Rules:
+- Be specific to THIS session's content — not generic
+- Reference specific models, claims, or findings where relevant
+- Include no more than one skeptical or contrarian option — vary perspectives across agreement, skepticism, action, and nuance
+- Include at least one that sides with the fact-check over round-1
+- label: under 8 words
+- evidence: 2-3 sentences of specific context from the research
+- Return ONLY a valid JSON array of objects, no other text
+
+Example:
+[
+  {"label": "I trust Gemini's framing on this",
+   "evidence": "Gemini's analysis was the most detailed on cost structure and aligned with Perplexity's live data. GPT took a more cautious stance that may underestimate the opportunity."},
+  {"label": "Perplexity's correction changes my view",
+   "evidence": "Perplexity found that the pricing cited by round-1 models was 40% out of date. This materially changes the build-vs-buy calculus."},
+  {"label": "I'm skeptical of the statistics cited",
+   "evidence": "Two models cited different adoption rates (23% vs 41%) with no source. Perplexity did not resolve this contradiction."},
+  {"label": "Deploy the portfolio project first",
+   "evidence": "Grok's lateral take — shipping something visible now builds credibility faster than continued preparation, regardless of which stack you choose."}
+]
+"""
+
+_logger = logging.getLogger(__name__)
+
+
+def _format_round1_for_chips(responses: dict) -> str:
+    """Format round-1 responses as short snippets for chip generation context."""
+    parts = []
+    for model, text in responses.items():
+        snippet = (text or "").strip()[:500]
+        if snippet:
+            parts.append(f"{model.capitalize()}: {snippet}")
+    return "\n\n".join(parts) if parts else "(no responses available)"
+
+
+async def generate_user_take_chips(
+    round1_responses: dict,
+    factcheck_audit: str,
+) -> list:
+    """
+    Generate 3-4 session-specific perspective chips for the YOUR TAKE section.
+
+    Uses GPT-4o Mini (INTAKE_PRIMARY) — cheap and fast. Runs in parallel with
+    the factcheck_complete event emission so chips are ready when the frontend
+    shows the YOUR TAKE section.
+
+    Returns a list of 3-4 chip strings. Returns [] on any error (fail-open —
+    YOUR TAKE still shows without chips).
+    """
+    from backend.models.openai_client import call_for_chips
+
+    prompt = (
+        f"Research responses:\n{_format_round1_for_chips(round1_responses)}\n\n"
+        f"Fact-check audit:\n{(factcheck_audit or '').strip()[:1000]}\n\n"
+        "Generate 3-4 perspective chips as a JSON array of objects."
+    )
+    try:
+        raw = await asyncio.to_thread(
+            call_for_chips, prompt, CHIP_GENERATION_SYSTEM, max_tokens=600
+        )
+        chips = json.loads(raw.strip())
+        if not isinstance(chips, list):
+            return []
+        valid = []
+        for c in chips[:4]:
+            if (
+                isinstance(c, dict)
+                and isinstance(c.get("label"), str)
+                and isinstance(c.get("evidence"), str)
+                and c["label"].strip()
+                and c["evidence"].strip()
+            ):
+                valid.append({"label": c["label"].strip(), "evidence": c["evidence"].strip()})
+        return valid
+    except Exception as exc:
+        _logger.warning("Chip generation failed: %s", exc)
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Philosophy B — provider-agnostic synthesis system prompt with YOUR TAKE
+# Used in the HITL flow where the user reviews research before triggering
+# synthesis. build_synthesis_system() replaces build_synthesis_prompt() as
+# the primary synthesis system prompt builder.
+# ---------------------------------------------------------------------------
+
+SYNTHESIS_SYSTEM_TEMPLATE = """\
+You are synthesizing research from four AI models and an independent \
+fact-check audit into a final answer for a deliberation session.
+
+The fact-check audit was conducted by a live web search tool and \
+represents the most current grounded information available. Treat \
+it as the highest-trust source for verifiable facts.
+
+{user_take_section}
+Synthesis principles:
+- Where fact-check contradicts round-1, side with fact-check and \
+state the contradiction explicitly with the corrected information
+- Where the user expresses skepticism about a model's claim, surface \
+it and address it directly
+- Where the user requests specific weighting, honor it and note it
+- Where models agree and fact-check confirms, mark [VERIFIED]
+- Where uncertainty remains after all sources, say so clearly — \
+do not paper over genuine disagreement
+- The final answer should reflect the user's thinking informed by \
+the evidence, not replace their judgment
+
+Use confidence tags throughout:
+[VERIFIED]  — confirmed by fact-check with live citations
+[LIKELY]    — well-supported by round-1, not fact-checked
+[UNCERTAIN] — conflicting signals or low confidence
+[DEFER]     — recommend the user verify independently
+"""
+
+_USER_TAKE_SECTION_WITH_INPUT = """\
+The user has reviewed the research and fact-check and provided \
+their own perspective before requesting synthesis:
+
+User's perspective:
+{user_take}
+
+Weight this as a primary input alongside the research. Where the \
+user agrees with a model, note the convergence. Where the user \
+expresses doubt, flag it in the synthesis.
+
+"""
+
+_USER_TAKE_SECTION_EMPTY = """\
+The user reviewed the research and fact-check before requesting \
+synthesis but did not add additional perspective. Synthesize \
+based on the research and fact-check evidence only.
+
+"""
+
+
+def build_synthesis_system(user_take_data: dict) -> str:
+    """
+    Build the Philosophy B synthesis system prompt incorporating user's perspective.
+
+    Provider-agnostic — no specific model names (Perplexity, Claude, GPT)
+    appear in this template. Only roles (fact-check audit, round-1 research).
+
+    Args:
+        user_take_data: dict with optional keys:
+            - "selected_chips": list[str] — chip labels the user toggled on
+              (labels only — evidence is for the user's benefit, not synthesis)
+            - "free_text": str — user's own typed perspective
+
+    Returns:
+        Complete synthesis system prompt string.
+    """
+    selected_chips = user_take_data.get("selected_chips", []) or []
+    free_text = (user_take_data.get("free_text", "") or "").strip()
+
+    has_chips = len(selected_chips) > 0
+    has_text = bool(free_text)
+
+    if not has_chips and not has_text:
+        take_section = _USER_TAKE_SECTION_EMPTY
+    else:
+        parts = []
+        if has_chips:
+            parts.append(f"Selected perspectives: {' · '.join(selected_chips)}")
+        if has_text:
+            parts.append(f"User's own words: {free_text}")
+        take_section = _USER_TAKE_SECTION_WITH_INPUT.format(
+            user_take="\n".join(parts)
+        )
+
+    return SYNTHESIS_SYSTEM_TEMPLATE.format(user_take_section=take_section)
