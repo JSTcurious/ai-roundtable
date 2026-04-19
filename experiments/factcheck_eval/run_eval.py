@@ -1,10 +1,10 @@
 """
 experiments/factcheck_eval/run_eval.py
 
-Factcheck Model Evaluation Harness — 7 tests, 3 candidates.
+Factcheck Model Evaluation Harness — 7 tests, 4 candidates.
 =============================================================
-Evaluates Perplexity Sonar Pro, Perplexity Sonar, and GPT-5.4 with web search
-as candidates for the ai-roundtable fact-check role.
+Evaluates Perplexity Sonar Pro, Perplexity Sonar, GPT-5.4 with web search,
+and Gemini 3 Flash with Google Search grounding as fact-check role candidates.
 
 Usage:
     cd /path/to/ai-roundtable
@@ -14,6 +14,7 @@ Requirements:
     API keys in backend/.env:
         PERPLEXITY_API_KEY — required for Perplexity candidates
         OPENAI_API_KEY     — required for GPT-5.4-WebSearch
+        GOOGLE_API_KEY     — required for Gemini-3-Flash-Search
 """
 
 import os
@@ -50,18 +51,23 @@ from experiments.factcheck_eval.prompts import (  # noqa: E402
 def _check_availability() -> dict:
     available = {}
     perplexity_ok = bool(os.environ.get("PERPLEXITY_API_KEY"))
-    openai_ok = bool(os.environ.get("OPENAI_API_KEY"))
+    openai_ok     = bool(os.environ.get("OPENAI_API_KEY"))
+    gemini_ok     = bool(os.environ.get("GOOGLE_API_KEY"))
 
     if not perplexity_ok:
         print("PERPLEXITY_API_KEY not set — skipping Perplexity candidates")
     if not openai_ok:
         print("OPENAI_API_KEY not set — skipping GPT-5.4-WebSearch")
+    if not gemini_ok:
+        print("GOOGLE_API_KEY not set — skipping Gemini-3-Flash-Search")
 
     for key, cfg in FACTCHECK_CANDIDATES.items():
         p = cfg["provider"]
         if p == "perplexity" and perplexity_ok:
             available[key] = cfg
         elif p == "openai_websearch" and openai_ok:
+            available[key] = cfg
+        elif p == "google_search" and gemini_ok:
             available[key] = cfg
 
     return available
@@ -236,6 +242,38 @@ def call_openai_websearch(prompt: str, model: str, max_tokens: int) -> dict:
     }
 
 
+def call_gemini_search(prompt: str, model: str, max_tokens: int) -> dict:
+    """
+    Call Gemini with Google Search grounding enabled via the google-genai SDK.
+
+    Uses types.Tool(google_search=types.GoogleSearch()) to activate live web
+    search grounding — mirrors the pattern in backend/models/google_client.py.
+    Returns {text, input_tokens, output_tokens, actual_cost}.
+    """
+    from google import genai
+    from google.genai import types
+
+    client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
+    response = client.models.generate_content(
+        model=model,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            tools=[types.Tool(google_search=types.GoogleSearch())],
+            max_output_tokens=max_tokens,
+        ),
+    )
+    text = response.text.strip() if response.text else ""
+    usage = response.usage_metadata
+    input_tokens  = usage.prompt_token_count     if usage else 0
+    output_tokens = usage.candidates_token_count if usage else 0
+    return {
+        "text":          text,
+        "input_tokens":  input_tokens,
+        "output_tokens": output_tokens,
+        "actual_cost":   None,   # Gemini does not return cost in usage_metadata
+    }
+
+
 def call_candidate(
     candidate_key: str,
     round1_claims: dict,
@@ -243,7 +281,7 @@ def call_candidate(
 ) -> dict:
     """
     Call a factcheck candidate with the given round-1 claims at the given tier.
-    Returns {text, input_tokens, output_tokens}.
+    Returns {text, input_tokens, output_tokens, actual_cost}.
     """
     cfg = FACTCHECK_CANDIDATES[candidate_key]
     prompt = _build_audit_prompt(round1_claims, tier)
@@ -255,9 +293,11 @@ def call_candidate(
         return call_perplexity(prompt, cfg["model"], max_tokens)
     elif cfg["provider"] == "openai_websearch":
         return call_openai_websearch(prompt, cfg["model"], max_tokens)
+    elif cfg["provider"] == "google_search":
+        return call_gemini_search(prompt, cfg["model"], max_tokens)
     else:
         return {"text": f"[Unknown provider: {cfg['provider']}]",
-                "input_tokens": 0, "output_tokens": 0}
+                "input_tokens": 0, "output_tokens": 0, "actual_cost": None}
 
 # ── Test runner ───────────────────────────────────────────────────────────────
 

@@ -35,17 +35,13 @@ FACTCHECK_CANDIDATES = {
         "output_rate":  10.00,
         "notes":        "Fallback2 candidate — cross-provider with web search",
     },
-}
-
-# Optional additional candidates if time permits
-OPTIONAL_CANDIDATES = {
-    "Gemini-3-Flash-Search": {
+    "Gemini-2.5-Flash-Search": {
         "provider":     "google_search",
-        "model":        "gemini-3-flash-preview",
+        "model":        "gemini-2.5-flash",
         "has_live_web": True,
         "input_rate":   0.075,
         "output_rate":  0.30,
-        "notes":        "Informational only — not in current fallback chain",
+        "notes":        "Google Search grounding — different search index from Perplexity",
     },
 }
 
@@ -81,14 +77,15 @@ FACTCHECK_TESTS = [
         "known_ground_truth": {
             "correct": (
                 "Claude 3 Opus was retired January 5, 2026. "
-                "Current flagship: Claude Opus 4.7 at $5/$25 per MTok, "
-                "1M token context window."
+                "Current flagship: Claude Opus 4.6 or 4.7 at $5/$25 per MTok. "
+                "(Claude Opus 4.7 released April 16, 2026 — may not be in all models' training data.)"
             ),
             "error_type": "stale_pricing_retired_model",
         },
         "automated_checks": {
             "must_flag":          ["$15", "$75", "Claude 3 Opus"],
-            "must_mention":       ["retired", "deprecated", "4.7", "$5", "$25"],
+            "must_mention":       ["retired", "deprecated", "$5", "$25"],
+            "must_mention_any":   [["4.6", "4.7"]],   # either version is acceptable
             "must_have_citation": True,
             "hard_gate":          True,  # failing this disqualifies for primary
         },
@@ -299,6 +296,14 @@ def score_factcheck_result(
             passed += 1
         else:
             failures.append(f"missing: '{term}'")
+
+    # must_mention_any: list of [alternatives] — at least one from each group must appear
+    for group in checks.get("must_mention_any", []):
+        total += 1
+        if any(alt.lower() in output_lower for alt in group):
+            passed += 1
+        else:
+            failures.append(f"missing all of: {group}")
 
     # must_flag: these claims should be flagged as wrong/outdated
     for term in checks.get("must_flag", []):
