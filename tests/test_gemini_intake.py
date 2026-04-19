@@ -104,10 +104,10 @@ def test_clarification_answer_completes_session():
 
 
 # ---------------------------------------------------------------------------
-# Test 4: Tier is always one of "quick", "smart", "deep"
+# Test 4: Tier is "smart" or "deep" (both valid, "quick" is not)
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("tier", ["smart"])
+@pytest.mark.parametrize("tier", ["smart", "deep"])
 def test_tier_is_valid_literal(tier):
     decision = _decision(tier=tier)
     with patch("backend.models.openai_client.call_gpt4o_mini_intake", return_value=decision):
@@ -128,7 +128,7 @@ def test_invalid_tier_raises_validation_error():
 
 
 def test_quick_tier_is_invalid_for_intake():
-    """Intake always returns smart — quick is no longer a valid IntakeDecision tier."""
+    """quick is not a valid IntakeDecision tier — only smart and deep."""
     with pytest.raises(ValidationError):
         IntakeDecision(
             needs_clarification=False,
@@ -139,17 +139,62 @@ def test_quick_tier_is_invalid_for_intake():
         )
 
 
-def test_deep_tier_is_invalid_for_intake():
-    """Intake always returns smart — deep is no longer a valid IntakeDecision tier.
-    Users may upgrade to deep via the frontend confirmation modal."""
-    with pytest.raises(ValidationError):
-        IntakeDecision(
-            needs_clarification=False,
-            optimized_prompt="Test",
-            tier="deep",
-            output_type="report",
-            reasoning="test",
-        )
+def test_deep_tier_is_valid_for_intake():
+    """Intake now assigns deep for high-stakes questions — deep is a valid literal."""
+    decision = IntakeDecision(
+        needs_clarification=False,
+        optimized_prompt="Design the data architecture for a real-time fraud detection system",
+        tier="deep",
+        output_type="decision",
+        reasoning="Deep selected — architecture decision with significant real-time constraints",
+    )
+    assert decision.tier == "deep"
+
+
+def test_deep_assignment_is_honoured_in_session_config():
+    """When intake assigns deep, the session config must reflect tier='deep'."""
+    deep_decision = _decision(
+        tier="deep",
+        output_type="decision",
+        reasoning="Deep selected — architecture decision",
+        optimized_prompt="Design the architecture for a real-time fraud detection system",
+    )
+    with patch("backend.models.openai_client.call_gpt4o_mini_intake", return_value=deep_decision):
+        session = IntakeSession()
+        result = session.analyze("Design the architecture for a real-time fraud detection system")
+
+    assert result["config"]["tier"] == "deep"
+
+
+def test_architecture_prompt_maps_to_deep_tier():
+    """Architecture decision prompts should receive deep tier from intake.
+    This verifies the session pipeline honours deep assignment from intake."""
+    arch_decision = _decision(
+        tier="deep",
+        output_type="decision",
+        reasoning="Deep selected — architecture decision requiring comprehensive analysis",
+        optimized_prompt="Design the architecture for a real-time data processing pipeline",
+    )
+    with patch("backend.models.openai_client.call_gpt4o_mini_intake", return_value=arch_decision):
+        session = IntakeSession()
+        result = session.analyze("Design the architecture for a real-time data processing pipeline")
+
+    assert result["config"]["tier"] == "deep"
+
+
+def test_comparison_prompt_maps_to_smart_tier():
+    """Comparison prompts (X vs Y) should receive smart tier — standard analysis."""
+    comparison_decision = _decision(
+        tier="smart",
+        output_type="comparison",
+        reasoning="Smart selected — comparison question with well-defined parameters",
+        optimized_prompt="Compare PostgreSQL vs MongoDB for a read-heavy web application",
+    )
+    with patch("backend.models.openai_client.call_gpt4o_mini_intake", return_value=comparison_decision):
+        session = IntakeSession()
+        result = session.analyze("Compare PostgreSQL vs MongoDB for a read-heavy web application")
+
+    assert result["config"]["tier"] == "smart"
 
 
 # ---------------------------------------------------------------------------

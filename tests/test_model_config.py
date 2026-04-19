@@ -139,37 +139,57 @@ class TestEnvVarOverride:
         importlib.reload(mc)
 
 
-# ── Factcheck token limits ────────────────────────────────────────────────────
+# ── Factcheck token limits — always deep ─────────────────────────────────────
 
 class TestFactcheckTokenLimits:
-    def test_smart_max_tokens_is_800(self):
-        assert get_factcheck_max_tokens("smart") == 800
+    def test_smart_tier_returns_deep_max_tokens(self):
+        """Smart tier now uses deep audit depth — fact-check is always deep."""
+        from backend.models.model_config import FACTCHECK_DEEP_MAX_TOKENS
+        assert get_factcheck_max_tokens("smart") == FACTCHECK_DEEP_MAX_TOKENS
 
-    def test_deep_max_tokens_is_2000(self):
+    def test_deep_tier_returns_deep_max_tokens(self):
+        from backend.models.model_config import FACTCHECK_DEEP_MAX_TOKENS
+        assert get_factcheck_max_tokens("deep") == FACTCHECK_DEEP_MAX_TOKENS
+
+    def test_unknown_tier_returns_deep_max_tokens(self):
+        """Any tier value (incl. unknown) returns the deep limit — always 2000."""
+        from backend.models.model_config import FACTCHECK_DEEP_MAX_TOKENS
+        assert get_factcheck_max_tokens("quick") == FACTCHECK_DEEP_MAX_TOKENS
+        assert get_factcheck_max_tokens("unknown") == FACTCHECK_DEEP_MAX_TOKENS
+
+    def test_always_deep_value_is_2000(self):
+        """The always-deep token budget must be 2000."""
+        assert get_factcheck_max_tokens("smart") == 2000
         assert get_factcheck_max_tokens("deep") == 2000
 
-    def test_unknown_tier_returns_smart_limit(self):
-        """Any non-deep tier should return the smart limit."""
-        assert get_factcheck_max_tokens("quick") == 800
-        assert get_factcheck_max_tokens("unknown") == 800
 
+# ── Intake tier assignment ────────────────────────────────────────────────────
 
-# ── Intake tier lock ──────────────────────────────────────────────────────────
-
-class TestIntakeTierLock:
-    def test_intake_system_prompt_always_smart(self):
-        """Intake system prompt must mandate tier = 'smart' only."""
+class TestIntakeTierAssignment:
+    def test_intake_system_prompt_assigns_smart_or_deep(self):
+        """Intake now assigns smart OR deep based on prompt complexity."""
         from backend.models.openai_client import _build_intake_system_prompt
         prompt = _build_intake_system_prompt()
-        assert 'ALWAYS return "smart"' in prompt
+        assert '"smart" | "deep"' in prompt or '"smart" or "deep"' in prompt or "smart" in prompt and "deep" in prompt
 
-    def test_intake_system_prompt_no_deep_assignment(self):
-        """Intake system prompt must not instruct model to assign deep tier."""
+    def test_intake_system_prompt_conservative_deep_rule(self):
+        """Intake system prompt must instruct the model to be conservative with deep."""
         from backend.models.openai_client import _build_intake_system_prompt
         prompt = _build_intake_system_prompt()
-        # The prompt must not suggest deep as an assignable option
-        assert "deep  :" not in prompt
-        assert "- deep" not in prompt
+        assert "Be conservative" in prompt
+        assert "When in doubt, assign smart" in prompt
+
+    def test_intake_system_prompt_deep_criteria_includes_architecture(self):
+        """Intake system prompt must include architecture decisions as deep criteria."""
+        from backend.models.openai_client import _build_intake_system_prompt
+        prompt = _build_intake_system_prompt()
+        assert "Architecture decision" in prompt or "architecture" in prompt.lower()
+
+    def test_intake_system_prompt_no_downgrade_rule_present(self):
+        """Intake system prompt must state that deep cannot be downgraded."""
+        from backend.models.openai_client import _build_intake_system_prompt
+        prompt = _build_intake_system_prompt()
+        assert "cannot downgrade" in prompt or "deep runs" in prompt
 
     def test_intake_system_prompt_no_quick_tier(self):
         """Intake system prompt must not reference quick tier as an option."""
