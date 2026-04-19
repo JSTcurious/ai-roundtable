@@ -281,6 +281,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
   const [sessionComplete, setSessionComplete] = useState(false);
 
   const [leaveIntent, setLeaveIntent] = useState(null);
+  const [copiedAnswer, setCopiedAnswer] = useState(false);
 
   // ── Perplexity citations — shown below FINAL ANSWER ─────────────────────
   const [citations, setCitations] = useState([]);
@@ -717,6 +718,26 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     URL.revokeObjectURL(url);
   }, [synthesisText]);
 
+  const copyFinalAnswer = useCallback(() => {
+    if (!synthesisText || copiedAnswer) return;
+    // Strip confidence tags and markdown before copying to clipboard
+    const plain = synthesisText
+      .replace(/\[VERIFIED\]|\[LIKELY\]|\[UNCERTAIN\]|\[DEFER\]/g, "")
+      .replace(/#{1,6}\s+/gm, "")
+      .replace(/\*\*(.+?)\*\*/g, "$1")
+      .replace(/\*(.+?)\*/g, "$1")
+      .replace(/`(.+?)`/g, "$1")
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+      .replace(/^\s*[-*+]\s+/gm, "")
+      .replace(/^\s*\d+\.\s+/gm, "")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+    navigator.clipboard.writeText(plain).then(() => {
+      setCopiedAnswer(true);
+      setTimeout(() => setCopiedAnswer(false), 1500);
+    });
+  }, [synthesisText, copiedAnswer]);
+
   const toggleChip = useCallback((label) => {
     setSelectedChips((prev) =>
       prev.includes(label) ? prev.filter((c) => c !== label) : [...prev, label]
@@ -750,7 +771,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     if (!onNavigateHome) return;
     if (sessionSettled) {
       await downloadSessionMarkdown();
-      onNavigateHome();
+      // Stay on page — user keeps their session visible after saving
     } else {
       setLeaveIntent("save-exit");
     }
@@ -762,6 +783,8 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     if (!onNavigateHome) return;
     if (intent === "save-exit") {
       await downloadSessionMarkdown();
+      // Stay on page — download without navigating away
+      return;
     }
     onNavigateHome();
   }, [leaveIntent, onNavigateHome, downloadSessionMarkdown]);
@@ -1254,11 +1277,12 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
               {synthesisFinal && (
                 <button
                   type="button"
-                  onClick={downloadFinalAnswerTxt}
+                  onClick={copyFinalAnswer}
                   className="text-xs text-[#555555] hover:text-text-secondary transition-colors focus:outline-none"
-                  aria-label="Save final answer as text file"
+                  aria-label="Copy final answer to clipboard"
+                  title="Copy to clipboard"
                 >
-                  save
+                  {copiedAnswer ? "Copied ✓" : "copy"}
                 </button>
               )}
             </div>
@@ -1275,6 +1299,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
                   content={synthesisBody}
                   isStreaming={synthesisStreaming && !synthesisFinal}
                   complete={synthesisFinal}
+                  citations={citations}
                 />
               )}
               {/* Sources — citations from Perplexity fact-check */}

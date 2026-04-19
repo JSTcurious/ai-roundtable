@@ -6,17 +6,28 @@
  * Figma frame: 04-Synthesis-Panel
  */
 
-import React from "react";
+import React, { useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 /**
- * @param {Object} props
- * @param {string} props.content — synthesis markdown / plain text (streams in)
- * @param {boolean} props.isStreaming — true while synthesis tokens are still arriving
- * @param {boolean} props.complete — synthesis finished (show ✓)
+ * @param {Object}   props
+ * @param {string}   props.content      — synthesis markdown / plain text (streams in)
+ * @param {boolean}  props.isStreaming  — true while synthesis tokens are still arriving
+ * @param {boolean}  props.complete     — synthesis finished (show ✓)
+ * @param {string[]} props.citations    — ordered source URLs from Perplexity fact-check
  */
-function SynthesisPanel({ content, isStreaming, complete }) {
+function SynthesisPanel({ content, isStreaming, complete, citations = [] }) {
+  // Convert [n] citation markers to markdown links when a matching URL exists.
+  // Markers without a URL entry are left as-is (rendered as literal text).
+  const processedContent = useMemo(() => {
+    if (!citations.length) return content;
+    return content.replace(/\[(\d+)\]/g, (match, n) => {
+      const url = citations[parseInt(n, 10) - 1];
+      return url ? `[<sup>${n}</sup>](${url})` : match;
+    });
+  }, [content, citations]);
+
   return (
     <div className="flex max-h-[400px] w-full flex-col overflow-hidden rounded-lg border border-border bg-surface px-4 py-3" style={{ borderLeft: "3px solid #E8712A" }}>
       <div className="mb-2 shrink-0 text-xs font-semibold uppercase tracking-wide text-claude">
@@ -25,7 +36,23 @@ function SynthesisPanel({ content, isStreaming, complete }) {
       </div>
       <div className="synthesis-panel-scroll min-h-0 flex-1">
         <div className="markdown-session break-words text-[0.9375rem] leading-relaxed text-text-primary">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            components={{
+              a: ({ href, children }) => (
+                <a
+                  href={href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[#F5A623] hover:opacity-80 no-underline"
+                >
+                  {children}
+                </a>
+              ),
+            }}
+          >
+            {processedContent}
+          </ReactMarkdown>
           {isStreaming && !complete ? (
             <span
               className="ml-0.5 inline-block h-[1em] w-2 animate-pulse align-[-0.125em] bg-claude"
