@@ -27,6 +27,11 @@ import asyncio
 import logging
 import os
 from functools import partial
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).parent.parent / ".env", override=False)
 
 from anthropic import Anthropic
 

@@ -27,6 +27,11 @@ import logging
 import os
 import time
 from functools import partial
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).parent.parent / ".env", override=False)
 
 from google import genai
 from google.genai import types
