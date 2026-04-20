@@ -1,5 +1,6 @@
 fastapi
 uvicorn[standard]
+starlette==0.46.2
 anthropic
 openai
 google-genai
