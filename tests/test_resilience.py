@@ -325,9 +325,12 @@ class TestResearchAvailabilityStatus:
             assert len(result) == 2
 
     def test_gemini_unavailable_returns_unavailable_status(self):
-        """When Gemini raises, research returns (error_text, 'unavailable')."""
+        """When all Gemini paths raise, research returns (error_text, 'unavailable')."""
+        client_mock = MagicMock()
+        client_mock.models.generate_content.side_effect = RuntimeError("API down")
         with patch("backend.models.google_client.call_gemini",
-                   side_effect=RuntimeError("API down")):
+                   side_effect=RuntimeError("API down")), \
+             patch("backend.models.google_client._get_client", return_value=client_mock):
             import asyncio
             from backend.models.google_client import call_research_gemini_async
             text, status = asyncio.run(

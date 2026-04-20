@@ -24,10 +24,13 @@ Functions:
 """
 
 import asyncio
+import logging
 import os
 from functools import partial
 
 from anthropic import Anthropic
+
+logger = logging.getLogger(__name__)
 
 _client = None
 
@@ -183,13 +186,15 @@ async def call_research_claude_async(
                 None, partial(call_claude, messages=history, tier="deep", system=system)
             )
             return result.content[0].text, "primary"
-    except Exception:
+    except Exception as exc:
+        logger.error("[claude-r1] Primary call failed: %s: %s", type(exc).__name__, exc)
         try:
             result = await loop.run_in_executor(
                 None, partial(call_claude, messages=history, tier="smart", system=system)
             )
             return result.content[0].text, "fallback"
-        except Exception:
+        except Exception as exc:
+            logger.error("[claude-r1] Research call failed: %s: %s", type(exc).__name__, exc)
             return "[Claude unavailable this session]", "unavailable"
 
 

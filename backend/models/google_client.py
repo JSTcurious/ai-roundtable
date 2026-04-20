@@ -23,6 +23,7 @@ Functions:
 """
 
 import asyncio
+import logging
 import os
 import time
 from functools import partial
@@ -31,6 +32,8 @@ from google import genai
 from google.genai import types
 
 from backend.models.intake_decision import IntakeDecision
+
+logger = logging.getLogger(__name__)
 
 _client = None
 
@@ -310,7 +313,28 @@ async def call_research_gemini_async(
 
     async def _fallback():
         fallback_id = get_fallback_model("gemini")
-        result = await loop_run(call_gemini, messages=history, tier="smart", system=system)
+        contents = []
+        for msg in history:
+            role = "model" if msg["role"] == "assistant" else "user"
+            contents.append(types.Content(role=role, parts=[types.Part(text=msg["content"])]))
+        if contents and contents[-1].role == "model":
+            contents.append(types.Content(
+                role="user",
+                parts=[types.Part(text="Please provide your analysis.")],
+            ))
+        config = types.GenerateContentConfig(
+            max_output_tokens=4096,
+            system_instruction=system or None,
+        )
+        result = await loop.run_in_executor(
+            None,
+            partial(
+                _get_client().models.generate_content,
+                model=fallback_id,
+                contents=contents,
+                config=config,
+            ),
+        )
         return result.text
 
     loop = asyncio.get_event_loop()
@@ -321,12 +345,14 @@ async def call_research_gemini_async(
     try:
         text = await _primary()
         return text, "primary"
-    except Exception:
+    except Exception as exc:
+        logger.error("[gemini-r1] Primary call failed: %s: %s", type(exc).__name__, exc)
         try:
             text = await _fallback()
             return text, "fallback"
-        except Exception:
-            return f"[Gemini unavailable this session]", "unavailable"
+        except Exception as exc:
+            logger.error("[gemini-r1] Research call failed: %s: %s", type(exc).__name__, exc)
+            return "[Gemini unavailable this session]", "unavailable"
 
 
 def ping() -> dict:
