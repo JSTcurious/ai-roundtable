@@ -16,6 +16,7 @@ import Header from "./common/Header";
 import ModelBubble from "./common/ModelBubble";
 import SynthesisPanel from "./SynthesisPanel";
 const DEFAULT_HTTP = "http://localhost:8000";
+const DEFAULT_WS   = "ws://localhost:8000";
 const API_BASE = process.env.REACT_APP_API_URL || DEFAULT_HTTP;
 
 /** Browser WebSocket has no configurable open timeout; guard hung connects. */
@@ -31,6 +32,9 @@ const WS_RECONNECT_MAX = 3;
 const ROUNDTABLE_HEX = "#6B6B6B";
 
 function wsUrlFromApiBase() {
+  if (process.env.REACT_APP_WS_URL) {
+    return process.env.REACT_APP_WS_URL + "/ws/session";
+  }
   const base = process.env.REACT_APP_API_URL || DEFAULT_HTTP;
   try {
     const u = new URL(base);
@@ -40,7 +44,7 @@ function wsUrlFromApiBase() {
     u.hash = "";
     return u.toString();
   } catch {
-    return "ws://localhost:8000/ws/session";
+    return DEFAULT_WS + "/ws/session";
   }
 }
 
