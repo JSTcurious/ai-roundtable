@@ -1,7 +1,8 @@
 fastapi
-uvicorn[standard]
+uvicorn[standard]==0.32.1
 anthropic
 openai
 google-genai
 python-dotenv
 websockets
+starlette==0.46.2
