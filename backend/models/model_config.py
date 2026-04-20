@@ -96,10 +96,10 @@ RESEARCH_CLAUDE_SMART_EXECUTOR = os.getenv(
     "RESEARCH_CLAUDE_SMART_EXECUTOR", "claude-sonnet-4-6"
 )
 RESEARCH_CLAUDE_SMART_ADVISOR = os.getenv(
-    "RESEARCH_CLAUDE_SMART_ADVISOR", "claude-opus-4-7"
+    "RESEARCH_CLAUDE_SMART_ADVISOR", "claude-opus-4-6"
 )
 RESEARCH_CLAUDE_DEEP = os.getenv(
-    "RESEARCH_CLAUDE_DEEP", "claude-opus-4-7"
+    "RESEARCH_CLAUDE_DEEP", "claude-opus-4-6"
 )
 RESEARCH_CLAUDE_FALLBACK = os.getenv(
     "RESEARCH_CLAUDE_FALLBACK", "claude-haiku-4-5-20251001"
@@ -140,7 +140,7 @@ FACTCHECK_DEEP_MAX_TOKENS  = int(os.getenv("FACTCHECK_DEEP_MAX_TOKENS",  "2000")
 # Fallback (any synthesis failure):
 #   Qwen 2.5 72B — open-weight, 100% eval score, different provider
 
-SYNTHESIS_ANALYTICAL = os.getenv("SYNTHESIS_ANALYTICAL", "claude-opus-4-7")
+SYNTHESIS_ANALYTICAL = os.getenv("SYNTHESIS_ANALYTICAL", "claude-opus-4-6")
 SYNTHESIS_FACTUAL    = os.getenv("SYNTHESIS_FACTUAL",    "gpt-5.4")
 SYNTHESIS_FALLBACK   = os.getenv("SYNTHESIS_FALLBACK",   "qwen/qwen-2.5-72b-instruct")
 
