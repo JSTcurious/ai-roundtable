@@ -58,6 +58,9 @@ function SynthesisPanel({ content, isStreaming, complete, citations = [] }) {
                       </a>
                     );
                   }
+                  // citation://n with no matching URL — render plain superscript,
+                  // no broken anchor pointing to a dead protocol
+                  return <sup>{children}</sup>;
                 }
                 return (
                   <a

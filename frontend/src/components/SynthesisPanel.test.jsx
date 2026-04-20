@@ -120,4 +120,34 @@ describe("SynthesisPanel citation rendering", () => {
     );
     expect(screen.queryAllByRole("link")).toHaveLength(0);
   });
+
+  test("citation://n with no matching URL renders plain <sup>, no broken anchor", () => {
+    // processedContent returns match as-is when citations[n-1] is undefined,
+    // so pre-formed [2](citation://2) in the content survives unchanged and
+    // the mock delivers href="citation://2" to components.a with only 1 citation.
+    render(
+      <SynthesisPanel
+        content="First [1] is valid. Second [2](citation://2) has no URL."
+        isStreaming={false}
+        complete={false}
+        citations={["https://example.com/source-1"]}
+      />
+    );
+
+    // [1] has a URL → renders as an anchor with <sup>
+    const links = screen.getAllByRole("link");
+    expect(links).toHaveLength(1);
+    expect(links[0]).toHaveAttribute("href", "https://example.com/source-1");
+    expect(links[0].querySelector("sup")).toHaveTextContent("1");
+
+    // citation://2 has no URL → plain <sup>, no broken anchor
+    const sups = document.querySelectorAll("sup");
+    expect(sups).toHaveLength(2); // one from [1] (inside anchor), one from [2] (standalone)
+    // The standalone <sup> must not be inside an anchor
+    const orphanSup = Array.from(sups).find(
+      (s) => s.closest("a") === null
+    );
+    expect(orphanSup).not.toBeNull();
+    expect(orphanSup).toHaveTextContent("2");
+  });
 });
