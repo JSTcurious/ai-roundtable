@@ -18,13 +18,15 @@ import remarkGfm from "remark-gfm";
  * @param {string[]} props.citations    — ordered source URLs from Perplexity fact-check
  */
 function SynthesisPanel({ content, isStreaming, complete, citations = [] }) {
-  // Convert [n] citation markers to markdown links when a matching URL exists.
-  // Markers without a URL entry are left as-is (rendered as literal text).
+  // Convert [n] citation markers to markdown links using a custom citation://n
+  // protocol so ReactMarkdown doesn't need to parse raw HTML inside link labels.
+  // The components.a override below detects this protocol and renders a proper
+  // <sup> element. Markers without a matching URL are left as-is.
   const processedContent = useMemo(() => {
     if (!citations.length) return content;
     return content.replace(/\[(\d+)\]/g, (match, n) => {
       const url = citations[parseInt(n, 10) - 1];
-      return url ? `[<sup>${n}</sup>](${url})` : match;
+      return url ? `[${n}](citation://${n})` : match;
     });
   }, [content, citations]);
 
@@ -39,16 +41,38 @@ function SynthesisPanel({ content, isStreaming, complete, citations = [] }) {
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
             components={{
-              a: ({ href, children }) => (
-                <a
-                  href={href}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-[#F5A623] hover:opacity-80 no-underline"
-                >
-                  {children}
-                </a>
-              ),
+              a: ({ href, children }) => {
+                // Citation superscript: [n](citation://n) → <a href="url"><sup>n</sup></a>
+                if (href?.startsWith("citation://")) {
+                  const idx = parseInt(href.replace("citation://", ""), 10) - 1;
+                  const url = citations[idx];
+                  if (url) {
+                    return (
+                      <a
+                        href={url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[#F5A623] hover:opacity-80 no-underline"
+                      >
+                        <sup>{children}</sup>
+                      </a>
+                    );
+                  }
+                  // citation://n with no matching URL — render plain superscript,
+                  // no broken anchor pointing to a dead protocol
+                  return <sup>{children}</sup>;
+                }
+                return (
+                  <a
+                    href={href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[#F5A623] hover:opacity-80 no-underline"
+                  >
+                    {children}
+                  </a>
+                );
+              },
             }}
           >
             {processedContent}
