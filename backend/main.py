@@ -492,6 +492,20 @@ async def export_drive():
 
 # ── WebSocket streaming ───────────────────────────────────────────────────────
 
+async def safe_close(ws):
+    """Close a WebSocket, silently ignoring errors if already closed.
+
+    websocket.close() raises RuntimeError when called after the client has
+    already disconnected (e.g. inside a WebSocketDisconnect handler) or when
+    a prior close frame was already sent.  Swallowing it here lets every
+    call site use a uniform close pattern without try/except boilerplate.
+    """
+    try:
+        await ws.close()
+    except RuntimeError:
+        pass  # Already closed by client or a prior handler
+
+
 def _build_transcript(config: dict, history: list, prompt: str) -> Transcript:
     """Reconstruct a Transcript from prior history and append the new user prompt."""
     transcript = Transcript()
@@ -932,11 +946,11 @@ async def session_websocket(websocket: WebSocket):
         try:
             data = await websocket.receive_json()
         except WebSocketDisconnect:
-            await websocket.close()
+            await safe_close(websocket)
             return
         except Exception:
             await websocket.send_json({"type": "error", "message": "Invalid handshake — expected JSON with prompt and session_config."})
-            await websocket.close()
+            await safe_close(websocket)
             return
         if isinstance(data, dict) and data.get("type") == "ping":
             await websocket.send_json({"type": "pong"})
@@ -953,7 +967,7 @@ async def session_websocket(websocket: WebSocket):
         tier_config = get_tier_config(tier)
     except ValueError as e:
         await websocket.send_json({"type": "error", "message": str(e)})
-        await websocket.close()
+        await safe_close(websocket)
         return
 
     # Tier must be "smart" or "deep" — anything else defaults to smart
@@ -1194,4 +1208,4 @@ async def session_websocket(websocket: WebSocket):
             await ping_task
         except asyncio.CancelledError:
             pass
-        await websocket.close()
+        await safe_close(websocket)
