@@ -33,7 +33,7 @@ from typing import Dict, List, Optional
 
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).parent / ".env", override=False)
+load_dotenv(Path(__file__).parent / ".env", override=True)
 
 from fastapi import FastAPI, HTTPException, WebSocket
 from fastapi.middleware.cors import CORSMiddleware

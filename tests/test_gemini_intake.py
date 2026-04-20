@@ -57,7 +57,7 @@ FINAL_DECISION = _decision(
 # ---------------------------------------------------------------------------
 
 def test_clear_prompt_completes_in_one_turn():
-    with patch("backend.models.openai_client.call_gpt4o_mini_intake", return_value=CLEAR_DECISION):
+    with patch("backend.intake.call_intake_sonnet", return_value=CLEAR_DECISION):
         session = IntakeSession()
         result = session.analyze("How do I design a RAG pipeline?")
 
@@ -74,7 +74,7 @@ def test_clear_prompt_completes_in_one_turn():
 # ---------------------------------------------------------------------------
 
 def test_ambiguous_prompt_returns_clarifying_question():
-    with patch("backend.models.openai_client.call_gpt4o_mini_intake", return_value=AMBIGUOUS_DECISION):
+    with patch("backend.intake.call_intake_sonnet", return_value=AMBIGUOUS_DECISION):
         session = IntakeSession()
         result = session.analyze("I need help with my project")
 
@@ -90,7 +90,7 @@ def test_ambiguous_prompt_returns_clarifying_question():
 # ---------------------------------------------------------------------------
 
 def test_clarification_answer_completes_session():
-    with patch("backend.models.openai_client.call_gpt4o_mini_intake", side_effect=[AMBIGUOUS_DECISION, FINAL_DECISION]):
+    with patch("backend.intake.call_intake_sonnet", side_effect=[AMBIGUOUS_DECISION, FINAL_DECISION]):
         session = IntakeSession()
         r1 = session.analyze("I need help with my project")
         assert r1["status"] == "clarifying"
@@ -110,7 +110,7 @@ def test_clarification_answer_completes_session():
 def test_tier_is_always_smart():
     """Intake always returns smart — tier is Literal["smart"]."""
     decision = _decision(tier="smart")
-    with patch("backend.models.openai_client.call_gpt4o_mini_intake", return_value=decision):
+    with patch("backend.intake.call_intake_sonnet", return_value=decision):
         session = IntakeSession()
         result = session.analyze("Test prompt")
     assert result["config"]["tier"] == "smart"
@@ -159,7 +159,7 @@ def test_architecture_prompt_maps_to_smart_tier():
         reasoning="Smart selected — architecture analysis with well-defined scope",
         optimized_prompt="Design the architecture for a real-time data processing pipeline",
     )
-    with patch("backend.models.openai_client.call_gpt4o_mini_intake", return_value=arch_decision):
+    with patch("backend.intake.call_intake_sonnet", return_value=arch_decision):
         session = IntakeSession()
         result = session.analyze("Design the architecture for a real-time data processing pipeline")
 
@@ -174,7 +174,7 @@ def test_comparison_prompt_maps_to_smart_tier():
         reasoning="Smart selected — comparison question with well-defined parameters",
         optimized_prompt="Compare PostgreSQL vs MongoDB for a read-heavy web application",
     )
-    with patch("backend.models.openai_client.call_gpt4o_mini_intake", return_value=comparison_decision):
+    with patch("backend.intake.call_intake_sonnet", return_value=comparison_decision):
         session = IntakeSession()
         result = session.analyze("Compare PostgreSQL vs MongoDB for a read-heavy web application")
 
@@ -186,7 +186,7 @@ def test_comparison_prompt_maps_to_smart_tier():
 # ---------------------------------------------------------------------------
 
 def test_second_respond_returns_existing_config_without_api_call():
-    with patch("backend.models.openai_client.call_gpt4o_mini_intake", side_effect=[AMBIGUOUS_DECISION, FINAL_DECISION]) as mock_api:
+    with patch("backend.intake.call_intake_sonnet", side_effect=[AMBIGUOUS_DECISION, FINAL_DECISION]) as mock_api:
         session = IntakeSession()
         session.analyze("Ambiguous prompt")
         session.respond("First answer")
@@ -344,7 +344,7 @@ def test_clarifying_question_does_not_substitute_model_names():
     This test asserts the correct pattern: an intent-only question contains
     no model names from the training data that contradict the user's prompt.
     """
-    with patch("backend.models.openai_client.call_gpt4o_mini_intake", return_value=_INTENT_ONLY_QUESTION):
+    with patch("backend.intake.call_intake_sonnet", return_value=_INTENT_ONLY_QUESTION):
         session = IntakeSession()
         result = session.analyze(_PRICING_PROMPT)
 
@@ -361,7 +361,7 @@ def test_clarifying_question_with_substituted_names_is_detectable():
     the assertions above would catch it. This test confirms the detection logic
     works against a known-bad response.
     """
-    with patch("backend.models.openai_client.call_gpt4o_mini_intake", return_value=_SUBSTITUTED_QUESTION):
+    with patch("backend.intake.call_intake_sonnet", return_value=_SUBSTITUTED_QUESTION):
         session = IntakeSession()
         result = session.analyze(_PRICING_PROMPT)
 
@@ -405,7 +405,7 @@ def test_turn1_optimized_prompt_preserves_original_model_names():
     After the user answers the clarifying question, the optimized_prompt must
     contain the model names from the original prompt, not substitutions.
     """
-    with patch("backend.models.openai_client.call_gpt4o_mini_intake",
+    with patch("backend.intake.call_intake_sonnet",
                side_effect=[_INTENT_ONLY_QUESTION, _PRESERVED_FINAL]):
         session = IntakeSession()
         session.analyze(_PRICING_PROMPT)
@@ -426,7 +426,7 @@ def test_turn1_substituted_prompt_is_detectable():
     substituted model names, the assertions above would catch it. This test
     confirms the detection logic works against a known-bad response.
     """
-    with patch("backend.models.openai_client.call_gpt4o_mini_intake",
+    with patch("backend.intake.call_intake_sonnet",
                side_effect=[_INTENT_ONLY_QUESTION, _SUBSTITUTED_FINAL]):
         session = IntakeSession()
         session.analyze(_PRICING_PROMPT)

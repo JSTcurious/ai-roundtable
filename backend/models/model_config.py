@@ -31,7 +31,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).parent.parent / ".env", override=False)
+load_dotenv(Path(__file__).parent.parent / ".env", override=True)
 
 
 # ── Research — Gemini (Google) ────────────────────────────────────────────────
