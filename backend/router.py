@@ -640,6 +640,67 @@ async def generate_user_take_chips(
 
 
 # ---------------------------------------------------------------------------
+# Philosophy B — synthesis direction generation
+# ---------------------------------------------------------------------------
+
+_DIRECTION_SYSTEM = """\
+You are preparing a synthesis direction for a user who has just read AI
+research and a fact-check audit on their decision question. Generate 1-2
+sentences that state what you would conclude from the research and why —
+written as a direct proposal to the user, not as analysis.
+
+Format: State your recommended direction first, then the primary reason in
+one clause. End with a short open question inviting the user to confirm or
+redirect.
+
+Examples of good direction proposals:
+'Based on the research, I'd prioritize resolving your immigration status
+before anything else — it's the binding constraint that affects everything
+downstream. Does that match your read, or is there a factor you'd weight
+differently?'
+
+'The research points toward taking the move — the compensation delta is
+significant and the immigration risk appears manageable. Want me to
+synthesize on that basis, or do you see it differently?'
+
+Keep it under 60 words. First person. Direct. No hedging. No 'it depends'.
+Commit to a direction.\
+"""
+
+
+async def generate_synthesis_direction(
+    research_summaries: list,
+    factcheck_audit: str,
+    user_take_chips: list,
+) -> str:
+    """
+    Generate a proposed synthesis direction — Claude's 1-2 sentence
+    recommendation stated as a direct proposal to the user.
+
+    Runs concurrently with generate_user_take_chips after factcheck
+    completes. Returns "" on any error — never crashes the pipeline.
+    """
+    from backend.models.anthropic_client import call_for_chips
+
+    summaries_text = "\n\n".join(
+        f"Model {i + 1}: {s[:400]}" for i, s in enumerate(research_summaries) if s
+    )
+    prompt = (
+        f"Research summaries:\n{summaries_text or '(none)'}\n\n"
+        f"Fact-check audit:\n{(factcheck_audit or '').strip()[:800]}\n\n"
+        "Generate a 1-2 sentence synthesis direction as described."
+    )
+    try:
+        direction = await asyncio.to_thread(
+            call_for_chips, prompt, _DIRECTION_SYSTEM, max_tokens=120
+        )
+        return (direction or "").strip()
+    except Exception as exc:
+        _logger.warning("Synthesis direction generation failed: %s", exc)
+        return ""
+
+
+# ---------------------------------------------------------------------------
 # Philosophy B — synthesis system prompt with YOUR TAKE
 # build_synthesis_system() is the sole entry point. It assembles the prompt
 # from the user's take, the Perplexity audit text, and optional source URLs.

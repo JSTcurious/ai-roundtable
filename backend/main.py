@@ -49,6 +49,7 @@ from backend.router import (
     build_synthesis_prompt,
     build_synthesis_system,
     generate_user_take_chips,
+    generate_synthesis_direction,
     select_synthesis_model,
     USE_CASE_LIBRARY,
     get_use_case,
@@ -1115,8 +1116,9 @@ async def session_websocket(websocket: WebSocket):
         health.factcheck_degraded = (factcheck_provider != "primary")
         transcript.add_model_message("Perplexity", audit_text, round="audit")
 
-        # Start chip generation in parallel — runs while frontend reads research.
-        # Fail-open: chips_task always resolves to a list (empty on any error).
+        # Start chip generation and synthesis direction concurrently —
+        # both run while frontend renders the factcheck result.
+        # Fail-open: both tasks always resolve ([] / "" on any error).
         round1_for_chips = {
             "gemini": gemini_text,
             "gpt":    gpt_text,
@@ -1125,6 +1127,13 @@ async def session_websocket(websocket: WebSocket):
         }
         chips_task = asyncio.create_task(
             generate_user_take_chips(round1_for_chips, audit_text)
+        )
+        direction_task = asyncio.create_task(
+            generate_synthesis_direction(
+                research_summaries=list(round1_for_chips.values()),
+                factcheck_audit=audit_text,
+                user_take_chips=[],
+            )
         )
 
         # Determine factcheck display info for frontend transparency
@@ -1144,9 +1153,10 @@ async def session_websocket(websocket: WebSocket):
             "factcheck_availability": _fc_avail,
         })
 
-        # Await chips — should be ready by the time frontend finishes rendering
-        # factcheck_complete. Returns [] on any chip generation failure.
+        # Await both tasks — should be ready by the time frontend finishes
+        # rendering factcheck_complete. Both fail-open on any error.
         chips = await chips_task
+        synthesis_direction = await direction_task
 
         # ── Philosophy B: wait for user's perspective before synthesis ─────────
         # No timeout — synthesis must ONLY run when the user explicitly clicks
@@ -1154,6 +1164,7 @@ async def session_websocket(websocket: WebSocket):
         await websocket.send_json({
             "type": "awaiting_user_take",
             "chips": chips,
+            "synthesis_direction": synthesis_direction,
             "message": "Here are some perspectives to consider:" if chips else "",
         })
         user_take_data = await user_take_queue.get()

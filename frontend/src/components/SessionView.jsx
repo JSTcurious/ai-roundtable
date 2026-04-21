@@ -306,6 +306,8 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
   const [chipsLoading, setChipsLoading] = useState(false);
   /** User's optional free-text perspective */
   const [userTakeFreeText, setUserTakeFreeText] = useState("");
+  /** Claude's proposed synthesis direction — shown above chips */
+  const [synthesisDirection, setSynthesisDirection] = useState("");
   /** True after user clicks Synthesize — inputs become read-only */
   const [synthesisRequested, setSynthesisRequested] = useState(false);
 
@@ -593,6 +595,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
           case "awaiting_user_take":
             setChipsLoading(false);
             setUserTakeChips(data.chips || []);
+            setSynthesisDirection(data.synthesis_direction || "");
             setAwaitingUserTake(true);
             break;
           case "synthesis_thinking":
@@ -764,12 +767,14 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     // runs on research + fact-check only, with no user perspective injected.
     setSynthesisRequested(true);
     setAwaitingUserTake(false);
+    const effectiveFreeText = userTakeFreeText.trim() ||
+      (selectedChips.length === 0 ? synthesisDirection : "");
     ws.send(JSON.stringify({
       type: "submit_user_take",
       selected_chips: selectedChips,
-      free_text: userTakeFreeText.trim(),
+      free_text: effectiveFreeText,
     }));
-  }, [selectedChips, userTakeFreeText, synthesisRequested]);
+  }, [selectedChips, userTakeFreeText, synthesisDirection, synthesisRequested]);
 
   const requestHome = useCallback(() => {
     if (!onNavigateHome) return;
@@ -1174,6 +1179,18 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
                 </p>
               )}
 
+              {/* Claude's read — proposed synthesis direction */}
+              {awaitingUserTake && synthesisDirection && (
+                <div className="space-y-1">
+                  <p className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: "#F5A623" }}>
+                    Claude's Read
+                  </p>
+                  <p className="text-sm leading-relaxed text-text-primary">
+                    {synthesisDirection}
+                  </p>
+                </div>
+              )}
+
               {/* Chips — Fix 3: label is text-xs font-semibold (was text-[11px] opacity-60) */}
               {awaitingUserTake && userTakeChips.length > 0 && (
                 <div>
@@ -1280,7 +1297,9 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
                   {/* Hint: shown when nothing is selected — synthesis without a take is valid */}
                   {!synthesisRequested && selectedChips.length === 0 && !userTakeFreeText.trim() && (
                     <p className="mt-2 text-center text-xs text-text-secondary">
-                      Nothing selected? Synthesis will reflect the research only.
+                      {synthesisDirection
+                        ? "Nothing selected? Claude's read above will be used."
+                        : "Nothing selected? Synthesis will reflect the research only."}
                     </p>
                   )}
                 </>
@@ -1323,27 +1342,6 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
                   complete={synthesisFinal}
                   citations={citations}
                 />
-              )}
-              {/* Sources — citations from Perplexity fact-check */}
-              {sessionComplete && citations.length > 0 && (
-                <div className="space-y-1.5">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-text-secondary">Sources</p>
-                  <ol className="space-y-1">
-                    {citations.map((url, i) => (
-                      <li key={i} className="flex gap-2 text-xs text-[#888888]">
-                        <span className="shrink-0 text-[#555555]">[{i + 1}]</span>
-                        <a
-                          href={url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="break-all hover:text-text-secondary transition-colors"
-                        >
-                          {url}
-                        </a>
-                      </li>
-                    ))}
-                  </ol>
-                </div>
               )}
             </div>
           </section>
