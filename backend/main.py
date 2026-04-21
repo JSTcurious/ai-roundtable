@@ -82,9 +82,19 @@ from backend.models.model_validator import validate_model_config
 
 app = FastAPI(title="ai-roundtable v2")
 
+ALLOWED_ORIGINS = os.getenv(
+    "ALLOWED_ORIGINS",
+    "http://localhost:3000,http://localhost:3001"
+).split(",")
+
+FRONTEND_URL = os.getenv("FRONTEND_URL", "")
+if FRONTEND_URL:
+    ALLOWED_ORIGINS.append(FRONTEND_URL)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
