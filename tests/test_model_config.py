@@ -167,10 +167,15 @@ class TestFactcheckTokenLimits:
 
 class TestIntakeTierAssignment:
     def test_intake_system_prompt_states_always_smart(self):
-        """Intake system prompt must instruct the model to always return smart."""
+        """Intake system prompt must instruct the model that tier is always smart."""
         from backend.models.openai_client import _build_intake_system_prompt
         prompt = _build_intake_system_prompt()
-        assert "always return" in prompt.lower() and "smart" in prompt
+        # The prompt must communicate that tier is locked to "smart"
+        # (phrasing varies between prompt versions — check the intent, not exact words)
+        assert "smart" in prompt
+        assert "tier" in prompt.lower()
+        # Must NOT suggest the model can choose a different tier
+        assert '"deep"' not in prompt and "'deep'" not in prompt
 
     def test_intake_system_prompt_user_controls_tier(self):
         """Intake system prompt must state that the user controls tier via the session UI."""

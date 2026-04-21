@@ -9,9 +9,11 @@ Classes:
     IntakeSession  — manages a single intake session (at most two turns)
 
 Functions:
-    call_intake_sonnet — primary intake via Claude Sonnet (Anthropic)
-    sanitize_text      — strip Unicode bidi control characters
-    sanitize_config    — recursively sanitize string values in a config dict
+    call_intake_sonnet          — primary intake via Claude Sonnet (Anthropic)
+    sanitize_text               — strip Unicode bidi control characters
+    sanitize_config             — recursively sanitize string values in a config dict
+    _has_immigration_context    — detect immigration keywords in user text
+    _has_unknown_visa_type      — check if decision has unresolved visa_type
 """
 
 import logging
@@ -22,6 +24,55 @@ from backend.models.intake_decision import IntakeDecision
 from backend.models.resilient_caller import call_with_fallback
 
 logger = logging.getLogger(__name__)
+
+# ── Immigration guard ─────────────────────────────────────────────────────────
+
+IMMIGRATION_KEYWORDS: frozenset[str] = frozenset({
+    "immigration", "visa", "h-1b", "h1b", "h1-b", "i-485", "i485",
+    "i-140", "i140", "green card", "greencard", "green-card",
+    "sponsorship", "sponsored", "sponsor",
+    "work authorization", "work auth", "opt", "stem opt",
+    "tn visa", "tn status", "l-1", "l1", "l-1b", "l-1a",
+    "o-1", "o1", "f-1", "f1", "f-1 opt",
+    "petition", "ead", "employment authorization",
+    "priority date", "perm", "labor certification",
+    "immigration case", "immigration attorney", "immigration lawyer",
+    "portability", "ac21", "cap exempt",
+    "unlawful presence", "change of status",
+})
+
+# Compiled regex: matches any immigration keyword at word boundaries.
+# Sorted longest-first so multi-word phrases (e.g. "green card") take precedence
+# over their component words in alternation.
+_IMMIGRATION_RE: re.Pattern = re.compile(
+    r"\b(?:"
+    + "|".join(
+        re.escape(kw)
+        for kw in sorted(IMMIGRATION_KEYWORDS, key=len, reverse=True)
+    )
+    + r")\b",
+    re.IGNORECASE,
+)
+
+
+def _has_immigration_context(text: str) -> bool:
+    """
+    Return True if text contains any immigration-related keyword at a word boundary.
+    Word-boundary matching prevents false positives like 'ead' matching 'read'.
+    """
+    return bool(_IMMIGRATION_RE.search(text))
+
+
+def _has_unknown_visa_type(decision: IntakeDecision) -> bool:
+    """
+    Return True if the decision has unresolved visa_type.
+    A visa_type is considered unresolved if it is absent, empty,
+    or one of the sentinel 'unknown' strings.
+    """
+    user_ctx = decision.user_context or {}
+    imm = user_ctx.get("immigration_specifics", {}) or {}
+    visa_type = (imm.get("visa_type") or "").strip().lower()
+    return visa_type in ("", "unknown", "unspecified", "not stated", "n/a", "tbd")
 
 
 def call_intake_sonnet(prompt: str) -> IntakeDecision:
@@ -144,6 +195,12 @@ def _decision_to_config(decision: IntakeDecision) -> dict:
         "tier": decision.tier,
         "output_type": decision.output_type,
         "reasoning": decision.reasoning,
+        "decision_domain": decision.decision_domain,
+        "user_context": decision.user_context,
+        "confirmed_assumptions": decision.confirmed_assumptions,
+        "corrected_assumptions": decision.corrected_assumptions,
+        "open_questions": decision.open_questions,
+        "session_title": decision.session_title,
     })
 
 
@@ -198,6 +255,33 @@ class IntakeSession:
         """
         decision, provider_used = call_intake(prompt)
         self._intake_provider = provider_used
+
+        # Immigration guard: if the user mentioned immigration context but the
+        # intake model closed without resolving visa_type, force a probing question.
+        # This is a belt-and-suspenders check — the new system prompt already
+        # instructs the model to ask, but the guard ensures it fires even if
+        # the model completes too eagerly.
+        if (
+            not decision.needs_clarification
+            and _has_immigration_context(prompt)
+            and _has_unknown_visa_type(decision)
+        ):
+            logger.info(
+                "[intake] Immigration guard fired — visa_type unresolved. "
+                "Forcing probing question before research begins."
+            )
+            probing_question = (
+                "What visa type are you currently on? "
+                "(e.g., H-1B, L-1, O-1, F-1 OPT/STEM OPT, TN, "
+                "pending green card, or other)"
+            )
+            self._original_prompt = prompt
+            self._clarifying_question = probing_question
+            return {
+                "status": "clarifying",
+                "clarifying_question": probing_question,
+                "config": None,
+            }
 
         if decision.needs_clarification:
             self._original_prompt = prompt
