@@ -245,28 +245,6 @@ def call_intake_fallback2(prompt: str):
         )
 
 
-def call_for_chips(prompt: str, system: str, max_tokens: int = 200) -> str:
-    """
-    Call Claude Sonnet with a custom prompt/system and return raw text.
-
-    Used by generate_user_take_chips() in router.py for YOUR TAKE chip
-    generation. Same signature as openai_client.call_for_chips so router.py
-    can swap the import without changing call sites.
-
-    No retry — chip generation is best-effort; failures return empty list
-    (fail-open) via the caller's except block.
-    """
-    from backend.models.model_config import INTAKE_PRIMARY
-
-    response = _get_client().messages.create(
-        model=INTAKE_PRIMARY,
-        max_tokens=max_tokens,
-        system=system,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    return response.content[0].text or ""
-
-
 if __name__ == "__main__":
     result = ping()
     if result["ok"]:
