@@ -16,8 +16,18 @@ import remarkGfm from "remark-gfm";
  * @param {boolean}  props.isStreaming  — true while synthesis tokens are still arriving
  * @param {boolean}  props.complete     — synthesis finished (show ✓)
  * @param {string[]} props.citations    — ordered source URLs from Perplexity fact-check
+ * @param {string}   props.variant      — "draft" | "revised" | "final" (border color)
+ * @param {number}   props.revision     — 0 for draft, >0 for revised
  */
-function SynthesisPanel({ content, isStreaming, complete, citations = [] }) {
+function SynthesisPanel({ content, isStreaming, complete, citations = [], variant = "draft", revision = 0 }) {
+  const borderColor = variant === "final" ? "#22c55e" : "#E8712A";
+  const badgeLabel =
+    variant === "final"
+      ? "FINAL ANSWER"
+      : variant === "revised"
+        ? `REVISED · round ${revision}`
+        : "DRAFT";
+  const badgeColor = variant === "final" ? "#22c55e" : "#F5A623";
   // Convert [n] citation markers to markdown links using a custom citation://n
   // protocol so ReactMarkdown doesn't need to parse raw HTML inside link labels.
   // The components.a override below detects this protocol and renders a proper
@@ -31,10 +41,16 @@ function SynthesisPanel({ content, isStreaming, complete, citations = [] }) {
   }, [content, citations]);
 
   return (
-    <div className="flex max-h-[400px] w-full flex-col overflow-hidden rounded-lg border border-border bg-surface px-4 py-3" style={{ borderLeft: "3px solid #E8712A" }}>
-      <div className="mb-2 shrink-0 text-xs font-semibold uppercase tracking-wide text-claude">
-        CLAUDE
-        <span className="font-normal text-text-secondary"> - Synthesis</span>
+    <div className="flex max-h-[400px] w-full flex-col overflow-hidden rounded-lg border border-border bg-surface px-4 py-3" style={{ borderLeft: `3px solid ${borderColor}` }}>
+      <div className="mb-2 flex shrink-0 items-center gap-2 text-xs font-semibold uppercase tracking-wide text-claude">
+        <span>CLAUDE</span>
+        <span className="font-normal text-text-secondary">- Synthesis</span>
+        <span
+          className="ml-auto rounded px-1.5 py-0.5 text-[0.65rem] font-semibold tracking-wider"
+          style={{ color: badgeColor, border: `1px solid ${badgeColor}` }}
+        >
+          {badgeLabel}
+        </span>
       </div>
       <div className="synthesis-panel-scroll min-h-0 flex-1">
         <div className="markdown-session break-words text-[0.9375rem] leading-relaxed text-text-primary">

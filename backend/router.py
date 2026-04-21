@@ -21,9 +21,6 @@ Functions:
     build_synthesis_prompt(output_type) — synthesis prompt with output_type filled in
 """
 
-import asyncio
-import json
-import logging
 from typing import Optional
 
 from backend.models.model_config import (
@@ -544,105 +541,9 @@ def build_synthesis_prompt(
 
 
 # ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-# Philosophy B — YOUR TAKE chip generation
-# ---------------------------------------------------------------------------
-
-CHIP_GENERATION_SYSTEM = """\
-You have just read four AI research responses and a fact-check audit
-from a deliberation session.
-
-Generate exactly 3-4 perspective chips. Each chip must belong to a DISTINCT
-perspective type. Assign each chip exactly one type from this list:
-  agree     — sides with the research consensus or a specific model
-  skeptical — challenges an assumption or questions cited evidence
-  action    — recommends a concrete next step
-  nuance    — surfaces a tension, trade-off, or overlooked angle
-
-Rules:
-- No two chips may share the same type (mutual exclusivity — one type per chip)
-- Maximum one "skeptical" chip per response
-- Be specific to THIS session's content — not generic
-- Reference specific models, claims, or findings where relevant
-- Include at least one chip that sides with the fact-check over round-1
-- label: under 8 words, no type prefix in the label text
-- evidence: 2-3 sentences of specific context from the research
-- Return ONLY a valid JSON array of objects, no other text
-
-Example (4 chips, all distinct types):
-[
-  {"label": "I trust Gemini's framing on this",
-   "evidence": "Gemini's analysis was the most detailed on cost structure and aligned with Perplexity's live data. GPT took a more cautious stance that may underestimate the opportunity."},
-  {"label": "Perplexity's correction changes my view",
-   "evidence": "Perplexity found that the pricing cited by round-1 models was 40% out of date. This materially changes the build-vs-buy calculus."},
-  {"label": "I'm skeptical of the statistics cited",
-   "evidence": "Two models cited different adoption rates (23% vs 41%) with no source. Perplexity did not resolve this contradiction."},
-  {"label": "Deploy the portfolio project first",
-   "evidence": "Grok's lateral take — shipping something visible now builds credibility faster than continued preparation, regardless of which stack you choose."}
-]
-"""
-
-_logger = logging.getLogger(__name__)
-
-
-def _format_round1_for_chips(responses: dict) -> str:
-    """Format round-1 responses as short snippets for chip generation context."""
-    parts = []
-    for model, text in responses.items():
-        snippet = (text or "").strip()[:500]
-        if snippet:
-            parts.append(f"{model.capitalize()}: {snippet}")
-    return "\n\n".join(parts) if parts else "(no responses available)"
-
-
-async def generate_user_take_chips(
-    round1_responses: dict,
-    factcheck_audit: str,
-) -> list:
-    """
-    Generate 3-4 session-specific perspective chips for the YOUR TAKE section.
-
-    Uses GPT-4o Mini (INTAKE_PRIMARY) — cheap and fast. Runs in parallel with
-    the factcheck_complete event emission so chips are ready when the frontend
-    shows the YOUR TAKE section.
-
-    Returns a list of 3-4 chip strings. Returns [] on any error (fail-open —
-    YOUR TAKE still shows without chips).
-    """
-    from backend.models.anthropic_client import call_for_chips
-
-    prompt = (
-        f"Research responses:\n{_format_round1_for_chips(round1_responses)}\n\n"
-        f"Fact-check audit:\n{(factcheck_audit or '').strip()[:1000]}\n\n"
-        "Generate 3-4 perspective chips as a JSON array of objects."
-    )
-    try:
-        raw = await asyncio.to_thread(
-            call_for_chips, prompt, CHIP_GENERATION_SYSTEM, max_tokens=600
-        )
-        chips = json.loads(raw.strip())
-        if not isinstance(chips, list):
-            return []
-        valid = []
-        for c in chips[:4]:
-            if (
-                isinstance(c, dict)
-                and isinstance(c.get("label"), str)
-                and isinstance(c.get("evidence"), str)
-                and c["label"].strip()
-                and c["evidence"].strip()
-            ):
-                valid.append({"label": c["label"].strip(), "evidence": c["evidence"].strip()})
-        return valid
-    except Exception as exc:
-        _logger.warning("Chip generation failed: %s", exc)
-        return []
-
-
-# ---------------------------------------------------------------------------
-# Philosophy B — synthesis system prompt with YOUR TAKE
-# build_synthesis_system() is the sole entry point. It assembles the prompt
-# from the user's take, the Perplexity audit text, and optional source URLs.
+# Synthesis system prompt — builds the prompt used for the initial draft in
+# the synthesis/dialogue loop. Closing-question and refinement behaviour is
+# appended at the bottom of this file.
 #
 # Design principles (from real session diagnosis):
 #   - No [VERIFIED]/[LIKELY]/[UNCERTAIN]/[DEFER] tags — system metadata,
@@ -738,21 +639,177 @@ State it. The user is capable of disagreeing with you —
 they have your reasoning, they have the full session,
 they can push back. Your job is to give them something
 worth pushing back on.
+
+## Closing Questions (required)
+
+After your synthesis, always end with exactly 1-2 specific
+questions that invite the user to push back or add context.
+
+Rules for closing questions:
+- Ask about the most uncertain assumption in your synthesis
+- Ask about a constraint that would change your recommendation
+- Never ask 'does this help?' or 'anything else?'
+- Questions must be specific to this session's content
+- Format: end your synthesis text with a blank line, then
+  the questions on separate lines starting with '?'
+
+Example good closing questions:
+'? Does the immigration sequencing match your situation,
+  or is there a constraint I'm missing?'
+'? If the I-485 has been pending less than 180 days, this
+  recommendation changes significantly — is that your situation?'
+
+Example bad closing questions (never use):
+'? Does this help?'
+'? Is there anything else you'd like to know?'
 """
 
 
+def parse_closing_questions(synthesis_text: str) -> tuple:
+    """
+    Extract closing questions from synthesis text.
+
+    Closing questions are lines starting with '?' at the tail of the
+    response, optionally separated from the body by one or more blank lines.
+
+    Returns:
+        (cleaned_content, closing_questions)
+        cleaned_content   — synthesis text with the closing-question block stripped
+        closing_questions — list of question strings with leading '?' removed
+    """
+    if not synthesis_text:
+        return synthesis_text or "", []
+
+    lines = synthesis_text.rstrip().splitlines()
+    question_lines = []
+    # Walk backwards, collecting trailing '?' lines. Allow blank lines
+    # between questions or between questions and body.
+    cutoff = len(lines)
+    for i in range(len(lines) - 1, -1, -1):
+        stripped = lines[i].strip()
+        if not stripped:
+            # allow blank separator; keep walking but don't include
+            continue
+        if stripped.startswith("?"):
+            question_lines.insert(0, stripped.lstrip("?").strip())
+            cutoff = i
+            continue
+        break
+
+    if not question_lines:
+        return synthesis_text, []
+
+    cleaned = "\n".join(lines[:cutoff]).rstrip() + "\n"
+    return cleaned, [q for q in question_lines if q]
+
+
+SYNTHESIS_REFINEMENT_SYSTEM = """\
+You are refining a synthesis based on user feedback. Update your analysis
+where the user raises valid points. Hold your ground where the research
+supports your original position. Be explicit about what changed and why —
+or why you stood firm.
+
+The same structural rules from your original synthesis still apply:
+- Lead with a clear position — no warm-up
+- Integrated prose, not numbered factor lists
+- Reference Perplexity findings when they address the point
+- Never use [VERIFIED], [LIKELY], [UNCERTAIN], or [DEFER] tags in output
+- Never end with "proceed with caution" or equivalent hedges
+
+Always end your revised synthesis with 1-2 specific closing questions
+using the same format as before: blank line, then questions on separate
+lines starting with '?'. The questions should reflect the new uncertainty
+after this dialogue turn — not repeat earlier questions.
+"""
+
+
+async def call_synthesis_refinement(
+    original_synthesis: str,
+    dialogue_history: list,
+    user_message: str,
+    research_context: dict = None,
+    audit_context: str = "",
+    citations: list = None,
+) -> dict:
+    """
+    Call Claude Opus to refine the current synthesis based on user dialogue.
+
+    Args:
+        original_synthesis: the most recent synthesis text (without closing questions)
+        dialogue_history:   full list of {role, content} dicts — assistant and user turns
+        user_message:       the latest user push-back (already appended to history)
+        research_context:   dict of round-1 model responses, for context
+        audit_context:      Perplexity audit text
+        citations:          ordered source URLs for inline [n] markers
+
+    Returns:
+        {"content": str, "closing_questions": list[str]}
+    """
+    import asyncio as _asyncio
+    from backend.models.anthropic_client import call_claude
+
+    # Assemble the system prompt. The original synthesis system gives the model
+    # full research/audit context; the refinement block layers the dialogue rules.
+    research_context = research_context or {}
+    round1_block = "\n\n".join(
+        f"{model.capitalize()}: {(text or '').strip()[:2000]}"
+        for model, text in research_context.items()
+        if (text or "").strip()
+    ) or "(no research context available)"
+
+    citation_lines = ""
+    if citations:
+        citation_lines = "\n\nSources:\n" + "\n".join(
+            f"[{i + 1}] {url}" for i, url in enumerate(citations)
+        )
+
+    system = (
+        SYNTHESIS_REFINEMENT_SYSTEM
+        + "\n\n## Round-1 research context\n\n"
+        + round1_block
+        + "\n\n## Perplexity fact-check audit\n\n"
+        + (audit_context or "(not available)")
+        + citation_lines
+    )
+
+    # Messages: original synthesis as the first assistant turn, then the dialogue.
+    # dialogue_history already contains the assistant synthesis + user push-back,
+    # but we ensure the original synthesis is present as grounding.
+    messages = []
+    if not dialogue_history or dialogue_history[0].get("role") != "assistant":
+        messages.append({"role": "assistant", "content": original_synthesis})
+    messages.extend(dialogue_history)
+
+    try:
+        response = await _asyncio.to_thread(
+            call_claude,
+            messages=messages,
+            tier="deep",
+            system=system,
+        )
+        raw_text = response.content[0].text
+    except Exception as exc:
+        return {
+            "content": f"[Refinement unavailable: {exc}]",
+            "closing_questions": [],
+        }
+
+    cleaned, questions = parse_closing_questions(raw_text)
+    return {"content": cleaned, "closing_questions": questions}
+
+
 def build_synthesis_system(
-    user_take_data: dict,
     citations: list = None,
     audit_text: str = None,
 ) -> str:
     """
-    Assemble the synthesis system prompt from all available inputs.
+    Assemble the synthesis system prompt for the initial synthesis draft.
+
+    The synthesis draft runs automatically after fact-check — the user
+    refines it via the dialogue loop (see call_synthesis_refinement), so
+    the initial draft no longer takes a user-perspective parameter.
 
     Args:
-        user_take_data: dict with optional keys:
-            - "selected_chips": list[str] — chip labels (A: label format)
-            - "free_text": str — user's own typed perspective
         citations: list of source URLs from the Perplexity audit. When
             provided, Claude is instructed to place [n] inline markers
             so the frontend can render them as clickable superscripts.
@@ -766,30 +823,6 @@ def build_synthesis_system(
     Returns:
         Complete synthesis system prompt string.
     """
-    selected_chips = user_take_data.get("selected_chips", []) or []
-    free_text = (user_take_data.get("free_text", "") or "").strip()
-
-    has_chips = len(selected_chips) > 0
-    has_text = bool(free_text)
-
-    # ── User take section ─────────────────────────────────────────────────────
-    if not has_chips and not has_text:
-        take_section = (
-            "\nThe user did not provide a take. Synthesize from research "
-            "and audit only. Do not speculate about the user's position.\n"
-        )
-    else:
-        parts = []
-        if has_chips:
-            parts.append(f"Selected perspectives: {' · '.join(selected_chips)}")
-        if has_text:
-            parts.append(f"User's own words: {free_text}")
-        user_take = "\n".join(parts)
-        take_section = (
-            f"\nThe user's perspective: {user_take}\n"
-            "Engage with this directly in your synthesis.\n"
-        )
-
     # ── Perplexity audit section ──────────────────────────────────────────────
     # Explicitly labeled so Claude treats audit additions as first-class input.
     # The audit both corrects research-model claims AND surfaces new data those
@@ -822,7 +855,6 @@ def build_synthesis_system(
 
     return (
         SYNTHESIS_SYSTEM_PROMPT
-        + take_section
         + perplexity_section
         + citation_section
     )

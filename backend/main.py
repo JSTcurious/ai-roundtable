@@ -48,7 +48,8 @@ from backend.router import (
     get_round1_system_prompt,
     build_synthesis_prompt,
     build_synthesis_system,
-    generate_user_take_chips,
+    call_synthesis_refinement,
+    parse_closing_questions,
     select_synthesis_model,
     USE_CASE_LIBRARY,
     get_use_case,
@@ -830,14 +831,15 @@ async def _stream_model(
 
 async def _drain_client_messages(
     websocket: WebSocket,
-    take_queue: "asyncio.Queue | None" = None,
+    dialogue_queue: "asyncio.Queue | None" = None,
 ) -> None:
     """
     Read client JSON while the session runs; answer keep-alive pings so inbound
     frames are not mistaken for session payloads.
 
-    If take_queue is provided, routes ``submit_user_take`` messages into it so
-    the session handler can await the user's perspective before synthesis.
+    If dialogue_queue is provided, routes ``user_dialogue_response`` and
+    ``finalize_synthesis`` messages into it so the session handler can drive
+    the synthesis refinement loop.
     """
     try:
         while True:
@@ -845,15 +847,11 @@ async def _drain_client_messages(
             if isinstance(data, dict) and data.get("type") == "ping":
                 await websocket.send_json({"type": "pong"})
             elif (
-                take_queue is not None
+                dialogue_queue is not None
                 and isinstance(data, dict)
-                and data.get("type") == "submit_user_take"
+                and data.get("type") in ("user_dialogue_response", "finalize_synthesis")
             ):
-                # Route the full payload so session handler gets chips + free_text
-                await take_queue.put({
-                    "selected_chips": data.get("selected_chips", []) or [],
-                    "free_text": data.get("free_text", "") or "",
-                })
+                await dialogue_queue.put(data)
     except WebSocketDisconnect:
         return
     except asyncio.CancelledError:
@@ -987,8 +985,8 @@ async def session_websocket(websocket: WebSocket):
     optimized_prompt = config.get("optimized_prompt", prompt)
     transcript = _build_transcript(config, history, prompt)
 
-    user_take_queue: asyncio.Queue = asyncio.Queue()
-    ping_task = asyncio.create_task(_drain_client_messages(websocket, user_take_queue))
+    dialogue_queue: asyncio.Queue = asyncio.Queue()
+    ping_task = asyncio.create_task(_drain_client_messages(websocket, dialogue_queue))
     try:
         await websocket.send_json({"type": "session_started"})
 
@@ -1115,18 +1113,6 @@ async def session_websocket(websocket: WebSocket):
         health.factcheck_degraded = (factcheck_provider != "primary")
         transcript.add_model_message("Perplexity", audit_text, round="audit")
 
-        # Start chip generation in parallel — runs while frontend reads research.
-        # Fail-open: chips_task always resolves to a list (empty on any error).
-        round1_for_chips = {
-            "gemini": gemini_text,
-            "gpt":    gpt_text,
-            "grok":   grok_text,
-            "claude": claude_r1_text,
-        }
-        chips_task = asyncio.create_task(
-            generate_user_take_chips(round1_for_chips, audit_text)
-        )
-
         # Determine factcheck display info for frontend transparency
         _factcheck_display = {
             "primary":   ("sonar-pro",  "primary"),
@@ -1144,30 +1130,17 @@ async def session_websocket(websocket: WebSocket):
             "factcheck_availability": _fc_avail,
         })
 
-        # Await chips — should be ready by the time frontend finishes rendering
-        # factcheck_complete. Returns [] on any chip generation failure.
-        chips = await chips_task
-
-        # ── Philosophy B: wait for user's perspective before synthesis ─────────
-        # No timeout — synthesis must ONLY run when the user explicitly clicks
-        # Synthesize. If the user steps away for an hour, we wait an hour.
-        await websocket.send_json({
-            "type": "awaiting_user_take",
-            "chips": chips,
-            "message": "Here are some perspectives to consider:" if chips else "",
-        })
-        user_take_data = await user_take_queue.get()
-
-        # ── Synthesis: route to analytical or factual model based on audit ────
+        # ── Synthesis draft — fires automatically after fact-check ────────────
+        # No user gate. The user refines via the dialogue loop below.
         synthesis_model_id, synthesis_route = select_synthesis_model(audit_text)
         synthesis_system = build_synthesis_system(
-            user_take_data, citations=citations, audit_text=audit_text
+            citations=citations, audit_text=audit_text
         )
         synthesis_messages = [{"role": "user", "content": prompt}]
 
         await websocket.send_json({"type": "synthesis_thinking"})
         try:
-            synthesis_text = await call_synthesis_async(
+            raw_synthesis = await call_synthesis_async(
                 synthesis_model_id, synthesis_messages, synthesis_system, tier
             )
             health.synthesis_model = synthesis_model_id
@@ -1175,34 +1148,96 @@ async def session_websocket(websocket: WebSocket):
         except Exception as exc:
             print(f"[synthesis] primary failed ({exc}) — using fallback", flush=True)
             try:
-                synthesis_text = await call_synthesis_async(
+                raw_synthesis = await call_synthesis_async(
                     SYNTHESIS_FALLBACK, synthesis_messages, synthesis_system, tier
                 )
                 health.synthesis_model = SYNTHESIS_FALLBACK
                 health.synthesis_routed = f"{synthesis_route}_fallback"
             except Exception as exc2:
-                synthesis_text = f"[Synthesis unavailable: {exc2}]"
+                raw_synthesis = f"[Synthesis unavailable: {exc2}]"
                 health.synthesis_model = "emergency"
                 health.synthesis_routed = f"{synthesis_route}_fallback"
 
-        # Emit synthesis tokens
-        step = 48
-        for i in range(0, len(synthesis_text), step):
-            piece = synthesis_text[i : i + step]
-            async with send_lock:
-                await websocket.send_json({"type": "token", "sender": "Claude", "token": piece})
+        current_synthesis, closing_questions = parse_closing_questions(raw_synthesis)
+        revision_count = 0
+        dialogue_history = [{"role": "assistant", "content": current_synthesis}]
+        research_context = {
+            "gemini": gemini_text,
+            "gpt":    gpt_text,
+            "grok":   grok_text,
+            "claude": claude_r1_text,
+        }
 
-        transcript.add_model_message("Claude", synthesis_text, round="synthesis")
         await websocket.send_json({
-            "type": "synthesis_complete",
-            "content": synthesis_text,
+            "type": "synthesis_draft",
+            "content": current_synthesis,
+            "revision": revision_count,
+            "closing_questions": closing_questions,
             "synthesis_model_used": health.synthesis_model or synthesis_model_id,
             "synthesis_route": health.synthesis_routed or synthesis_route,
         })
 
+        # ── Dialogue loop: refine on user_dialogue_response, exit on finalize ──
+        finalized = False
+        while not finalized:
+            msg = await dialogue_queue.get()
+            msg_type = msg.get("type")
+
+            if msg_type == "finalize_synthesis":
+                finalized = True
+                transcript.add_model_message(
+                    "Claude", current_synthesis, round="synthesis"
+                )
+                await websocket.send_json({
+                    "type": "synthesis_final",
+                    "content": current_synthesis,
+                    "revision": revision_count,
+                })
+                break
+
+            if msg_type == "user_dialogue_response":
+                user_text = (msg.get("content") or "").strip()
+                if not user_text:
+                    continue
+                dialogue_history.append({"role": "user", "content": user_text})
+
+                await websocket.send_json({"type": "synthesis_thinking"})
+                try:
+                    refined = await call_synthesis_refinement(
+                        original_synthesis=current_synthesis,
+                        dialogue_history=dialogue_history,
+                        user_message=user_text,
+                        research_context=research_context,
+                        audit_context=audit_text,
+                        citations=citations,
+                    )
+                except Exception as exc:
+                    refined = {
+                        "content": f"[Refinement unavailable: {exc}]",
+                        "closing_questions": [],
+                    }
+
+                current_synthesis = refined["content"]
+                closing_questions = refined["closing_questions"]
+                revision_count += 1
+
+                dialogue_history.append({
+                    "role": "assistant",
+                    "content": current_synthesis,
+                })
+
+                await websocket.send_json({
+                    "type": "synthesis_draft",
+                    "content": current_synthesis,
+                    "revision": revision_count,
+                    "closing_questions": closing_questions,
+                    "synthesis_model_used": health.synthesis_model or synthesis_model_id,
+                    "synthesis_route": health.synthesis_routed or synthesis_route,
+                })
+
         print(f"[SESSION] {health.summary()}", flush=True)
 
-        # Send pipeline health annotations (read-only, after synthesis_complete).
+        # Send pipeline health annotations (read-only, after synthesis_final).
         await websocket.send_json({
             "type": "synthesis_annotations",
             "annotations": health.to_annotation(),

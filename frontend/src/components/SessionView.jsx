@@ -118,9 +118,6 @@ function formatTierBadge(tier) {
 
 const WAIT_HEX = "#888888";
 
-/** Letter labels for YOUR TAKE chips — A through D. Payload format: "A: label". */
-const CHIP_LETTERS = ["A", "B", "C", "D"];
-
 /**
  * @param {Object} props
  * @param {{ id: string, label: string, color: string, done: boolean, active: boolean }[]} props.stages
@@ -293,27 +290,25 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
   // ── Perplexity citations — shown below FINAL ANSWER ─────────────────────
   const [citations, setCitations] = useState([]);
 
-  // ── Philosophy B: YOUR TAKE HITL step ────────────────────────────────────
-  /** True after awaiting_user_take received — YOUR TAKE step is visible */
-  const [awaitingUserTake, setAwaitingUserTake] = useState(false);
-  /** Chips from backend — {label, evidence}[] */
-  const [userTakeChips, setUserTakeChips] = useState([]);
-  /** Labels of chips the user has toggled on */
-  const [selectedChips, setSelectedChips] = useState([]);
-  /** Label of chip whose evidence is currently expanded (null = none) */
-  const [expandedChip, setExpandedChip] = useState(null);
-  /** True after perplexity_complete, before awaiting_user_take — chips loading */
-  const [chipsLoading, setChipsLoading] = useState(false);
-  /** User's optional free-text perspective */
-  const [userTakeFreeText, setUserTakeFreeText] = useState("");
-  /** True after user clicks Synthesize — inputs become read-only */
-  const [synthesisRequested, setSynthesisRequested] = useState(false);
+  // ── Synthesis dialogue loop ──────────────────────────────────────────────
+  /** Current synthesis content (draft or final, without closing questions). */
+  const [synthesisDraft, setSynthesisDraft] = useState(null);
+  /** Revision counter — 0 for initial draft, increments on each refinement. */
+  const [synthesisRevision, setSynthesisRevision] = useState(0);
+  /** Array of closing-question strings surfaced with the current draft. */
+  const [closingQuestions, setClosingQuestions] = useState([]);
+  /** User's in-progress dialogue input. */
+  const [dialogueInput, setDialogueInput] = useState("");
+  /** Append-only dialogue history for display/debugging (optional UI use). */
+  const [dialogueHistory, setDialogueHistory] = useState([]);
+  /** True while waiting for the backend refinement response. */
+  const [refinementPending, setRefinementPending] = useState(false);
 
   // ── Model transparency — metadata received with model_complete ───────────
   /** { claude: {model_used, advisor_model, tier, availability}, gemini: {...}, ... } */
   const [modelMeta, setModelMeta] = useState({});
 
-  // ── Live WS ref — used by Synthesize button to send submit_user_take ─────
+  // ── Live WS ref — used by dialogue buttons to send refinement/finalize ───
   const wsRef = useRef(/** @type {WebSocket|null} */ (null));
 
   const r1CountsRef = useRef({ Gemini: 0, GPT: 0, Grok: 0, Claude: 0 });
@@ -448,6 +443,12 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     setSynthesisText(syn);
     setSynthesisStreaming(false);
     setSynthesisFinal(!!String(syn).trim());
+    setSynthesisDraft(syn || null);
+    setSynthesisRevision(0);
+    setClosingQuestions([]);
+    setDialogueInput("");
+    setDialogueHistory([]);
+    setRefinementPending(false);
     setSessionComplete(true);
     phaseRef.current = "idle";
     r1CountsRef.current = { Gemini: ge.length, GPT: gp.length, Grok: grk.length, Claude: cla.length };
@@ -494,13 +495,12 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     setSynthesisFinal(false);
     setSessionComplete(false);
     setCitations([]);
-    setAwaitingUserTake(false);
-    setUserTakeChips([]);
-    setSelectedChips([]);
-    setExpandedChip(null);
-    setUserTakeFreeText("");
-    setChipsLoading(false);
-    setSynthesisRequested(false);
+    setSynthesisDraft(null);
+    setSynthesisRevision(0);
+    setClosingQuestions([]);
+    setDialogueInput("");
+    setDialogueHistory([]);
+    setRefinementPending(false);
     setModelMeta({});
 
     const url = wsUrlFromApiBase();
@@ -588,27 +588,42 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
             setPerplexityContent(data.content ?? "");
             setCitations(data.citations || []);
             setPerplexityPhase("content");
-            setChipsLoading(true);  // chips are generating on backend
-            break;
-          case "awaiting_user_take":
-            setChipsLoading(false);
-            setUserTakeChips(data.chips || []);
-            setAwaitingUserTake(true);
             break;
           case "synthesis_thinking":
             setSynthesisThinking(true);
+            setRefinementPending(true);
             phaseRef.current = "synthesis";
             setStreamPhaseMarker((n) => n + 1);
             break;
-          case "synthesis_complete":
-            setSynthesisText(data.content ?? "");
+          case "synthesis_draft": {
+            const content = data.content ?? "";
+            setSynthesisDraft(content);
+            setSynthesisText(content);
+            setSynthesisRevision(Number(data.revision) || 0);
+            setClosingQuestions(Array.isArray(data.closing_questions) ? data.closing_questions : []);
             setSynthesisStreaming(false);
-            setSynthesisFinal(true);
             setSynthesisThinking(false);
+            setSynthesisFinal(false);
+            setRefinementPending(false);
             phaseRef.current = "idle";
             setStreamPhaseMarker((n) => n + 1);
-            onSynthesisCompleteRef.current?.(data.content ?? "");
             break;
+          }
+          case "synthesis_final": {
+            const content = data.content ?? "";
+            setSynthesisDraft(content);
+            setSynthesisText(content);
+            setSynthesisRevision(Number(data.revision) || 0);
+            setClosingQuestions([]);
+            setSynthesisStreaming(false);
+            setSynthesisThinking(false);
+            setSynthesisFinal(true);
+            setRefinementPending(false);
+            phaseRef.current = "idle";
+            setStreamPhaseMarker((n) => n + 1);
+            onSynthesisCompleteRef.current?.(content);
+            break;
+          }
           case "session_complete":
             completedNormallyRef.current = true;
             setSessionComplete(true);
@@ -745,31 +760,28 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     });
   }, [synthesisText, copiedAnswer]);
 
-  const toggleChip = useCallback((label) => {
-    setSelectedChips((prev) =>
-      prev.includes(label) ? prev.filter((c) => c !== label) : [...prev, label]
-    );
-  }, []);
-
-  const toggleExpanded = useCallback((label) => {
-    setExpandedChip((prev) => (prev === label ? null : label));
-  }, []);
-
-  const handleSynthesize = useCallback(() => {
+  const handleRespond = useCallback(() => {
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    if (synthesisRequested) return;  // prevent double-click
-    // Synthesizing with no chips selected and empty free-text is intentional and valid.
-    // build_synthesis_system() handles this via _USER_TAKE_SECTION_EMPTY — synthesis
-    // runs on research + fact-check only, with no user perspective injected.
-    setSynthesisRequested(true);
-    setAwaitingUserTake(false);
+    if (refinementPending || synthesisFinal) return;
+    const text = dialogueInput.trim();
+    if (!text) return;
     ws.send(JSON.stringify({
-      type: "submit_user_take",
-      selected_chips: selectedChips,
-      free_text: userTakeFreeText.trim(),
+      type: "user_dialogue_response",
+      content: text,
     }));
-  }, [selectedChips, userTakeFreeText, synthesisRequested]);
+    setDialogueHistory((prev) => [...prev, { role: "user", content: text }]);
+    setDialogueInput("");
+    setRefinementPending(true);
+  }, [dialogueInput, refinementPending, synthesisFinal]);
+
+  const handleFinalize = useCallback(() => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (synthesisFinal) return;
+    ws.send(JSON.stringify({ type: "finalize_synthesis" }));
+    setSynthesisFinal(true);
+  }, [synthesisFinal]);
 
   const requestHome = useCallback(() => {
     if (!onNavigateHome) return;
@@ -811,11 +823,11 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
   const synthesisPhaseEntered = useMemo(() => {
     return (
       synthesisThinking ||
-      synthesisStreaming ||
       synthesisFinal ||
+      Boolean(synthesisDraft) ||
       Boolean(String(synthesisText || "").trim())
     );
-  }, [synthesisThinking, synthesisStreaming, synthesisFinal, synthesisText]);
+  }, [synthesisThinking, synthesisFinal, synthesisDraft, synthesisText]);
 
   const progressStagesFixed = useMemo(() => {
     const intakeDone = true;
@@ -866,17 +878,21 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     const factDone = isResume || perplexityPhase === "content" || (synthesisPhaseEntered && perplexityPhase !== "thinking");
     const factActive = perplexityPhase === "thinking";
 
-    // YOUR TAKE — lights when chips loading, stays active until Synthesize clicked
-    const yourTakeDone = isResume || synthesisRequested || synthesisFinal;
-    const yourTakeActive = (chipsLoading || awaitingUserTake) && !synthesisRequested;
+    // DIALOGUE — active while a draft is open for push-back, done on finalize
+    const dialogueDone = isResume || synthesisFinal;
+    const dialogueActive = Boolean(synthesisDraft) && !synthesisFinal;
 
-    // SYNTHESIS — active during synthesis thinking/streaming, done when final
+    // SYNTHESIS / FINAL ANSWER — lit while refinement in flight; done on finalize
     const sDone = isResume || synthesisFinal;
-    const sActive = synthesisPhaseEntered && !synthesisFinal;
-    const sLabel = synthesisThinking || synthesisStreaming ? "SYNTHESIZING..." : "FINAL ANSWER";
+    const sActive = (synthesisThinking || refinementPending) && !synthesisFinal;
+    const sLabel = synthesisFinal
+      ? "FINAL ANSWER"
+      : (synthesisThinking || refinementPending)
+        ? "SYNTHESIZING..."
+        : "FINAL ANSWER";
 
-    return { promptDone, transcriptDone, transcriptActive, factDone, factActive, yourTakeDone, yourTakeActive, sDone, sActive, sLabel };
-  }, [isResume, sessionStarted, synthesisPhaseEntered, perplexityPhase, synthesisThinking, synthesisStreaming, synthesisFinal, awaitingUserTake, synthesisRequested, chipsLoading]);
+    return { promptDone, transcriptDone, transcriptActive, factDone, factActive, dialogueDone, dialogueActive, sDone, sActive, sLabel };
+  }, [isResume, sessionStarted, synthesisPhaseEntered, perplexityPhase, synthesisThinking, synthesisFinal, synthesisDraft, refinementPending]);
 
   // ── Pipeline stage done flags ─────────────────────────────────────────────
   const researchStageDone = isResume || perplexityPhase !== "off" || synthesisPhaseEntered;
@@ -989,10 +1005,10 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
           </span>
           <span className="mx-1" style={{ color: "#F5A623" }}>→</span>
           <span
-            className={breadcrumbState.yourTakeActive ? "animate-pulse" : ""}
-            style={{ color: breadcrumbState.yourTakeDone || breadcrumbState.yourTakeActive ? "#F5A623" : "#666666" }}
+            className={breadcrumbState.dialogueActive ? "animate-pulse" : ""}
+            style={{ color: breadcrumbState.dialogueDone || breadcrumbState.dialogueActive ? "#F5A623" : "#666666" }}
           >
-            {breadcrumbState.yourTakeDone ? "✓" : breadcrumbState.yourTakeActive ? "●" : "○"} YOUR TAKE
+            {breadcrumbState.dialogueDone ? "✓" : breadcrumbState.dialogueActive ? "●" : "○"} DIALOGUE
           </span>
           <span className="mx-1" style={{ color: "#F5A623" }}>→</span>
           <span
@@ -1157,144 +1173,18 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
           </section>
         )}
 
-        {/* ── YOUR TAKE — shown while chips load or after awaiting_user_take ── */}
-        {(chipsLoading || awaitingUserTake) && (
-          <section aria-label="Your take" className="space-y-3">
-            <h2
-              className={`text-xs font-semibold uppercase tracking-wide text-text-secondary${awaitingUserTake && !synthesisRequested ? " animate-pulse" : ""}`}
-            >
-              Your Take
-            </h2>
-            <div className="rounded-lg border border-border bg-surface px-4 py-4 space-y-4">
-
-              {/* Chips loading state */}
-              {chipsLoading && !awaitingUserTake && (
-                <p className="text-xs text-text-secondary animate-pulse">
-                  Reading the research…
-                </p>
-              )}
-
-              {/* Chips — Fix 3: label is text-xs font-semibold (was text-[11px] opacity-60) */}
-              {awaitingUserTake && userTakeChips.length > 0 && (
-                <div>
-                  <p className="mb-3 text-xs font-semibold tracking-wide text-text-secondary">
-                    Select what resonates:
-                  </p>
-                  <div className="space-y-2">
-                    {userTakeChips.map((chip, idx) => {
-                      const { label, evidence } = chip;
-                      // Fix 2: A-D letter prefix. Display uses two spaces; payload uses "A: label".
-                      const letter = CHIP_LETTERS[idx] || String(idx + 1);
-                      const prefixedLabel = `${letter}: ${label}`;
-                      const active = selectedChips.includes(prefixedLabel);
-                      const expanded = expandedChip === label;
-                      return (
-                        <div key={label}>
-                          {/* Chip row — Fix 1: items-stretch so arrow spans full row height */}
-                          <div
-                            className="flex items-stretch gap-1 rounded-full transition-colors duration-150"
-                            style={
-                              expanded
-                                ? { border: "1px solid #f59e0b", background: "rgba(245,158,11,0.08)" }
-                                : {}
-                            }
-                          >
-                            {/* Label button — Fix 2: bold letter prefix + two-space gap */}
-                            <button
-                              type="button"
-                              onClick={() => !synthesisRequested && toggleChip(prefixedLabel)}
-                              disabled={synthesisRequested}
-                              className="flex flex-1 items-center rounded-full px-4 py-1.5 text-sm text-left transition-all duration-150 focus:outline-none disabled:opacity-50"
-                              style={
-                                active
-                                  ? { background: "#F5A623", color: "#111111", fontWeight: 500, border: "1px solid #F5A623" }
-                                  : { background: "transparent", color: "#F5A623", border: "1px solid #F5A623" }
-                              }
-                              aria-pressed={active}
-                            >
-                              <span style={{ fontWeight: "bold" }}>{letter}</span>
-                              {"  "}{label}
-                            </button>
-                            {/* Expand arrow — Fix 1: full height, min 44px wide, always gold */}
-                            {evidence && (
-                              <button
-                                type="button"
-                                onClick={() => toggleExpanded(label)}
-                                className="min-w-[44px] self-stretch flex items-center justify-center rounded-full text-base transition-colors focus:outline-none"
-                                style={{ color: "#F5A623" }}
-                                aria-label={expanded ? "Hide evidence" : "Show evidence"}
-                                aria-expanded={expanded}
-                              >
-                                {expanded ? "▴" : "▾"}
-                              </button>
-                            )}
-                          </div>
-                          {/* Evidence accordion */}
-                          {expanded && evidence && (
-                            <div
-                              className="ml-4 mt-1.5 rounded-md px-3 text-xs leading-relaxed"
-                              style={{
-                                color: "#888888",
-                                background: "#161616",
-                                borderLeft: "2px solid #2a2a2a",
-                                paddingTop: "8px",
-                                paddingBottom: "4px",
-                              }}
-                            >
-                              {evidence}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
-              {/* Free-text input */}
-              {awaitingUserTake && (
-                <>
-                  <label htmlFor="user-take-input" className="sr-only">
-                    Your perspective (optional)
-                  </label>
-                  <textarea
-                    id="user-take-input"
-                    rows={3}
-                    value={userTakeFreeText}
-                    onChange={(e) => setUserTakeFreeText(e.target.value)}
-                    disabled={synthesisRequested}
-                    placeholder="What's your read on this? Any model you trust more? Anything you want weighted differently? (optional)"
-                    className="w-full resize-y rounded-md border border-border bg-bg px-3 py-2 text-sm leading-relaxed text-text-primary placeholder:text-text-secondary focus:border-border-focus focus:outline-none disabled:opacity-50"
-                  />
-                  <div className="flex justify-center" style={{ marginTop: "16px" }}>
-                    <button
-                      type="button"
-                      onClick={handleSynthesize}
-                      disabled={synthesisRequested}
-                      className="rounded-lg px-5 py-2 text-sm font-bold transition-opacity hover:opacity-90 focus:outline-none disabled:opacity-40"
-                      style={{ background: "#F5A623", color: "#0d0d0d" }}
-                    >
-                      {synthesisRequested ? "Synthesizing…" : "Synthesize →"}
-                    </button>
-                  </div>
-                  {/* Hint: shown when nothing is selected — synthesis without a take is valid */}
-                  {!synthesisRequested && selectedChips.length === 0 && !userTakeFreeText.trim() && (
-                    <p className="mt-2 text-center text-xs text-text-secondary">
-                      Nothing selected? Synthesis will reflect the research only.
-                    </p>
-                  )}
-                </>
-              )}
-            </div>
-          </section>
-        )}
-
-        {/* ── FINAL ANSWER — shown after user clicks Synthesize ── */}
+        {/* ── SYNTHESIS DIALOGUE — draft / refine / finalize ── */}
         {synthesisPhaseEntered && (
-          <section aria-label="Final answer" className="space-y-3">
+          <section aria-label="Synthesis" className="space-y-3">
             <div className="flex items-center gap-3">
-              <h2 className={`text-xs font-semibold uppercase tracking-wide text-text-secondary${!synthesisStageDone ? " animate-pulse" : ""}`}>
-                {breadcrumbState.sLabel}
+              <h2 className={`text-xs font-semibold uppercase tracking-wide text-text-secondary${!synthesisFinal ? " animate-pulse" : ""}`}>
+                {synthesisFinal
+                  ? "FINAL ANSWER"
+                  : synthesisRevision > 0
+                    ? `REVISED · round ${synthesisRevision}`
+                    : synthesisDraft
+                      ? "DRAFT"
+                      : breadcrumbState.sLabel}
               </h2>
               {synthesisFinal && (
                 <button
@@ -1308,41 +1198,91 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
                 </button>
               )}
             </div>
+            {!synthesisFinal && synthesisDraft && (
+              <p className="text-xs text-text-secondary">
+                {synthesisRevision > 0
+                  ? "Updated based on your input."
+                  : "Review this and push back on anything that doesn't match your situation."}
+              </p>
+            )}
             <div className="space-y-4">
-              {synthesisThinking && !synthesisFinal && !String(synthesisText).trim() && (
+              {(synthesisThinking || refinementPending) && !synthesisDraft && (
                 <ThinkingDotsBubble
                   label="🟠 CLAUDE"
                   color={MODEL_HEX.Claude}
                   subtitle="Synthesizing your roundtable..."
                 />
               )}
-              {(synthesisStreaming || synthesisFinal || synthesisText.length > 0) && (
+              {synthesisDraft && (
                 <SynthesisPanel
                   content={synthesisBody}
-                  isStreaming={synthesisStreaming && !synthesisFinal}
+                  isStreaming={false}
                   complete={synthesisFinal}
                   citations={citations}
+                  variant={synthesisFinal ? "final" : synthesisRevision > 0 ? "revised" : "draft"}
+                  revision={synthesisRevision}
                 />
               )}
-              {/* Sources — citations from Perplexity fact-check */}
-              {sessionComplete && citations.length > 0 && (
-                <div className="space-y-1.5">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-text-secondary">Sources</p>
-                  <ol className="space-y-1">
-                    {citations.map((url, i) => (
-                      <li key={i} className="flex gap-2 text-xs text-[#888888]">
-                        <span className="shrink-0 text-[#555555]">[{i + 1}]</span>
-                        <a
-                          href={url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="break-all hover:text-text-secondary transition-colors"
-                        >
-                          {url}
-                        </a>
-                      </li>
-                    ))}
-                  </ol>
+
+              {/* Closing questions — shown above dialogue input while not final */}
+              {!synthesisFinal && closingQuestions.length > 0 && (
+                <div className="space-y-2">
+                  {closingQuestions.map((q, i) => (
+                    <div
+                      key={i}
+                      className="rounded-md border px-3 py-2 text-sm leading-relaxed"
+                      style={{
+                        borderColor: "#2a2a2a",
+                        borderLeft: "3px solid #F5A623",
+                        background: "#161616",
+                        color: "#e8e8e8",
+                      }}
+                    >
+                      <span style={{ color: "#F5A623", marginRight: "0.4rem" }}>?</span>
+                      {q}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Dialogue input — hidden once finalized */}
+              {!synthesisFinal && synthesisDraft && (
+                <div className="space-y-2">
+                  <label htmlFor="dialogue-input" className="sr-only">
+                    Respond to the synthesis
+                  </label>
+                  <textarea
+                    id="dialogue-input"
+                    rows={3}
+                    value={dialogueInput}
+                    onChange={(e) => setDialogueInput(e.target.value)}
+                    disabled={refinementPending}
+                    placeholder="Push back, add context, or ask Claude to reconsider any part of this..."
+                    className="w-full resize-y rounded-md border border-border bg-surface px-3 py-2 text-sm leading-relaxed text-text-primary placeholder:text-text-secondary focus:border-border-focus focus:outline-none disabled:opacity-50"
+                  />
+                  <div className="flex flex-wrap items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={handleRespond}
+                      disabled={refinementPending || !dialogueInput.trim()}
+                      className="rounded-lg px-4 py-2 text-sm font-semibold transition-opacity hover:opacity-90 focus:outline-none disabled:opacity-40"
+                      style={{ background: "#F5A623", color: "#0d0d0d" }}
+                    >
+                      {refinementPending ? "Refining…" : "Respond →"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleFinalize}
+                      disabled={refinementPending}
+                      className="rounded-lg border px-4 py-2 text-sm font-semibold transition-colors focus:outline-none disabled:opacity-40"
+                      style={{ borderColor: "#22c55e", color: "#22c55e", background: "transparent" }}
+                    >
+                      Finalize ✓
+                    </button>
+                  </div>
+                  <p className="text-right text-xs text-text-secondary">
+                    Finalize locks the answer. Respond continues the dialogue.
+                  </p>
                 </div>
               )}
             </div>
