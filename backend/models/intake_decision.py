@@ -14,10 +14,12 @@ class IntakeDecision(BaseModel):
     model_config = ConfigDict(extra="ignore")
     needs_clarification: bool
     clarifying_question: Optional[str] = None  # only when needs_clarification is True
-    optimized_prompt: str        # refined, context-enriched version of user's raw prompt
-    tier: Literal["smart"]       # intake always returns smart; user controls via UI
-    output_type: str             # e.g. "report", "plan", "decision", "brainstorm", "analysis"
-    reasoning: str               # one sentence shown in UI
+    # These fields are populated when intake closes (needs_clarification=False).
+    # During clarifying turns the model legitimately returns them as null.
+    optimized_prompt: Optional[str] = None  # refined, context-enriched version of user's raw prompt
+    tier: Literal["smart"]                  # intake always returns smart; user controls via UI
+    output_type: Optional[str] = None       # e.g. "report", "plan", "decision", "brainstorm", "analysis"
+    reasoning: Optional[str] = None         # one sentence shown in UI
 
     # Deep intake fields — populated by the new domain-specific probing prompt
     decision_domain: list[str] = Field(default_factory=list)
@@ -55,5 +57,5 @@ class IntakeDecision(BaseModel):
     open_questions: list[str] = Field(default_factory=list)
     # Things the user said they don't know yet — treated as open variables by research models
 
-    session_title: str = ""
+    session_title: Optional[str] = None
     # Short descriptive title for the session, e.g. "H-1B Transfer — Job Change Risk Analysis"

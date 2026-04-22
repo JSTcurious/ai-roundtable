@@ -219,15 +219,21 @@ def test_intake_decision_allows_empty_optimized_prompt():
     assert decision.optimized_prompt == ""
 
 
-def test_intake_decision_missing_optimized_prompt_raises():
-    with pytest.raises(ValidationError):
-        IntakeDecision(
-            needs_clarification=False,
-            tier="smart",
-            output_type="report",
-            reasoning="test",
-            # optimized_prompt omitted
-        )
+def test_intake_decision_missing_optimized_prompt_defaults_to_none():
+    """
+    optimized_prompt is Optional — during clarifying turns the model
+    legitimately returns null. When omitted, it defaults to None.
+    """
+    decision = IntakeDecision(
+        needs_clarification=True,
+        clarifying_question="What's your visa type?",
+        tier="smart",
+        # optimized_prompt omitted — allowed on clarifying turns
+    )
+    assert decision.optimized_prompt is None
+    assert decision.output_type is None
+    assert decision.reasoning is None
+    assert decision.session_title is None
 
 
 # ---------------------------------------------------------------------------
