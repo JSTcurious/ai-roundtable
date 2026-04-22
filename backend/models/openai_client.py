@@ -280,7 +280,14 @@ The optimized_prompt must:
 - For immigration cases: include visa type, case stage, and
   employer dependency so models give specific not generic advice
 
-Return valid JSON only. No prose outside the JSON object.
+CRITICAL OUTPUT FORMAT: Return raw JSON only. No markdown. \
+No backtick fences. No prose before or after the JSON object. \
+Your response must start with '{' and end with '}'. \
+If you wrap your response in ```json ... ``` the parser will fail. \
+Example of CORRECT output: {"needs_clarification": true, ...} \
+Example of INCORRECT output: ```json\n{...}\n```
+
+Remember: raw JSON only. First character '{'. Last character '}'.
 """
 
 
