@@ -289,6 +289,36 @@ async def intake_respond(req: IntakeRespondRequest):
 
 
 
+# ── Prompt enrichment ────────────────────────────────────────────────────────
+
+def _enrich_prompt(base_prompt: str, config: dict) -> str:
+    """
+    Append corrected_assumptions and open_questions from intake config
+    to the optimized prompt so research models have full context.
+
+    corrected_assumptions: things the user corrected during intake —
+      research models need to know the user's actual situation, not intake's
+      initial inference.
+
+    open_questions: things the user said they don't know yet — models
+      should treat these as open variables, not assume defaults.
+    """
+    prompt = base_prompt
+    corrected = config.get("corrected_assumptions") or []
+    open_qs = config.get("open_questions") or []
+    if corrected:
+        prompt += (
+            "\n\nNote: The user corrected the following during intake:\n"
+            + "\n".join(f"- {a}" for a in corrected)
+        )
+    if open_qs:
+        prompt += (
+            "\n\nNote: The following remain unknown — treat as open variables:\n"
+            + "\n".join(f"- {q}" for q in open_qs)
+        )
+    return prompt
+
+
 # ── Core session loop ─────────────────────────────────────────────────────────
 
 @app.post("/api/session/run")
@@ -319,7 +349,7 @@ async def session_run(req: SessionRunRequest):
     config = req.session_config
     tier = config.get("tier", "smart"); print(f"[SESSION] tier={tier}", flush=True)
     output_type = config.get("output_type", "report")
-    optimized_prompt = config.get("optimized_prompt", req.prompt)
+    optimized_prompt = _enrich_prompt(config.get("optimized_prompt", req.prompt), config)
     health = PipelineHealth()
 
     # Tier must be "smart" or "deep" — anything else defaults to smart
@@ -982,7 +1012,7 @@ async def session_websocket(websocket: WebSocket):
     if tier not in ("smart", "deep"):
         tier = "smart"
     health = PipelineHealth()
-    optimized_prompt = config.get("optimized_prompt", prompt)
+    optimized_prompt = _enrich_prompt(config.get("optimized_prompt", prompt), config)
     transcript = _build_transcript(config, history, prompt)
 
     dialogue_queue: asyncio.Queue = asyncio.Queue()
