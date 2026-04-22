@@ -33,6 +33,93 @@ INTAKE_OPENING_MESSAGE = (
     "targeted the analysis. What are you working through?"
 )
 
+# ── Minimum questions per domain ──────────────────────────────────────────────
+#
+# The model alone cannot be trusted to decide when intake has enough context.
+# We enforce a floor on clarifying turns per detected domain before intake is
+# allowed to close. The model's clarifying_question is honored when present;
+# only if the model closes early do we fall back to a canned question.
+
+MINIMUM_QUESTIONS_REQUIRED: dict[str, int] = {
+    "immigration_legal": 3,   # visa type, case stage, employer confirmed
+    "career_transition": 2,   # current role, what draws them
+    "financial":         2,   # decision type, risk tolerance
+    "general":           1,   # situation
+}
+
+# Domain-detection keywords — intentionally narrow and deliberate. Matched as
+# lower-case substrings against the accumulated conversation text.
+DOMAIN_KEYWORDS: dict[str, list[str]] = {
+    "immigration_legal": [
+        "visa", "h-1b", "h1b", "immigration", "green card",
+        "i-140", "i-485", "perm", "sponsorship", "opt", "status",
+    ],
+    "career_transition": [
+        "job", "role", "career", "company",
+        "offer", "leave", "transition", "position",
+    ],
+}
+
+FALLBACK_QUESTIONS: dict[str, list[dict]] = {
+    "immigration_legal": [
+        {
+            "question": "What stage is your immigration case at?",
+            "options": [
+                "Initial H-1B, no green card started",
+                "PERM in progress",
+                "I-140 approved",
+                "I-485 filed and pending",
+                "Not sure",
+            ],
+        },
+        {
+            "question": "Has the new employer confirmed they can sponsor or transfer your case?",
+            "options": [
+                "Yes, confirmed",
+                "They said yes but no details",
+                "Not discussed yet",
+                "They cannot sponsor",
+            ],
+        },
+    ],
+    "career_transition": [
+        {
+            "question": "Do you have a concrete offer or are you still exploring?",
+            "options": [
+                "Concrete offer in hand",
+                "Active conversations",
+                "Early exploration",
+            ],
+        },
+        {
+            "question": "Is there a timeline or deadline pressure?",
+            "options": [
+                "Offer expires soon",
+                "Within 1 month",
+                "No hard deadline",
+            ],
+        },
+    ],
+}
+
+
+def _detect_domain(text: str) -> Optional[str]:
+    """
+    Return the first domain whose keywords appear in `text`, or None.
+
+    Immigration is checked before career because an immigration-charged prompt
+    that also mentions "job" or "role" should be classified as immigration_legal
+    (which carries the stricter minimum of 3 clarifying questions).
+    """
+    if not text:
+        return None
+    text_lower = text.lower()
+    for domain, keywords in DOMAIN_KEYWORDS.items():
+        if any(kw in text_lower for kw in keywords):
+            return domain
+    return None
+
+
 # ── Immigration guard ─────────────────────────────────────────────────────────
 
 IMMIGRATION_KEYWORDS: frozenset[str] = frozenset({
@@ -243,6 +330,10 @@ class IntakeSession:
         self._original_prompt: Optional[str] = None
         self._clarifying_question: Optional[str] = None
         self._intake_provider: str = "unknown"
+        self.questions_asked: int = 0
+        self.detected_domain: Optional[str] = None
+        self._asked_questions: list[str] = []
+        self._qa_history: list[tuple[str, str]] = []
 
     def start(self) -> str:
         """
@@ -269,72 +360,20 @@ class IntakeSession:
                 "config": dict,
             }
         """
+        self._original_prompt = prompt
+        self.detected_domain = _detect_domain(prompt)
+
         decision, provider_used = call_intake(prompt)
         self._intake_provider = provider_used
-
-        # Immigration guard: if the user mentioned immigration context but the
-        # intake model closed without resolving visa_type, force a probing question.
-        # This is a belt-and-suspenders check — the new system prompt already
-        # instructs the model to ask, but the guard ensures it fires even if
-        # the model completes too eagerly.
-        if (
-            not decision.needs_clarification
-            and _has_immigration_context(prompt)
-            and _has_unknown_visa_type(decision)
-        ):
-            logger.info(
-                "[intake] Immigration guard fired — visa_type unresolved. "
-                "Forcing probing question before research begins."
-            )
-            probing_question = (
-                "What visa type are you currently on? "
-                "(e.g., H-1B, L-1, O-1, F-1 OPT/STEM OPT, TN, "
-                "pending green card, or other)"
-            )
-            self._original_prompt = prompt
-            self._clarifying_question = probing_question
-            return {
-                "status": "clarifying",
-                "clarifying_question": probing_question,
-                "suggested_options": [
-                    "H-1B", "L-1", "O-1 / EB-1A", "Pending green card",
-                    "F-1 OPT / STEM OPT", "TN / Other",
-                ],
-                "config": None,
-            }
-
-        if decision.needs_clarification:
-            self._original_prompt = prompt
-            self._clarifying_question = decision.clarifying_question
-            return {
-                "status": "clarifying",
-                "clarifying_question": decision.clarifying_question,
-                "suggested_options": decision.suggested_options,
-                "config": None,
-            }
-
-        self.complete = True
-        self.session_config = _decision_to_config(decision)
-        return {
-            "status": "complete",
-            "clarifying_question": None,
-            "config": self.session_config,
-        }
+        return self._route_decision(decision, context_text=prompt)
 
     def respond(self, answer: str) -> dict:
         """
-        Turn 1 — process the user's answer to the clarifying question.
+        Process the user's answer to the most recently asked clarifying question.
 
-        Hard rule: maximum one clarifying question per session.
-        If respond() is called after the session is already complete,
-        return the existing config without another API call.
-
-        Returns:
-            {
-                "status": "complete",
-                "clarifying_question": None,
-                "config": dict,
-            }
+        Repeats until the per-domain minimum questions are met AND the model
+        signals completion. If respond() is called after the session is already
+        complete, returns the existing config without another API call.
         """
         if self.complete and self.session_config:
             return {
@@ -343,20 +382,83 @@ class IntakeSession:
                 "config": self.session_config,
             }
 
-        combined = (
-            f"Original prompt: {self._original_prompt}\n"
-            f"Clarifying question asked: {self._clarifying_question}\n"
-            f"User's answer: {answer}\n\n"
-            "Now return the final IntakeDecision with needs_clarification: false. "
-            "IMPORTANT: The optimized_prompt must preserve all proper nouns from the "
-            "original prompt exactly as written. Do not substitute model names, product "
-            "names, or version numbers — even if you believe they are incorrect or refer "
-            "to unreleased products. The research models will handle verification. "
-            "Incorporate the user's clarification answer to add context and specificity, "
-            "but keep the original proper nouns intact."
-        )
+        if self._clarifying_question:
+            self._qa_history.append((self._clarifying_question, answer))
+
+        # Domain may become detectable only after the user elaborates.
+        if self.detected_domain is None:
+            self.detected_domain = _detect_domain(self._accumulated_context())
+
+        combined = self._build_combined_prompt()
         decision, provider_used = call_intake(combined)
         self._intake_provider = provider_used
+        return self._route_decision(decision, context_text=self._accumulated_context())
+
+    # ── Routing ──────────────────────────────────────────────────────────────
+
+    def _route_decision(self, decision: IntakeDecision, context_text: str) -> dict:
+        """
+        Apply guards and minimum-question enforcement to an IntakeDecision.
+
+        Returns a clarifying response (with a question — model's own, guard's
+        visa probe, or a domain fallback) or a complete response.
+        """
+        # Immigration guard: immigration context present but visa_type unresolved.
+        # Kept as an explicit probe because it's highly specific and takes
+        # precedence over the generic fallback flow.
+        if (
+            not decision.needs_clarification
+            and _has_immigration_context(context_text)
+            and _has_unknown_visa_type(decision)
+        ):
+            probing_question = (
+                "What visa type are you currently on? "
+                "(e.g., H-1B, L-1, O-1, F-1 OPT/STEM OPT, TN, "
+                "pending green card, or other)"
+            )
+            if probing_question not in self._asked_questions:
+                logger.info(
+                    "[intake] Immigration guard fired — visa_type unresolved. "
+                    "Forcing probing question before research begins."
+                )
+                return self._ask(
+                    probing_question,
+                    [
+                        "H-1B", "L-1", "O-1 / EB-1A", "Pending green card",
+                        "F-1 OPT / STEM OPT", "TN / Other",
+                    ],
+                )
+
+        # Honor the model's clarifying question when it genuinely wants one
+        # and hasn't already asked it.
+        if decision.needs_clarification and decision.clarifying_question:
+            if decision.clarifying_question not in self._asked_questions:
+                return self._ask(
+                    decision.clarifying_question,
+                    decision.suggested_options or [],
+                )
+            # Duplicate question — fall through to minimum check / close.
+
+        # Minimum-question enforcement: even if the model says "done", we
+        # refuse to close until the per-domain floor is met.
+        domain = self.detected_domain or "general"
+        minimum = MINIMUM_QUESTIONS_REQUIRED.get(
+            domain, MINIMUM_QUESTIONS_REQUIRED["general"]
+        )
+
+        if self.questions_asked < minimum:
+            fallback = self._next_fallback_question(domain)
+            if fallback is not None:
+                logger.info(
+                    "[intake] Minimum (%d) not met for domain=%s "
+                    "(questions_asked=%d) — using fallback question.",
+                    minimum, domain, self.questions_asked,
+                )
+                return self._ask(fallback["question"], fallback["options"])
+            # No fallback available for this domain — let the session close
+            # rather than loop forever. "general" has no fallback bank by design.
+
+        # Close the session.
         self.complete = True
         self.session_config = _decision_to_config(decision)
         return {
@@ -364,3 +466,53 @@ class IntakeSession:
             "clarifying_question": None,
             "config": self.session_config,
         }
+
+    # ── Helpers ──────────────────────────────────────────────────────────────
+
+    def _ask(self, question: str, options: list) -> dict:
+        """Record a clarifying question and return the clarifying response dict."""
+        self._clarifying_question = question
+        self._asked_questions.append(question)
+        self.questions_asked += 1
+        return {
+            "status": "clarifying",
+            "clarifying_question": question,
+            "suggested_options": options,
+            "config": None,
+        }
+
+    def _next_fallback_question(self, domain: str) -> Optional[dict]:
+        """Return the first fallback question for `domain` not already asked, or None."""
+        for fq in FALLBACK_QUESTIONS.get(domain, []):
+            if fq["question"] not in self._asked_questions:
+                return fq
+        return None
+
+    def _accumulated_context(self) -> str:
+        """Concatenate original prompt + all Q/A pairs for domain detection + guard checks."""
+        parts: list[str] = [self._original_prompt or ""]
+        for q, a in self._qa_history:
+            parts.append(f"Q: {q}\nA: {a}")
+        return "\n".join(parts)
+
+    def _build_combined_prompt(self) -> str:
+        """Assemble the prompt sent to the intake model after one or more answers."""
+        history_lines: list[str] = []
+        for q, a in self._qa_history:
+            history_lines.append(f"Clarifying question asked: {q}")
+            history_lines.append(f"User's answer: {a}")
+        history_block = "\n".join(history_lines)
+        return (
+            f"Original prompt: {self._original_prompt}\n"
+            f"{history_block}\n\n"
+            "Based on the conversation so far, return an IntakeDecision. "
+            "If critical context is still missing, set needs_clarification=true "
+            "with a specific next question. Otherwise set needs_clarification=false "
+            "and produce the final optimized_prompt.\n\n"
+            "IMPORTANT: The optimized_prompt must preserve all proper nouns from the "
+            "original prompt exactly as written. Do not substitute model names, product "
+            "names, or version numbers — even if you believe they are incorrect or refer "
+            "to unreleased products. The research models will handle verification. "
+            "Incorporate the user's clarification answers to add context and specificity, "
+            "but keep the original proper nouns intact."
+        )

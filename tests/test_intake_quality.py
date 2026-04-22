@@ -117,7 +117,11 @@ class TestImmigrationGuard:
 
     def test_intake_closes_when_visa_type_known(self):
         """
-        Guard must NOT block close when visa_type is a real value (e.g., 'H-1B').
+        Visa-type guard must NOT fire when visa_type is a real value (e.g., 'H-1B').
+
+        Note: minimum-question enforcement (3 for immigration_legal) is a
+        separate check — the session still forces a clarifying question via
+        the fallback bank, but not via the visa-type guard.
         """
         from backend.intake import IntakeSession
 
@@ -132,10 +136,11 @@ class TestImmigrationGuard:
             session = IntakeSession()
             result = session.analyze("I'm on H-1B and considering a job change")
 
-        assert result["status"] == "complete", (
-            "Known visa_type should allow intake to close normally"
-        )
-        assert result["config"] is not None
+        # Guard-specific assertion: visa-type probe must not be the forced question.
+        if result["status"] == "clarifying":
+            assert "What visa type are you currently on" not in result["clarifying_question"], (
+                "Visa-type guard should not fire when visa_type is known"
+            )
 
     def test_intake_guard_does_not_fire_without_immigration_context(self):
         """
@@ -386,3 +391,155 @@ class TestSuggestedOptions:
         assert "suggested_options" in result
         assert "H-1B" in result["suggested_options"]
         assert len(result["suggested_options"]) >= 4
+
+
+# ── Minimum-question enforcement per domain ───────────────────────────────────
+
+class TestMinimumQuestionsEnforcement:
+    """
+    The model cannot unilaterally decide intake has enough context. We enforce
+    a floor on clarifying turns per detected domain before intake is allowed
+    to close.
+    """
+
+    def test_minimum_questions_enforced_immigration(self):
+        """
+        Immigration domain requires 3 clarifying turns. If the model returns
+        needs_clarification=False after only 1 answer, intake must NOT close —
+        a fallback question is forced instead.
+        """
+        from backend.intake import IntakeSession, MINIMUM_QUESTIONS_REQUIRED
+
+        # Turn 0: model asks a clarifying question (legitimate)
+        turn0 = IntakeDecision(
+            needs_clarification=True,
+            clarifying_question="What visa type are you currently on?",
+            suggested_options=["H-1B", "L-1"],
+            optimized_prompt="",
+            tier="smart",
+            output_type="analysis",
+            reasoning="Need visa type.",
+        )
+        # Turn 1: model prematurely declares done with known visa
+        turn1_closed = _make_decision(
+            needs_clarification=False,
+            user_context={"immigration_specifics": {"visa_type": "H-1B"}},
+        )
+
+        with patch("backend.intake.call_intake",
+                   side_effect=[(turn0, "claude"), (turn1_closed, "claude")]):
+            session = IntakeSession()
+            r0 = session.analyze(
+                "I'm on H-1B with pending green card and considering a new job"
+            )
+            assert r0["status"] == "clarifying"
+            assert session.detected_domain == "immigration_legal"
+            assert session.questions_asked == 1
+
+            r1 = session.respond("H-1B with I-140 approved")
+
+        # Model tried to close after 1 answer. Minimum for immigration_legal is 3.
+        # After the forced fallback, questions_asked=2 — still below min=3.
+        assert r1["status"] == "clarifying", (
+            "Intake must NOT close before immigration_legal minimum (3) is reached"
+        )
+        assert session.complete is False
+        assert r1["config"] is None
+        assert r1["clarifying_question"] is not None
+        assert r1["clarifying_question"] != turn0.clarifying_question, (
+            "Forced question must not repeat an already-asked question"
+        )
+        assert session.questions_asked < MINIMUM_QUESTIONS_REQUIRED["immigration_legal"]
+
+    def test_minimum_questions_enforced_career(self):
+        """
+        Career-transition domain requires 2 clarifying turns. If the model
+        returns needs_clarification=False after only 1 answer, intake must NOT
+        close — a fallback question is forced instead.
+        """
+        from backend.intake import IntakeSession, MINIMUM_QUESTIONS_REQUIRED
+
+        turn0 = IntakeDecision(
+            needs_clarification=True,
+            clarifying_question="What's your current role?",
+            suggested_options=[],
+            optimized_prompt="",
+            tier="smart",
+            output_type="analysis",
+            reasoning="Need current role.",
+        )
+        turn1_closed = _make_decision(
+            needs_clarification=False,
+            user_context={},
+        )
+
+        with patch("backend.intake.call_intake",
+                   side_effect=[(turn0, "claude"), (turn1_closed, "claude")]):
+            session = IntakeSession()
+            r0 = session.analyze(
+                "I have a job offer at a new company and need to decide whether to leave"
+            )
+            assert r0["status"] == "clarifying"
+            assert session.detected_domain == "career_transition"
+            assert session.questions_asked == 1
+
+            r1 = session.respond("Senior backend engineer at a series B")
+
+        # Model tried to close after 1 answer. Minimum for career_transition is 2.
+        # The forced fallback pushes questions_asked to the minimum — the
+        # session is still open because a second answer has not yet arrived.
+        assert r1["status"] == "clarifying", (
+            "Intake must NOT close before career_transition minimum (2) is reached"
+        )
+        assert session.complete is False
+        assert r1["clarifying_question"] is not None
+        assert r1["clarifying_question"] != turn0.clarifying_question
+        # Sanity: minimum for this domain is defined
+        assert MINIMUM_QUESTIONS_REQUIRED["career_transition"] == 2
+
+    def test_intake_closes_after_minimum_met(self):
+        """
+        Once the domain minimum has been met and the model returns
+        needs_clarification=False, intake closes normally.
+        """
+        from backend.intake import IntakeSession, MINIMUM_QUESTIONS_REQUIRED
+
+        def q(text: str) -> IntakeDecision:
+            return IntakeDecision(
+                needs_clarification=True,
+                clarifying_question=text,
+                suggested_options=[],
+                optimized_prompt="",
+                tier="smart",
+                output_type="analysis",
+                reasoning="Need more.",
+            )
+
+        final = _make_decision(
+            needs_clarification=False,
+            user_context={"immigration_specifics": {"visa_type": "H-1B"}},
+            optimized_prompt="Final optimized prompt with immigration context",
+        )
+
+        with patch(
+            "backend.intake.call_intake",
+            side_effect=[
+                (q("What visa type are you on?"), "claude"),
+                (q("What stage is your case at?"), "claude"),
+                (q("Has the new employer confirmed sponsorship?"), "claude"),
+                (final, "claude"),
+            ],
+        ):
+            session = IntakeSession()
+            session.analyze("I'm on H-1B with a green card pending and considering a new job")
+            session.respond("H-1B")
+            session.respond("I-140 approved")
+            result = session.respond("Yes, confirmed sponsorship")
+
+        assert session.questions_asked >= MINIMUM_QUESTIONS_REQUIRED["immigration_legal"]
+        assert result["status"] == "complete"
+        assert session.complete is True
+        assert result["config"] is not None
+        assert result["config"]["optimized_prompt"] == (
+            "Final optimized prompt with immigration context"
+        )
