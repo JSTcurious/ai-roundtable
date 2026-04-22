@@ -30,6 +30,7 @@ load_dotenv(Path(__file__).parent.parent / ".env", override=True)
 # All other imports after this line
 import asyncio
 import os
+import re
 import time
 from functools import partial
 
@@ -286,6 +287,15 @@ Return valid JSON only. No prose outside the JSON object.
 _INTAKE_SYSTEM = _build_intake_system_prompt()
 
 
+def _extract_json(text: str) -> str:
+    """Strip markdown code fences from a model response before JSON parsing."""
+    text = text.strip()
+    if text.startswith("```"):
+        text = re.sub(r'^```(?:json)?\s*', '', text)
+        text = re.sub(r'\s*```\s*$', '', text)
+    return text.strip()
+
+
 def _is_retriable(exc: Exception) -> bool:
     """Return True if the exception warrants a retry (rate limit or transient error)."""
     msg = str(exc).lower()
@@ -305,7 +315,7 @@ def _call_gpt4o_mini_intake_once(prompt: str) -> IntakeDecision:
             {"role": "user",   "content": prompt},
         ],
     )
-    raw = response.choices[0].message.content or ""
+    raw = _extract_json(response.choices[0].message.content or "")
     try:
         return IntakeDecision.model_validate_json(raw)
     except Exception as e:

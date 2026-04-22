@@ -25,6 +25,16 @@ from backend.models.resilient_caller import call_with_fallback
 
 logger = logging.getLogger(__name__)
 
+
+def _extract_json(text: str) -> str:
+    """Strip markdown code fences from a model response before JSON parsing."""
+    text = text.strip()
+    if text.startswith("```"):
+        text = re.sub(r'^```(?:json)?\s*', '', text)
+        text = re.sub(r'\s*```\s*$', '', text)
+    return text.strip()
+
+
 # ── Intake opening message ────────────────────────────────────────────────────
 
 INTAKE_OPENING_MESSAGE = (
@@ -194,11 +204,7 @@ def call_intake_sonnet(prompt: str) -> IntakeDecision:
         system=system_prompt,
         messages=[{"role": "user", "content": prompt}],
     )
-    raw = response.content[0].text.strip()
-    # Strip markdown fences if Claude wrapped the JSON
-    if raw.startswith("```"):
-        parts = raw.split("```")
-        raw = parts[1].lstrip("json").strip() if len(parts) > 1 else raw
+    raw = _extract_json(response.content[0].text)
     try:
         return IntakeDecision.model_validate_json(raw)
     except Exception as e:

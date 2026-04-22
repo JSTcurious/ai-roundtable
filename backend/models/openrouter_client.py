@@ -13,10 +13,20 @@ All model IDs sourced from model_config — never hardcoded here.
 """
 
 import os
+import re
 
 from openai import OpenAI
 
 _client = None
+
+
+def _extract_json(text: str) -> str:
+    """Strip markdown code fences from a model response before JSON parsing."""
+    text = text.strip()
+    if text.startswith("```"):
+        text = re.sub(r'^```(?:json)?\s*', '', text)
+        text = re.sub(r'\s*```\s*$', '', text)
+    return text.strip()
 
 
 def _get_client() -> OpenAI:
@@ -66,7 +76,7 @@ def call_intake_fallback1(prompt: str):
             {"role": "user",   "content": prompt},
         ],
     )
-    raw = response.choices[0].message.content or ""
+    raw = _extract_json(response.choices[0].message.content or "")
     try:
         return IntakeDecision.model_validate_json(raw)
     except Exception as e:
