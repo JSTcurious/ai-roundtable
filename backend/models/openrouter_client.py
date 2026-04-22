@@ -68,7 +68,7 @@ def call_intake_fallback1(prompt: str):
     system_prompt = _build_intake_system_prompt().strip()
     response = _get_client().chat.completions.create(
         model=INTAKE_FALLBACK1,
-        max_tokens=512,
+        max_tokens=2000,
         temperature=0.1,
         response_format={"type": "json_object"},
         messages=[

@@ -228,7 +228,7 @@ def call_intake_fallback2(prompt: str):
     system_prompt = _build_intake_system_prompt().strip()
     response = _get_client().messages.create(
         model=INTAKE_FALLBACK2,
-        max_tokens=512,
+        max_tokens=2000,
         system=system_prompt,
         messages=[{"role": "user", "content": prompt}],
     )

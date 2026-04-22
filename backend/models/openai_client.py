@@ -321,7 +321,7 @@ def _call_gpt4o_mini_intake_once(prompt: str) -> IntakeDecision:
     """Single attempt against INTAKE_MODEL — no retry logic."""
     response = _get_client().chat.completions.create(
         model=INTAKE_MODEL,
-        max_tokens=512,
+        max_tokens=2000,
         temperature=0.1,
         response_format={"type": "json_object"},
         messages=[
