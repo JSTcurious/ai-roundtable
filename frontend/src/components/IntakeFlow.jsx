@@ -156,9 +156,14 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
         throw new Error(body.detail || `HTTP ${res.status}`);
       }
       const data = await res.json();
+      console.log("[intake-debug] respond response:", data);
+      console.log("[intake-debug] data.config:", data.config);
+      console.log("[intake-debug] data.status:", data.status);
       // Fix 3: immediate transition after clarifying answer too.
       if (typeof onComplete === "function") {
-        onComplete({ ...(data.config || {}), tier: "smart" });
+        const config = { ...(data.config || {}), tier: "smart" };
+        console.log("[intake-debug] calling onComplete with:", config);
+        onComplete(config);
       }
     } catch (e) {
       setError(e.message || "Submit failed");
