@@ -455,16 +455,30 @@ class IntakeSession:
         )
 
         if self.questions_asked < minimum:
+            # First try model's own question if it provided one
+            if decision.clarifying_question and decision.clarifying_question \
+                    not in self._asked_questions:
+                logger.info(
+                    "[intake] Minimum not met — using model question: %s",
+                    decision.clarifying_question,
+                )
+                return self._ask(
+                    decision.clarifying_question,
+                    decision.suggested_options or [],
+                )
+            # Then try fallback bank
             fallback = self._next_fallback_question(domain)
             if fallback is not None:
                 logger.info(
-                    "[intake] Minimum (%d) not met for domain=%s "
-                    "(questions_asked=%d) — using fallback question.",
-                    minimum, domain, self.questions_asked,
+                    "[intake] Minimum not met — using fallback question",
                 )
                 return self._ask(fallback["question"], fallback["options"])
-            # No fallback available for this domain — let the session close
-            # rather than loop forever. "general" has no fallback bank by design.
+            # If truly no questions available log a warning and close
+            logger.warning(
+                "[intake] Minimum %d not met for domain=%s but no "
+                "questions available (asked=%d). Closing.",
+                minimum, domain, self.questions_asked,
+            )
 
         # Close the session.
         self.complete = True
