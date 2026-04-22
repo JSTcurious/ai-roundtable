@@ -39,6 +39,12 @@ class IntakeDecision(BaseModel):
     #   "risk_tolerance": "..."
     # }
 
+    suggested_options: list[str] = Field(default_factory=list)
+    # Short answer options for the current clarifying_question (context-specific).
+    # Empty list means the question requires free text.
+    # e.g. for visa type: ["H-1B", "L-1", "O-1 / EB-1A", "Pending green card",
+    #                       "F-1 OPT / STEM OPT", "TN / Other"]
+
     confirmed_assumptions: list[str] = Field(default_factory=list)
     # Assumptions the user explicitly confirmed during intake
 

@@ -25,6 +25,14 @@ from backend.models.resilient_caller import call_with_fallback
 
 logger = logging.getLogger(__name__)
 
+# ── Intake opening message ────────────────────────────────────────────────────
+
+INTAKE_OPENING_MESSAGE = (
+    "I'll ask a few focused questions before briefing the "
+    "research panel — the more specific your answers, the more "
+    "targeted the analysis. What are you working through?"
+)
+
 # ── Immigration guard ─────────────────────────────────────────────────────────
 
 IMMIGRATION_KEYWORDS: frozenset[str] = frozenset({
@@ -236,6 +244,14 @@ class IntakeSession:
         self._clarifying_question: Optional[str] = None
         self._intake_provider: str = "unknown"
 
+    def start(self) -> str:
+        """
+        Return the intake opening message shown before the user submits their prompt.
+
+        Sets expectations: a few focused questions, not an interrogation.
+        """
+        return INTAKE_OPENING_MESSAGE
+
     def analyze(self, prompt: str) -> dict:
         """
         Turn 0 — analyze the user's raw prompt.
@@ -280,6 +296,10 @@ class IntakeSession:
             return {
                 "status": "clarifying",
                 "clarifying_question": probing_question,
+                "suggested_options": [
+                    "H-1B", "L-1", "O-1 / EB-1A", "Pending green card",
+                    "F-1 OPT / STEM OPT", "TN / Other",
+                ],
                 "config": None,
             }
 
@@ -289,6 +309,7 @@ class IntakeSession:
             return {
                 "status": "clarifying",
                 "clarifying_question": decision.clarifying_question,
+                "suggested_options": decision.suggested_options,
                 "config": None,
             }
 

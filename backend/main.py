@@ -41,7 +41,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, field_validator
 from starlette.websockets import WebSocketDisconnect
 
-from backend.intake import IntakeSession
+from backend.intake import INTAKE_OPENING_MESSAGE, IntakeSession
 from backend.transcript import Transcript
 from backend.router import (
     get_tier_config,
@@ -260,7 +260,7 @@ async def intake_start(req: IntakeStartRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Gemini intake error: {e}")
-    return {"session_id": session_id, **result}
+    return {"session_id": session_id, "opening_message": INTAKE_OPENING_MESSAGE, **result}
 
 
 @app.post("/api/intake/respond")

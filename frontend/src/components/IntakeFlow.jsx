@@ -40,12 +40,12 @@ const TIMEOUT_MS = 15000;
  * Quick-reply chips shown above the clarifying answer textarea.
  * Clicking a chip fills the textarea so the user can submit as-is or edit.
  */
-const QUICK_CHIPS = [
-  "Still early — just exploring",
-  "Need a decision soon",
-  "No hard constraints",
-  "Let me give more context",
-];
+/**
+ * Fallback chips shown if the API returns no suggested_options.
+ * These are intentionally neutral — only used when the model did not
+ * provide contextual options for the specific question.
+ */
+const FALLBACK_CHIPS = [];
 
 /**
  * @param {Object}   props
@@ -58,6 +58,8 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
   const [phase, setPhase] = useState("analyzing");
   const [sessionId, setSessionId] = useState(null);
   const [clarifyingQuestion, setClarifyingQuestion] = useState("");
+  const [suggestedOptions, setSuggestedOptions] = useState([]);
+  const [openingMessage, setOpeningMessage] = useState("");
   const [answer, setAnswer] = useState("");
   const [submittingAnswer, setSubmittingAnswer] = useState(false);
   const [error, setError] = useState(null);
@@ -117,8 +119,12 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
         const data = await res.json();
         setSessionId(data.session_id);
 
+        if (data.opening_message) {
+          setOpeningMessage(data.opening_message);
+        }
         if (data.status === "clarifying") {
           setClarifyingQuestion(data.clarifying_question || "");
+          setSuggestedOptions(data.suggested_options || FALLBACK_CHIPS);
           setPhase("clarifying");
         } else {
           // Fix 3: transition immediately — don't wait for user to confirm badge screen.
@@ -204,6 +210,11 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
         {/* ── Clarifying question ── */}
         {phase === "clarifying" && (
           <div className="w-full space-y-5">
+            {/* Opening framing — shown when server provides it */}
+            {openingMessage && (
+              <p className="text-sm leading-relaxed text-[#888888]">{openingMessage}</p>
+            )}
+
             {/* Prompt echo */}
             <div className="rounded-lg border border-[#2a2a2a] bg-[#1e1e1e] px-4 py-3">
               <p className="mb-1 text-xs font-medium uppercase tracking-wide text-[#888888]">Your prompt</p>
@@ -216,23 +227,25 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
               <p className="text-[0.9375rem] leading-relaxed text-[#e8e8e8]">{clarifyingQuestion}</p>
             </div>
 
-            {/* Quick-reply chips */}
-            <div className="flex flex-wrap gap-2">
-              {QUICK_CHIPS.map((chip) => (
-                <button
-                  key={chip}
-                  type="button"
-                  disabled={submittingAnswer}
-                  onClick={() => {
-                    setAnswer(chip);
-                    answerRef.current?.focus();
-                  }}
-                  className="rounded-full border border-[#3a3a3a] bg-[#1e1e1e] px-3 py-1 text-xs text-[#aaaaaa] transition-colors hover:border-[#F5A623] hover:text-[#F5A623] focus:outline-none disabled:opacity-40"
-                >
-                  {chip}
-                </button>
-              ))}
-            </div>
+            {/* Contextual quick-reply chips — driven by model's suggested_options */}
+            {suggestedOptions.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {suggestedOptions.map((chip) => (
+                  <button
+                    key={chip}
+                    type="button"
+                    disabled={submittingAnswer}
+                    onClick={() => {
+                      setAnswer(chip);
+                      answerRef.current?.focus();
+                    }}
+                    className="rounded-full border border-[#3a3a3a] bg-[#1e1e1e] px-3 py-1 text-xs text-[#aaaaaa] transition-colors hover:border-[#F5A623] hover:text-[#F5A623] focus:outline-none disabled:opacity-40"
+                  >
+                    {chip}
+                  </button>
+                ))}
+              </div>
+            )}
 
             {/* Answer input */}
             <form

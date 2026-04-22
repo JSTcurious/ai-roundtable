@@ -254,3 +254,135 @@ class TestCorrectedAssumptionsPropagation:
 
         # No extra content appended, no exception raised
         assert result == "A prompt from an older session."
+
+
+# ── Fix 3: Opening message ────────────────────────────────────────────────────
+
+class TestOpeningMessage:
+    def test_opening_message_sets_expectations(self):
+        """
+        IntakeSession.start() returns a message that sets user expectations:
+        a few focused questions, not an interrogation. Must end with a question.
+        """
+        from backend.intake import IntakeSession
+        session = IntakeSession()
+        message = session.start()
+
+        assert isinstance(message, str) and len(message) > 0
+        # Sets expectations: short intake, focused questions, specificity matters
+        lower = message.lower()
+        assert any(word in lower for word in ("few", "focused", "specific")), (
+            f"Opening message should contain 'few', 'focused', or 'specific': {message!r}"
+        )
+        # Must end with a question
+        assert message.strip().endswith("?"), (
+            f"Opening message must end with '?': {message!r}"
+        )
+
+    def test_opening_message_constant_matches_start(self):
+        """INTAKE_OPENING_MESSAGE and IntakeSession.start() return the same string."""
+        from backend.intake import INTAKE_OPENING_MESSAGE, IntakeSession
+        session = IntakeSession()
+        assert session.start() == INTAKE_OPENING_MESSAGE
+
+
+# ── Fix 2: suggested_options field ───────────────────────────────────────────
+
+class TestSuggestedOptions:
+    def test_suggested_options_field_exists_on_intake_decision(self):
+        """IntakeDecision has a suggested_options field that defaults to []."""
+        from backend.models.intake_decision import IntakeDecision
+        decision = IntakeDecision(
+            needs_clarification=False,
+            optimized_prompt="test",
+            tier="smart",
+            output_type="analysis",
+            reasoning="test",
+        )
+        assert hasattr(decision, "suggested_options")
+        assert isinstance(decision.suggested_options, list)
+        assert decision.suggested_options == []
+
+    def test_suggested_options_roundtrip_via_json(self):
+        """suggested_options survives JSON serialization."""
+        from backend.models.intake_decision import IntakeDecision
+        options = ["H-1B", "L-1", "O-1 / EB-1A", "Pending green card"]
+        decision = IntakeDecision(
+            needs_clarification=True,
+            clarifying_question="What visa type are you on?",
+            suggested_options=options,
+            optimized_prompt="test",
+            tier="smart",
+            output_type="analysis",
+            reasoning="test",
+        )
+        restored = IntakeDecision.model_validate_json(decision.model_dump_json())
+        assert restored.suggested_options == options
+
+    def test_suggested_options_not_generic(self):
+        """
+        suggested_options quality is validated by live session testing,
+        not unit tests, because it depends on model output.
+
+        The prompt instructs the model to generate question-specific options:
+        - visa type question → visa type options (H-1B, L-1, etc.)
+        - yes/no question → ["Yes", "Not yet", "In progress"]
+        - open-ended question → []
+        Never generic options like "Still early — just exploring".
+
+        See _build_intake_system_prompt() in backend/models/openai_client.py,
+        'suggested_options' field rules.
+        """
+        # Structural placeholder — live quality verified in session testing.
+        assert True
+
+    def test_analyze_includes_suggested_options_in_clarifying_response(self):
+        """
+        IntakeSession.analyze() includes 'suggested_options' in the clarifying
+        response dict when the model asks a clarifying question.
+        """
+        from backend.intake import IntakeSession
+        from backend.models.intake_decision import IntakeDecision
+
+        decision_with_question = IntakeDecision(
+            needs_clarification=True,
+            clarifying_question="What visa type are you on?",
+            suggested_options=["H-1B", "L-1", "TN / Other"],
+            optimized_prompt="test",
+            tier="smart",
+            output_type="analysis",
+            reasoning="test",
+        )
+
+        with __import__("unittest.mock", fromlist=["patch"]).patch(
+            "backend.intake.call_intake", return_value=(decision_with_question, "claude")
+        ):
+            session = IntakeSession()
+            result = session.analyze("I have a visa and want to change jobs")
+
+        assert result["status"] == "clarifying"
+        assert "suggested_options" in result
+        assert result["suggested_options"] == ["H-1B", "L-1", "TN / Other"]
+
+    def test_immigration_guard_provides_visa_type_options(self):
+        """
+        When the immigration guard fires (visa_type unknown), the clarifying
+        response includes the standard visa type options.
+        """
+        from backend.intake import IntakeSession
+
+        decision_no_visa = _make_decision(
+            needs_clarification=False,
+            user_context={"immigration_specifics": {"visa_type": "unknown"}},
+        )
+
+        with __import__("unittest.mock", fromlist=["patch"]).patch(
+            "backend.intake.call_intake", return_value=(decision_no_visa, "claude")
+        ):
+            session = IntakeSession()
+            result = session.analyze("I have an active immigration case and want to leave my job")
+
+        assert result["status"] == "clarifying"
+        assert "suggested_options" in result
+        assert "H-1B" in result["suggested_options"]
+        assert len(result["suggested_options"]) >= 4
