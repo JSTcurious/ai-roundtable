@@ -23,15 +23,15 @@ Functions:
         — smoke test: confirm API key and connectivity
 """
 
+from pathlib import Path
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).parent.parent / ".env", override=True)
+
+# All other imports after this line
 import asyncio
 import os
 import time
 from functools import partial
-from pathlib import Path
-
-from dotenv import load_dotenv
-
-load_dotenv(Path(__file__).parent.parent / ".env", override=True)
 
 from openai import OpenAI
 
