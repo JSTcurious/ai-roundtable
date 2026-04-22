@@ -261,6 +261,8 @@ optimized_prompt: refined, context-enriched version of the user's
   prompt. Preserve ALL user-provided proper nouns exactly.
   For immigration cases: include visa type, case stage, and
   employer dependency so models give specific not generic advice.
+  Keep optimized_prompt concise — maximum 150 words. The research
+  panel will expand on it. Do not write a full brief here.
 
 tier: always "smart". The user controls tier via the session UI.
 

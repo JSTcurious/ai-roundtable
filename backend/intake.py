@@ -200,7 +200,9 @@ def call_intake_sonnet(prompt: str) -> IntakeDecision:
     system_prompt = _build_intake_system_prompt().strip()
     response = _get_client().messages.create(
         model=INTAKE_PRIMARY,
-        max_tokens=512,
+        # 2000 to accommodate rich user_context, immigration_specifics,
+        # confirmed_assumptions, open_questions, etc. 512 truncated mid-JSON.
+        max_tokens=2000,
         system=system_prompt,
         messages=[{"role": "user", "content": prompt}],
     )
