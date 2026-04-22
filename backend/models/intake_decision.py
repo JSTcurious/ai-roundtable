@@ -7,10 +7,11 @@ Used to enforce typed output from all intake providers.
 
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class IntakeDecision(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     needs_clarification: bool
     clarifying_question: Optional[str] = None  # only when needs_clarification is True
     optimized_prompt: str        # refined, context-enriched version of user's raw prompt

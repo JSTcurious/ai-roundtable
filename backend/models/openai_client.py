@@ -51,10 +51,12 @@ MODELS = {
     "deep":  "gpt-4o",
 }
 
-from backend.models.model_config import INTAKE_PRIMARY
+from backend.models.model_config import INTAKE_FALLBACK1
 
-# Intake model — sourced from model_config (env-overridable via INTAKE_PRIMARY)
-INTAKE_MODEL = INTAKE_PRIMARY
+# OpenAI's intake model is GPT-4o Mini (INTAKE_FALLBACK1).
+# Must NOT use INTAKE_PRIMARY here — that is the Anthropic model (claude-sonnet-4-6)
+# and routing it to the OpenAI client returns 404 model_not_found.
+INTAKE_MODEL = INTAKE_FALLBACK1
 
 # ── Intake system prompt ──────────────────────────────────────────────────────
 
