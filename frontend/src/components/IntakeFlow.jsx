@@ -162,11 +162,8 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
         }
       } else if (data.status === "clarifying") {
         // Show the next clarifying question
-        setMessages(prev => [...prev, {
-          role: "assistant",
-          content: data.message,
-          suggestedOptions: data.suggested_options || []
-        }]);
+        setClarifyingQuestion(data.clarifying_question || "");
+        setSuggestedOptions(data.suggested_options || []);
         setPhase("clarifying");
       }
     } catch (e) {
