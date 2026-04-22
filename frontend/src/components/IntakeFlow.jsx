@@ -67,6 +67,7 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
   const [loadingMsgIdx, setLoadingMsgIdx] = useState(0);
   /** True when intake has exceeded TIMEOUT_MS with no response. */
   const [timedOut, setTimedOut] = useState(false);
+  const [questionCount, setQuestionCount] = useState(0);
   const answerRef = useRef(null);
   const hasFiredRef = useRef(false);
 
@@ -125,6 +126,7 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
         if (data.status === "clarifying") {
           setClarifyingQuestion(data.clarifying_question || "");
           setSuggestedOptions(data.suggested_options || FALLBACK_CHIPS);
+          setQuestionCount((prev) => prev + 1);
           setPhase("clarifying");
         } else {
           // Fix 3: transition immediately — don't wait for user to confirm badge screen.
@@ -162,8 +164,10 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
         }
       } else if (data.status === "clarifying") {
         // Show the next clarifying question
+        setAnswer("");
         setClarifyingQuestion(data.clarifying_question || "");
         setSuggestedOptions(data.suggested_options || []);
+        setQuestionCount((prev) => prev + 1);
         setPhase("clarifying");
       }
     } catch (e) {
@@ -229,7 +233,7 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
 
             {/* Clarifying question */}
             <div>
-              <p className="mb-1 text-xs font-medium uppercase tracking-wide text-[#888888]">One question</p>
+              <p className="mb-1 text-xs font-medium uppercase tracking-wide text-[#888888]">Question {questionCount}</p>
               <p className="text-[0.9375rem] leading-relaxed text-[#e8e8e8]">{clarifyingQuestion}</p>
             </div>
 
