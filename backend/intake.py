@@ -51,10 +51,10 @@ INTAKE_OPENING_MESSAGE = (
 # only if the model closes early do we fall back to a canned question.
 
 MINIMUM_QUESTIONS_REQUIRED: dict[str, int] = {
-    "immigration_legal": 3,   # visa type, case stage, employer confirmed
-    "career_transition": 2,   # current role, what draws them
-    "financial":         2,   # decision type, risk tolerance
-    "general":           1,   # situation
+    "immigration_legal": 4,   # visa type, case stage, employer confirmed, output intent
+    "career_transition": 3,   # current role, what draws them, output intent
+    "financial":         3,   # decision type, risk tolerance, output intent
+    "general":           1,   # output intent (model handles situation via needs_clarification)
 }
 
 # Domain-detection keywords — intentionally narrow and deliberate. Matched as
@@ -67,6 +67,17 @@ DOMAIN_KEYWORDS: dict[str, list[str]] = {
     "career_transition": [
         "job", "role", "career", "company",
         "offer", "leave", "transition", "position",
+    ],
+}
+
+_OUTPUT_INTENT_FALLBACK: dict = {
+    "question": "What do you want to walk away with from this session?",
+    "options": [
+        "A clear recommendation — tell me what to do",
+        "A risk analysis — what could go wrong",
+        "A step-by-step action plan",
+        "A framework to evaluate this myself",
+        "All of the above — comprehensive analysis",
     ],
 }
 
@@ -91,6 +102,7 @@ FALLBACK_QUESTIONS: dict[str, list[dict]] = {
                 "They cannot sponsor",
             ],
         },
+        _OUTPUT_INTENT_FALLBACK,
     ],
     "career_transition": [
         {
@@ -109,6 +121,13 @@ FALLBACK_QUESTIONS: dict[str, list[dict]] = {
                 "No hard deadline",
             ],
         },
+        _OUTPUT_INTENT_FALLBACK,
+    ],
+    "financial": [
+        _OUTPUT_INTENT_FALLBACK,
+    ],
+    "general": [
+        _OUTPUT_INTENT_FALLBACK,
     ],
 }
 
@@ -304,6 +323,7 @@ def _decision_to_config(decision: IntakeDecision) -> dict:
         "corrected_assumptions": decision.corrected_assumptions,
         "open_questions": decision.open_questions,
         "session_title": decision.session_title,
+        "output_intent": decision.output_intent,
     })
 
 
@@ -449,12 +469,16 @@ class IntakeSession:
 
         # Minimum-question enforcement: even if the model says "done", we
         # refuse to close until the per-domain floor is met.
+        # If the model already captured output_intent, credit one question
+        # toward the minimum so we don't ask the output_intent fallback again.
+        output_intent_captured = bool(decision.output_intent)
         domain = self.detected_domain or "general"
         minimum = MINIMUM_QUESTIONS_REQUIRED.get(
             domain, MINIMUM_QUESTIONS_REQUIRED["general"]
         )
+        effective_minimum = minimum - 1 if output_intent_captured else minimum
 
-        if self.questions_asked < minimum:
+        if self.questions_asked < effective_minimum:
             # First try model's own question if it provided one
             if decision.clarifying_question and decision.clarifying_question \
                     not in self._asked_questions:
@@ -466,8 +490,10 @@ class IntakeSession:
                     decision.clarifying_question,
                     decision.suggested_options or [],
                 )
-            # Then try fallback bank
-            fallback = self._next_fallback_question(domain)
+            # Then try fallback bank (skip output_intent if already captured)
+            fallback = self._next_fallback_question(
+                domain, skip_output_intent=output_intent_captured
+            )
             if fallback is not None:
                 logger.info(
                     "[intake] Minimum not met — using fallback question",
@@ -503,10 +529,14 @@ class IntakeSession:
             "config": None,
         }
 
-    def _next_fallback_question(self, domain: str) -> Optional[dict]:
+    def _next_fallback_question(
+        self, domain: str, skip_output_intent: bool = False
+    ) -> Optional[dict]:
         """Return the first fallback question for `domain` not already asked, or None."""
         for fq in FALLBACK_QUESTIONS.get(domain, []):
             if fq["question"] not in self._asked_questions:
+                if skip_output_intent and "walk away" in fq["question"].lower():
+                    continue
                 return fq
         return None
 

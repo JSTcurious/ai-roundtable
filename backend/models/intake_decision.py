@@ -59,3 +59,6 @@ class IntakeDecision(BaseModel):
 
     session_title: Optional[str] = None
     # Short descriptive title for the session, e.g. "H-1B Transfer — Job Change Risk Analysis"
+
+    output_intent: Optional[str] = None
+    # What the user wants to walk away with, e.g. "A clear recommendation — tell me what to do"

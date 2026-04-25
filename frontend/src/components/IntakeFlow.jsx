@@ -68,6 +68,7 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
   /** True when intake has exceeded TIMEOUT_MS with no response. */
   const [timedOut, setTimedOut] = useState(false);
   const [questionCount, setQuestionCount] = useState(0);
+  const [selectedChip, setSelectedChip] = useState(null);
   const answerRef = useRef(null);
   const hasFiredRef = useRef(false);
 
@@ -145,6 +146,7 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
     const text = answer.trim();
     if (!text || !sessionId || submittingAnswer) return;
     setSubmittingAnswer(true);
+    setSelectedChip(null);
     setError(null);
     try {
       const res = await fetch(`${API_BASE}/api/intake/respond`, {
@@ -165,6 +167,7 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
       } else if (data.status === "clarifying") {
         // Show the next clarifying question
         setAnswer("");
+        setSelectedChip(null);
         setClarifyingQuestion(data.clarifying_question || "");
         setSuggestedOptions(data.suggested_options || []);
         setQuestionCount((prev) => prev + 1);
@@ -240,20 +243,25 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
             {/* Contextual quick-reply chips — driven by model's suggested_options */}
             {suggestedOptions.length > 0 && (
               <div className="flex flex-wrap gap-2">
-                {suggestedOptions.map((chip) => (
-                  <button
-                    key={chip}
-                    type="button"
-                    disabled={submittingAnswer}
-                    onClick={() => {
-                      setAnswer(chip);
-                      answerRef.current?.focus();
-                    }}
-                    className="rounded-full border border-[#3a3a3a] bg-[#1e1e1e] px-3 py-1 text-xs text-[#aaaaaa] transition-colors hover:border-[#F5A623] hover:text-[#F5A623] focus:outline-none disabled:opacity-40"
-                  >
-                    {chip}
-                  </button>
-                ))}
+                {suggestedOptions.map((chip) => {
+                  const isSelected = chip === selectedChip;
+                  return (
+                    <button
+                      key={chip}
+                      type="button"
+                      disabled={submittingAnswer}
+                      onClick={() => {
+                        setSelectedChip(chip);
+                        setAnswer(chip);
+                        answerRef.current?.focus();
+                      }}
+                      style={isSelected ? { background: "#F5A623", color: "#0d0d0d", borderColor: "#F5A623" } : undefined}
+                      className="rounded-full border border-[#3a3a3a] bg-[#1e1e1e] px-3 py-1 text-xs text-[#aaaaaa] transition-colors hover:border-[#F5A623] hover:text-[#F5A623] focus:outline-none disabled:opacity-40"
+                    >
+                      {chip}
+                    </button>
+                  );
+                })}
               </div>
             )}
 

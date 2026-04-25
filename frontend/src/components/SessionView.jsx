@@ -308,6 +308,12 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
   /** { claude: {model_used, advisor_model, tier, availability}, gemini: {...}, ... } */
   const [modelMeta, setModelMeta] = useState({});
 
+  // ── Prompt review gate — shown before research starts ────────────────────
+  /** null = no review pending; object = review data from backend */
+  const [promptReviewData, setPromptReviewData] = useState(null);
+  const [reviewAdjusting, setReviewAdjusting] = useState(false);
+  const [reviewAdjustText, setReviewAdjustText] = useState("");
+
   // ── Live WS ref — used by dialogue buttons to send refinement/finalize ───
   const wsRef = useRef(/** @type {WebSocket|null} */ (null));
 
@@ -543,7 +549,11 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
           case "ping":
           case "pong":
             break;
+          case "prompt_review":
+            setPromptReviewData(data);
+            break;
           case "session_started":
+            setPromptReviewData(null);
             setSessionStarted(true);
             phaseRef.current = "round1_parallel";
             setStreamPhaseMarker((n) => n + 1);
@@ -775,6 +785,22 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     setRefinementPending(true);
   }, [dialogueInput, refinementPending, synthesisFinal]);
 
+  const handleReviewConfirm = useCallback(() => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: "prompt_confirmed" }));
+  }, []);
+
+  const handleReviewAdjust = useCallback(() => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    const text = reviewAdjustText.trim();
+    if (!text) return;
+    ws.send(JSON.stringify({ type: "prompt_adjusted", adjustment: text }));
+    setReviewAdjusting(false);
+    setReviewAdjustText("");
+  }, [reviewAdjustText]);
+
   const handleFinalize = useCallback(() => {
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
@@ -868,7 +894,11 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
 
   const breadcrumbState = useMemo(() => {
     // PROMPT — done as soon as session starts (or resume)
-    const promptDone = isResume || sessionStarted;
+    const promptDone = isResume || sessionStarted || Boolean(promptReviewData);
+
+    // REVIEW — active while waiting for user confirmation; done when session_started
+    const reviewDone = isResume || sessionStarted;
+    const reviewActive = Boolean(promptReviewData) && !sessionStarted;
 
     // RESEARCH — active during round1_parallel, done when perplexity starts or synthesis entered
     const transcriptDone = isResume || perplexityPhase !== "off" || synthesisPhaseEntered;
@@ -891,8 +921,8 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
         ? "SYNTHESIZING..."
         : "FINAL ANSWER";
 
-    return { promptDone, transcriptDone, transcriptActive, factDone, factActive, dialogueDone, dialogueActive, sDone, sActive, sLabel };
-  }, [isResume, sessionStarted, synthesisPhaseEntered, perplexityPhase, synthesisThinking, synthesisFinal, synthesisDraft, refinementPending]);
+    return { promptDone, reviewDone, reviewActive, transcriptDone, transcriptActive, factDone, factActive, dialogueDone, dialogueActive, sDone, sActive, sLabel };
+  }, [isResume, sessionStarted, promptReviewData, synthesisPhaseEntered, perplexityPhase, synthesisThinking, synthesisFinal, synthesisDraft, refinementPending]);
 
   // ── Pipeline stage done flags ─────────────────────────────────────────────
   const researchStageDone = isResume || perplexityPhase !== "off" || synthesisPhaseEntered;
@@ -991,6 +1021,13 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
           </span>
           <span className="mx-1" style={{ color: "#F5A623" }}>→</span>
           <span
+            className={breadcrumbState.reviewActive ? "animate-pulse" : ""}
+            style={{ color: breadcrumbState.reviewDone || breadcrumbState.reviewActive ? "#F5A623" : "#666666" }}
+          >
+            {breadcrumbState.reviewDone ? "✓" : breadcrumbState.reviewActive ? "●" : "○"} REVIEW
+          </span>
+          <span className="mx-1" style={{ color: "#F5A623" }}>→</span>
+          <span
             className={breadcrumbState.transcriptActive ? "animate-pulse" : ""}
             style={{ color: breadcrumbState.transcriptDone || breadcrumbState.transcriptActive ? "#F5A623" : "#666666" }}
           >
@@ -1020,7 +1057,118 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
         </div>
       </Header>
 
-      <div className="mx-auto max-w-3xl space-y-4 px-4 py-6 sm:px-6">
+      {/* ── Prompt review gate — shown before research starts ── */}
+      {promptReviewData && !sessionStarted && (
+        <div className="mx-auto max-w-2xl space-y-5 px-4 py-8 sm:px-6">
+          {/* Title */}
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-[#888888]">Here's how I'm briefing the research panel</p>
+            {promptReviewData.session_title && (
+              <h2 className="mt-1 text-lg font-semibold" style={{ color: "#F5A623" }}>
+                {promptReviewData.session_title}
+              </h2>
+            )}
+          </div>
+
+          {/* What I'll research */}
+          <div>
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#888888]">What I'll research</p>
+            <div className="rounded-lg border border-[#2a2a2a] bg-[#1e1e1e] px-4 py-3 text-sm leading-relaxed text-[#e8e8e8]">
+              {promptReviewData.optimized_prompt}
+            </div>
+          </div>
+
+          {/* What you want to walk away with */}
+          {promptReviewData.output_intent && (
+            <div>
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#888888]">What you want to walk away with</p>
+              <div className="rounded-lg border border-[#2a2a2a] bg-[#1e1e1e] px-4 py-3 text-sm text-[#e8e8e8]">
+                {promptReviewData.output_intent}
+              </div>
+            </div>
+          )}
+
+          {/* Still unknown */}
+          {Array.isArray(promptReviewData.open_questions) && promptReviewData.open_questions.length > 0 && (
+            <div>
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#888888]">Still unknown</p>
+              <ul className="space-y-1">
+                {promptReviewData.open_questions.map((q, i) => (
+                  <li key={i} className="flex items-start gap-2 text-sm text-[#888888]">
+                    <span className="mt-0.5 shrink-0">⚠</span>
+                    <span>{q}</span>
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-1 text-xs text-[#555555]">The research panel will treat these as open variables.</p>
+            </div>
+          )}
+
+          {/* What I confirmed */}
+          {Array.isArray(promptReviewData.confirmed_assumptions) && promptReviewData.confirmed_assumptions.length > 0 && (
+            <div>
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#888888]">What I confirmed with you</p>
+              <ul className="space-y-1">
+                {promptReviewData.confirmed_assumptions.map((a, i) => (
+                  <li key={i} className="flex items-start gap-2 text-sm text-[#888888]">
+                    <span className="mt-0.5 shrink-0 text-[#F5A623]">✓</span>
+                    <span>{a}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Adjustment textarea */}
+          {reviewAdjusting && (
+            <div className="space-y-2">
+              <label htmlFor="review-adjust" className="text-xs font-semibold uppercase tracking-wide text-[#888888]">
+                What should I change about this brief?
+              </label>
+              <textarea
+                id="review-adjust"
+                rows={3}
+                value={reviewAdjustText}
+                onChange={(e) => setReviewAdjustText(e.target.value)}
+                placeholder="Describe what to change…"
+                className="w-full resize-y rounded-lg border border-[#2a2a2a] bg-[#1e1e1e] px-3 py-2 text-sm text-[#e8e8e8] placeholder:text-[#888888] focus:border-[#6B6B6B] focus:outline-none"
+              />
+              <button
+                type="button"
+                disabled={!reviewAdjustText.trim()}
+                onClick={handleReviewAdjust}
+                style={{ background: "#F5A623", color: "#0d0d0d" }}
+                className="rounded-lg px-5 py-2 text-sm font-semibold transition-opacity hover:opacity-90 focus:outline-none disabled:opacity-40"
+              >
+                Submit Adjustment →
+              </button>
+            </div>
+          )}
+
+          {/* Action buttons */}
+          {!reviewAdjusting && (
+            <div className="flex flex-wrap gap-3">
+              <button
+                type="button"
+                onClick={handleReviewConfirm}
+                style={{ background: "#F5A623", color: "#0d0d0d" }}
+                className="rounded-lg px-5 py-2 text-sm font-semibold transition-opacity hover:opacity-90 focus:outline-none"
+              >
+                Looks good — Start Research →
+              </button>
+              <button
+                type="button"
+                onClick={() => setReviewAdjusting(true)}
+                className="rounded-lg border border-[#3a3a3a] px-5 py-2 text-sm text-[#888888] transition-colors hover:border-[#F5A623] hover:text-[#F5A623] focus:outline-none"
+              >
+                Let me adjust something
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="mx-auto max-w-3xl space-y-4 px-4 py-6 sm:px-6" style={{ display: promptReviewData && !sessionStarted ? "none" : undefined }}>
         {configError && (
           <p className="text-sm text-red-400" role="alert">
             {configError}

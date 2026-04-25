@@ -316,6 +316,9 @@ def _enrich_prompt(base_prompt: str, config: dict) -> str:
             "\n\nNote: The following remain unknown — treat as open variables:\n"
             + "\n".join(f"- {q}" for q in open_qs)
         )
+    output_intent = config.get("output_intent")
+    if output_intent:
+        prompt += f"\n\nOutput format requested by user: {output_intent}"
     return prompt
 
 
@@ -879,7 +882,10 @@ async def _drain_client_messages(
             elif (
                 dialogue_queue is not None
                 and isinstance(data, dict)
-                and data.get("type") in ("user_dialogue_response", "finalize_synthesis")
+                and data.get("type") in (
+                    "user_dialogue_response", "finalize_synthesis",
+                    "prompt_confirmed", "prompt_adjusted",
+                )
             ):
                 await dialogue_queue.put(data)
     except WebSocketDisconnect:
@@ -1018,6 +1024,21 @@ async def session_websocket(websocket: WebSocket):
     dialogue_queue: asyncio.Queue = asyncio.Queue()
     ping_task = asyncio.create_task(_drain_client_messages(websocket, dialogue_queue))
     try:
+        # ── Prompt review gate — user confirms or adjusts before research starts ─
+        await websocket.send_json({
+            "type": "prompt_review",
+            "optimized_prompt": optimized_prompt,
+            "session_title": config.get("session_title", ""),
+            "output_intent": config.get("output_intent", ""),
+            "open_questions": config.get("open_questions", []),
+            "confirmed_assumptions": config.get("confirmed_assumptions", []),
+        })
+        review_msg = await dialogue_queue.get()
+        if review_msg.get("type") == "prompt_adjusted":
+            adjustment = (review_msg.get("adjustment") or "").strip()
+            if adjustment:
+                optimized_prompt += f"\n\nUser correction: {adjustment}"
+
         await websocket.send_json({"type": "session_started"})
 
         # ── Round 1: all four labs + Perplexity pre-research ─────────────────

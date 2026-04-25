@@ -168,6 +168,29 @@ from the user that they do not know yet and want to proceed anyway.
 - What constraints are non-negotiable?
 - What does success look like?
 
+## Step 3b — Output Intent (always ask this)
+
+After gathering the domain-specific context, always ask
+what the user wants to walk away with. This is required
+for every session regardless of domain.
+
+Ask exactly this question:
+"One more thing — what do you want to walk away with
+ from this session?"
+
+Provide these suggested_options:
+[
+  "A clear recommendation — tell me what to do",
+  "A risk analysis — what could go wrong",
+  "A step-by-step action plan",
+  "A framework to evaluate this myself",
+  "All of the above — comprehensive analysis"
+]
+
+Store the user's answer in the output_intent field of the JSON.
+This field shapes how the research panel frames their output
+and how Claude structures the synthesis.
+
 ## Step 4 — Assumptions Summary
 
 Before closing intake, present an explicit summary of all
@@ -226,7 +249,8 @@ Then output a JSON object with exactly these fields:
   "confirmed_assumptions": [list of strings],
   "corrected_assumptions": [list of strings],
   "open_questions": [list of strings],
-  "session_title": string
+  "session_title": string,
+  "output_intent": string or null
 }
 
 ## Field rules
@@ -253,6 +277,26 @@ suggested_options: Generate 3-6 short options that directly
   - Never return generic options unrelated to the question
   - Never return options longer than 6 words each
 
+CRITICAL: If your clarifying_question contains the words
+'or', 'either', or presents multiple options in the question
+text itself (e.g., 'Do you have X, Y, or Z?'), you MUST
+extract those options as suggested_options chips.
+Never embed options in the question text without also
+providing them as chips.
+
+Example of WRONG behavior:
+  clarifying_question: 'Do you have a deadline, an active
+    offer, or are you still exploring?'
+  suggested_options: []
+
+Example of CORRECT behavior:
+  clarifying_question: 'What is your current timeline?'
+  suggested_options: ['I have a deadline', 'Active offer
+    in hand', 'Still exploring — no pressure']
+
+Rewrite the question to be neutral, extract the options
+as chips.
+
 PROPER NOUN PRESERVATION — CRITICAL:
   Never substitute model names, product names, version numbers, company
   names, or any named entity the user provided. Use them exactly as written.
@@ -274,6 +318,9 @@ reasoning: one sentence explaining prompt direction and output type.
 confirmed_assumptions: list of assumptions the user explicitly confirmed.
 corrected_assumptions: list of assumptions the user corrected.
 open_questions: things the user said they do not know yet.
+
+output_intent: what the user wants to walk away with — the answer
+  they gave to Step 3b. Null if not yet asked or not answered.
 
 ## Quality Bar for the Optimized Prompt
 
