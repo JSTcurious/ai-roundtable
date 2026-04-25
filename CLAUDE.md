@@ -76,8 +76,8 @@ uv run pytest — always run before committing
 - override=True to handle empty shell variables
 
 ## Deployment
-- Backend: Railway (backend-production-d1412.up.railway.app)
-- Frontend: Railway (frontend-production-6dbc.up.railway.app)
+- Backend: Railway (ai-roundtable-backend-production.up.railway.app)
+- Frontend: Railway (ai-roundtable-frontend-production.up.railway.app)
 - Port: 8080 (set in Railway networking settings)
 - FRONTEND_URL env var set in Railway backend for CORS
 
