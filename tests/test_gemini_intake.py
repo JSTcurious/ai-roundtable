@@ -27,6 +27,7 @@ def _decision(
     tier="smart",
     output_type="analysis",
     reasoning="Smart selected — technical evaluation with clear tradeoffs",
+    output_intent="A clear recommendation — tell me what to do",
 ) -> IntakeDecision:
     return IntakeDecision(
         needs_clarification=needs_clarification,
@@ -35,6 +36,7 @@ def _decision(
         tier=tier,
         output_type=output_type,
         reasoning=reasoning,
+        output_intent=output_intent,
     )
 
 
