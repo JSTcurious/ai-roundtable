@@ -1,3 +1,4 @@
+// Build: 2026-04-25T06:03:55.229486
 /**
  * App flow: LandingPage → IntakeFlow → SessionView (incl. TakeFurther).
  */
