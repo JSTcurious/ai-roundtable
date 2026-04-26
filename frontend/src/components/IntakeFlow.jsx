@@ -36,16 +36,8 @@ const LOADING_DELAYS = [2000, 5000];
 /** After this many ms, show the "taking longer" fallback with a cancel option. */
 const TIMEOUT_MS = 15000;
 
-/**
- * Quick-reply chips shown above the clarifying answer textarea.
- * Clicking a chip fills the textarea so the user can submit as-is or edit.
- */
-/**
- * Fallback chips shown if the API returns no suggested_options.
- * These are intentionally neutral — only used when the model did not
- * provide contextual options for the specific question.
- */
-const FALLBACK_CHIPS = [];
+/** Max progress segments shown — reflects typical minimum question count. */
+const MAX_QUESTIONS = 3;
 
 /**
  * @param {Object}   props
@@ -68,17 +60,17 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
   /** True when intake has exceeded TIMEOUT_MS with no response. */
   const [timedOut, setTimedOut] = useState(false);
   const [questionCount, setQuestionCount] = useState(0);
+  /** Chip value being submitted — drives loading state on that row. */
   const [selectedChip, setSelectedChip] = useState(null);
   const answerRef = useRef(null);
   const hasFiredRef = useRef(false);
 
-  // Auto-focus clarifying answer input when it appears
+  // Auto-focus custom answer textarea when clarifying phase loads
   useEffect(() => {
     if (phase === "clarifying") answerRef.current?.focus();
   }, [phase]);
 
   // Progressive loading messages — advance through LOADING_MESSAGES while analyzing.
-  // Timers are cleared as soon as phase changes (intake returned or error).
   useEffect(() => {
     if (phase !== "analyzing") return;
 
@@ -86,15 +78,13 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
     let cumulative = 0;
     for (let i = 1; i < LOADING_MESSAGES.length; i++) {
       cumulative += LOADING_DELAYS[i - 1];
-      const idx = i; // capture
+      const idx = i;
       const id = setTimeout(() => {
-        // Only advance if still analyzing (guard against race with fast intake)
         setLoadingMsgIdx((prev) => Math.max(prev, idx));
       }, cumulative);
       ids.push(id);
     }
 
-    // Timeout sentinel — if intake hasn't returned in TIMEOUT_MS, show fallback.
     const timeoutId = setTimeout(() => setTimedOut(true), TIMEOUT_MS);
     ids.push(timeoutId);
 
@@ -102,7 +92,6 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
   }, [phase]);
 
   // On mount: call /api/intake/start with the prompt.
-  // On success, call onComplete directly — no badge confirmation screen.
   useEffect(() => {
     if (hasFiredRef.current) return;
     hasFiredRef.current = true;
@@ -121,16 +110,14 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
         const data = await res.json();
         setSessionId(data.session_id);
 
-        if (data.opening_message) {
-          setOpeningMessage(data.opening_message);
-        }
+        if (data.opening_message) setOpeningMessage(data.opening_message);
+
         if (data.status === "clarifying") {
           setClarifyingQuestion(data.clarifying_question || "");
-          setSuggestedOptions(data.suggested_options || FALLBACK_CHIPS);
+          setSuggestedOptions(data.suggested_options || []);
           setQuestionCount((prev) => prev + 1);
           setPhase("clarifying");
         } else {
-          // Fix 3: transition immediately — don't wait for user to confirm badge screen.
           if (typeof onComplete === "function") {
             onComplete({ ...(data.config || {}), tier: "smart" });
           }
@@ -142,11 +129,14 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
     })();
   }, [initialUserMessage, onComplete]);
 
-  const submitAnswer = useCallback(async () => {
-    const text = answer.trim();
+  /**
+   * Submit an answer. Accepts an optional overrideValue for direct chip submits
+   * so we don't depend on async state settling.
+   */
+  const submitAnswer = useCallback(async (overrideValue) => {
+    const text = (overrideValue !== undefined ? overrideValue : answer).trim();
     if (!text || !sessionId || submittingAnswer) return;
     setSubmittingAnswer(true);
-    setSelectedChip(null);
     setError(null);
     try {
       const res = await fetch(`${API_BASE}/api/intake/respond`, {
@@ -165,7 +155,6 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
           onComplete({ ...(data.config || {}), tier: "smart" });
         }
       } else if (data.status === "clarifying") {
-        // Show the next clarifying question
         setAnswer("");
         setSelectedChip(null);
         setClarifyingQuestion(data.clarifying_question || "");
@@ -175,6 +164,7 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
       }
     } catch (e) {
       setError(e.message || "Submit failed");
+      setSelectedChip(null);
     } finally {
       setSubmittingAnswer(false);
     }
@@ -187,142 +177,176 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
         onSaveExit={typeof onBack === "function" ? onBack : undefined}
       />
 
-      <div className="mx-auto flex w-full max-w-xl flex-1 flex-col items-center justify-center px-6">
-        {/* ── Analyzing ── */}
-        {phase === "analyzing" && (
-          <div className="space-y-4 text-center">
-            {timedOut ? (
-              /* Fix 2: timeout fallback */
-              <div className="space-y-4">
-                <p className="text-sm text-[#888888]">Taking longer than usual...</p>
+      {/* YOUR PROMPT — persistent strip always visible above the Q&A */}
+      <div className="shrink-0 border-b border-[#1a1a1a] px-6 py-3">
+        <p className="text-[10px] font-semibold uppercase tracking-widest text-[#555555]">Your prompt</p>
+        <p className="mt-0.5 truncate text-sm text-[#888888]">{initialUserMessage}</p>
+      </div>
+
+      {/* Scrollable content area */}
+      <div className="flex-1 overflow-y-auto">
+        <div className="mx-auto w-full max-w-xl px-6">
+
+          {/* ── Analyzing ── */}
+          {phase === "analyzing" && (
+            <div className="flex min-h-full items-center justify-center py-20">
+              <div className="space-y-4 text-center">
+                {timedOut ? (
+                  <div className="space-y-4">
+                    <p className="text-sm text-[#888888]">Taking longer than usual...</p>
+                    {typeof onBack === "function" && (
+                      <button
+                        type="button"
+                        onClick={onBack}
+                        className="rounded-lg border border-[#444444] px-5 py-2 text-sm text-[#e8e8e8] transition-colors hover:border-[#F5A623] hover:text-[#F5A623] focus:outline-none"
+                      >
+                        Cancel and try again
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <>
+                    <div>
+                      <p className="text-sm text-[#e8e8e8]">{LOADING_MESSAGES[loadingMsgIdx]}</p>
+                      <p className="mt-1 text-xs text-[#555555]">This usually takes 3–5 seconds</p>
+                    </div>
+                    <div className="mx-auto h-1 w-24 overflow-hidden rounded-full bg-[#2a2a2a]">
+                      <div className="h-full animate-pulse rounded-full bg-[#F5A623]" />
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* ── Clarifying question ── */}
+          {phase === "clarifying" && (
+            <div className="space-y-6 py-10">
+
+              {/* Progress segments */}
+              <div className="flex items-center gap-1.5">
+                {Array.from({ length: MAX_QUESTIONS }).map((_, i) => (
+                  <div
+                    key={i}
+                    className={`h-1 w-8 rounded-full transition-colors duration-300 ${
+                      i < questionCount - 1
+                        ? "bg-[#F5A623]"
+                        : i === questionCount - 1
+                        ? "bg-[#F5A623] opacity-50"
+                        : "bg-[#2a2a2a]"
+                    }`}
+                  />
+                ))}
+                <span className="ml-1 text-xs text-[#888888]">Question {questionCount}</span>
+              </div>
+
+              {/* Opening framing — shown when server provides it */}
+              {openingMessage && (
+                <p className="text-sm leading-relaxed text-[#aaaaaa]">{openingMessage}</p>
+              )}
+
+              {/* Clarifying question — primary text */}
+              <p className="text-[1.0625rem] font-medium leading-relaxed text-[#e8e8e8]">
+                {clarifyingQuestion}
+              </p>
+
+              {/* Answer option rows — each chip is a direct submit */}
+              {suggestedOptions.length > 0 && (
+                <div className="space-y-2">
+                  {suggestedOptions.map((chip) => {
+                    const isSubmitting = chip === selectedChip && submittingAnswer;
+                    return (
+                      <button
+                        key={chip}
+                        type="button"
+                        disabled={submittingAnswer}
+                        onClick={() => {
+                          setSelectedChip(chip);
+                          submitAnswer(chip);
+                        }}
+                        className={`w-full rounded-lg border px-4 py-3 text-left text-sm transition-all focus:outline-none disabled:cursor-not-allowed ${
+                          chip === selectedChip
+                            ? "border-[#F5A623] bg-[#1e1a12] text-[#F5A623]"
+                            : "border-[#2a2a2a] bg-[#141414] text-[#cccccc] hover:border-[#3a3a3a] hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
+                        }`}
+                      >
+                        <span className="flex items-center justify-between">
+                          {chip}
+                          {isSubmitting && (
+                            <span className="text-xs text-[#F5A623] opacity-70">...</span>
+                          )}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Divider — separates option rows from free-form textarea */}
+              <div className="flex items-center gap-3">
+                <hr className="flex-1 border-0 border-t border-[#2a2a2a]" />
+                <span className="text-xs text-[#777777]">
+                  {suggestedOptions.length > 0 ? "or type your own" : "type your answer"}
+                </span>
+                <hr className="flex-1 border-0 border-t border-[#2a2a2a]" />
+              </div>
+
+              {/* Free-form answer */}
+              <form
+                onSubmit={(e) => { e.preventDefault(); submitAnswer(); }}
+                className="flex gap-2"
+              >
+                <label htmlFor="clarify-answer" className="sr-only">Your answer</label>
+                <textarea
+                  id="clarify-answer"
+                  ref={answerRef}
+                  rows={3}
+                  value={answer}
+                  onChange={(e) => setAnswer(e.target.value)}
+                  disabled={submittingAnswer}
+                  placeholder={suggestedOptions.length > 0 ? "Add detail or type a different answer…" : "Your answer…"}
+                  className="min-h-[2.75rem] min-w-0 flex-1 resize-y rounded-lg border border-[#2a2a2a] bg-[#141414] px-3 py-2 text-sm text-[#e8e8e8] placeholder:text-[#444444] focus:border-[#6B6B6B] focus:outline-none disabled:opacity-60"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      submitAnswer();
+                    }
+                  }}
+                />
+                <button
+                  type="submit"
+                  disabled={submittingAnswer || !answer.trim()}
+                  style={{ background: "#F5A623", color: "#0d0d0d" }}
+                  className="inline-flex h-10 w-10 shrink-0 items-center justify-center self-start rounded-lg font-bold transition-opacity hover:opacity-90 focus:outline-none disabled:opacity-40"
+                  aria-label={submittingAnswer ? "Submitting" : "Submit answer"}
+                >
+                  <span aria-hidden>{submittingAnswer && !selectedChip ? "…" : "→"}</span>
+                </button>
+              </form>
+
+              {error && <p className="text-sm text-red-400" role="alert">{error}</p>}
+            </div>
+          )}
+
+          {/* ── Error ── */}
+          {phase === "error" && (
+            <div className="flex min-h-full items-center justify-center py-20">
+              <div className="w-full space-y-4 text-center">
+                <p className="text-sm text-red-400">{error}</p>
                 {typeof onBack === "function" && (
                   <button
                     type="button"
                     onClick={onBack}
-                    className="rounded-lg border border-[#444444] px-5 py-2 text-sm text-[#e8e8e8] transition-colors hover:border-[#F5A623] hover:text-[#F5A623] focus:outline-none"
+                    className="text-sm text-[#888888] hover:text-[#e8e8e8] focus:outline-none"
                   >
-                    Cancel and try again
+                    ← Back
                   </button>
                 )}
               </div>
-            ) : (
-              /* Fix 1: progressive messages */
-              <>
-                <div>
-                  <p className="text-sm text-[#e8e8e8]">{LOADING_MESSAGES[loadingMsgIdx]}</p>
-                  <p className="mt-1 text-xs text-[#555555]">This usually takes 3-5 seconds</p>
-                </div>
-                <div className="mx-auto h-1 w-24 overflow-hidden rounded-full bg-[#2a2a2a]">
-                  <div className="h-full animate-pulse rounded-full bg-[#F5A623]" />
-                </div>
-              </>
-            )}
-          </div>
-        )}
-
-        {/* ── Clarifying question ── */}
-        {phase === "clarifying" && (
-          <div className="w-full space-y-5">
-            {/* Opening framing — shown when server provides it */}
-            {openingMessage && (
-              <p className="text-sm leading-relaxed text-[#888888]">{openingMessage}</p>
-            )}
-
-            {/* Prompt echo */}
-            <div className="rounded-lg border border-[#2a2a2a] bg-[#1e1e1e] px-4 py-3">
-              <p className="mb-1 text-xs font-medium uppercase tracking-wide text-[#888888]">Your prompt</p>
-              <p className="text-sm leading-relaxed text-[#e8e8e8]">{initialUserMessage}</p>
             </div>
+          )}
 
-            {/* Clarifying question */}
-            <div>
-              <p className="mb-1 text-xs font-medium uppercase tracking-wide text-[#888888]">Question {questionCount}</p>
-              <p className="text-[0.9375rem] leading-relaxed text-[#e8e8e8]">{clarifyingQuestion}</p>
-            </div>
-
-            {/* Contextual quick-reply chips — driven by model's suggested_options */}
-            {suggestedOptions.length > 0 && (
-              <div className="flex flex-wrap gap-2">
-                {suggestedOptions.map((chip) => {
-                  const isSelected = chip === selectedChip;
-                  return (
-                    <button
-                      key={chip}
-                      type="button"
-                      disabled={submittingAnswer}
-                      onClick={() => {
-                        setSelectedChip(chip);
-                        setAnswer(chip);
-                        answerRef.current?.focus();
-                      }}
-                      style={isSelected ? { background: "#F5A623", color: "#0d0d0d", borderColor: "#F5A623" } : undefined}
-                      className="rounded-full border border-[#3a3a3a] bg-[#1e1e1e] px-3 py-1 text-xs text-[#aaaaaa] transition-colors hover:border-[#F5A623] hover:text-[#F5A623] focus:outline-none disabled:opacity-40"
-                    >
-                      {chip}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-
-            {/* Answer input */}
-            <form
-              onSubmit={(e) => { e.preventDefault(); submitAnswer(); }}
-              className="flex gap-2"
-            >
-              <label htmlFor="clarify-answer" className="sr-only">Your answer</label>
-              <textarea
-                id="clarify-answer"
-                ref={answerRef}
-                rows={3}
-                value={answer}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  setAnswer(val);
-                  if (selectedChip !== null && val !== selectedChip) {
-                    setSelectedChip(null);
-                  }
-                }}
-                disabled={submittingAnswer}
-                placeholder="Your answer…"
-                className="min-h-[2.75rem] min-w-0 flex-1 resize-y rounded-lg border border-[#2a2a2a] bg-[#1e1e1e] px-3 py-2 text-sm text-[#e8e8e8] placeholder:text-[#888888] focus:border-[#6B6B6B] focus:outline-none disabled:opacity-60"
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    submitAnswer();
-                  }
-                }}
-              />
-              <button
-                type="submit"
-                disabled={submittingAnswer || !answer.trim()}
-                style={{ background: "#F5A623", color: "#0d0d0d" }}
-                className="inline-flex h-10 w-10 shrink-0 items-center justify-center self-start rounded-lg font-bold transition-opacity hover:opacity-90 focus:outline-none disabled:opacity-40"
-                aria-label={submittingAnswer ? "Submitting" : "Submit answer"}
-              >
-                <span aria-hidden>{submittingAnswer ? "…" : "→"}</span>
-              </button>
-            </form>
-
-            {error && <p className="text-sm text-red-400" role="alert">{error}</p>}
-          </div>
-        )}
-
-        {/* ── Error ── */}
-        {phase === "error" && (
-          <div className="w-full space-y-4 text-center">
-            <p className="text-sm text-red-400">{error}</p>
-            {typeof onBack === "function" && (
-              <button
-                type="button"
-                onClick={onBack}
-                className="text-sm text-[#888888] hover:text-[#e8e8e8] focus:outline-none"
-              >
-                ← Back
-              </button>
-            )}
-          </div>
-        )}
+        </div>
       </div>
     </div>
   );
