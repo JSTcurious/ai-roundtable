@@ -1102,15 +1102,24 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
                 placeholder="Describe what to change…"
                 className="w-full resize-y rounded-lg border border-[#2a2a2a] bg-[#1e1e1e] px-3 py-2 text-sm text-[#e8e8e8] placeholder:text-[#888888] focus:border-[#6B6B6B] focus:outline-none"
               />
-              <button
-                type="button"
-                disabled={!reviewAdjustText.trim()}
-                onClick={handleReviewAdjust}
-                style={{ background: "#F5A623", color: "#0d0d0d" }}
-                className="rounded-lg px-5 py-2 text-sm font-semibold transition-opacity hover:opacity-90 focus:outline-none disabled:opacity-40"
-              >
-                Submit Adjustment →
-              </button>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  disabled={!reviewAdjustText.trim()}
+                  onClick={handleReviewAdjust}
+                  style={{ background: "#F5A623", color: "#0d0d0d" }}
+                  className="rounded-lg px-5 py-2 text-sm font-semibold transition-opacity hover:opacity-90 focus:outline-none disabled:opacity-40"
+                >
+                  Submit Adjustment →
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setReviewAdjusting(false); setReviewAdjustText(""); }}
+                  className="text-sm text-[#888888] hover:text-[#e8e8e8] focus:outline-none"
+                >
+                  Never mind
+                </button>
+              </div>
             </div>
           )}
 
