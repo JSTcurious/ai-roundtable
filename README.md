@@ -37,6 +37,22 @@ Claude:  [synthesizes the full conversation]
 
 ---
 
+## The Panel
+
+Each model is assigned a distinct cognitive role — not a function, a thinking mode. They research independently with no shared awareness, then Claude synthesizes across all four.
+
+| Model | Role | Mandate |
+|-------|------|---------|
+| Claude | Analyst | Reasons from first principles |
+| Gemini | Scout | Finds angles and options others miss |
+| GPT | Pragmatist | Grounds ideas in concrete reality |
+| Grok | Challenger | Stress-tests the premise itself |
+| Perplexity | Fact-checker | Verifies every claim against live web data |
+
+You are in the chair. The synthesis is the starting point of your dialogue, not the end of it.
+
+---
+
 ## Epistemic Design Decision
 
 ai-roundtable uses **epistemic transparency, not epistemic suppression**.
@@ -176,7 +192,7 @@ npm start
 # Runs on http://localhost:3000
 ```
 
-Open `http://localhost:3000`. Type a question, choose AS-IS PROMPT or REFINED PROMPT, and start the session.
+Open `http://localhost:3000`. Type your question, complete the short intake conversation, review and approve the research brief, then the panel begins.
 
 ---
 
@@ -199,12 +215,11 @@ Prior art timestamped on LinkedIn:
 **v1 (current)** — GitHub Models free tier, three providers, @mention routing, shared transcript
 
 **v2 (shipped April 2026)**
-- Thorough intake — Claude understands what you need before any model is invoked; optimized prompt shown for approval
-- Human-in-the-Loop synthesis — Claude surfaces 3-5 observations before synthesizing; chair keeps or overrules each
-- Four providers — Claude (orchestrator) + Gemini + GPT + Perplexity (fact-checker only)
-- Four-stage session progress — PROMPT → TRANSCRIPT → FACT-CHECK → SYNTHESIS with live breadcrumb
-- Three export formats — full session (.md), synthesis only (.md), optimized prompt (.md)
-- Session save and resume — save full transcript + config as .json, reload to continue
+- Structured intake — multi-turn conversation; Claude asks domain-specific questions, mirrors back assumptions, constructs an optimized research brief
+- Four cognitive roles — Claude (Analyst), Gemini (Scout), GPT (Pragmatist), Grok (Challenger) research in parallel; Perplexity fact-checks every claim live
+- Six-stage session progress — PROMPT → REVIEW → RESEARCH → FACT-CHECK → DIALOGUE → FINAL ANSWER with live breadcrumb
+- Auto-triggered synthesis — Claude synthesizes all four panel responses after fact-check; no user gate required
+- Dialogue loop — user engages with the synthesis draft; Claude refines until user finalises
 - WebSocket streaming — tokens arrive token-by-token; bidirectional for chair dialogue
 - React + FastAPI + direct APIs — no GitHub Models, no wrappers
 
