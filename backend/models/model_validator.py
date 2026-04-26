@@ -14,7 +14,11 @@ check_model_currency():
 
 import logging
 import os
+from pathlib import Path
 from typing import Optional
+
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).parent.parent / ".env", override=True)
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +75,7 @@ def _list_xai_models() -> set:
         response = httpx.get(
             "https://api.x.ai/v1/models",
             headers={
-                "Authorization": f"Bearer {os.environ.get('XAI_API_KEY', '')}"
+                "Authorization": f"Bearer {os.environ.get('GROK_API_KEY', '')}"
             },
             timeout=10,
         )
