@@ -22,11 +22,11 @@ function LandingPage({ onSubmitDescription }) {
   );
 
   const panelRows = [
-    { key: "claude",     name: "Claude",     role: "Lead synthesizer",              nameColor: "#E8712A" },
-    { key: "gemini",     name: "Gemini",     role: "Analytical challenger",         nameColor: "#4285F4" },
-    { key: "gpt",        name: "GPT",        role: "Structured thinker",            nameColor: "#10A37F" },
-    { key: "grok",       name: "Grok",       role: "Lateral thinker + live trends", nameColor: "#1DA1F2" },
-    { key: "perplexity", name: "Perplexity", role: "Independent fact-checker",      nameColor: "#20808D" },
+    { key: "claude",     name: "Claude",     archetype: "Analyst",      descriptor: "reasons from first principles", nameColor: "#E8712A" },
+    { key: "gemini",     name: "Gemini",     archetype: "Scout",        descriptor: "finds angles others miss",      nameColor: "#4285F4" },
+    { key: "gpt",        name: "GPT",        archetype: "Pragmatist",   descriptor: "grounds ideas in reality",      nameColor: "#10A37F" },
+    { key: "grok",       name: "Grok",       archetype: "Challenger",   descriptor: "stress-tests the premise",      nameColor: "#1DA1F2" },
+    { key: "perplexity", name: "Perplexity", archetype: "Fact-checker", descriptor: "verifies every claim live",     nameColor: "#20808D" },
   ];
 
   return (
@@ -42,7 +42,7 @@ function LandingPage({ onSubmitDescription }) {
           </p>
           {/* Philosophy block */}
           <div
-            className="mx-auto mt-6 max-w-[480px] rounded-lg text-center"
+            className="mx-auto mt-6 max-w-[600px] rounded-lg text-center"
             style={{ background: "#1a1a1a", padding: "16px" }}
           >
             <p style={{ color: "#cccccc", fontSize: "0.85rem", lineHeight: "1.8" }}>Four researchers. One fact-checker. You in the chair.</p>
@@ -82,34 +82,35 @@ function LandingPage({ onSubmitDescription }) {
         {/* 3. Divider */}
         <hr className="my-12 border-0 border-t" style={{ borderColor: "#333333" }} />
 
-        {/* 4. You above the panel */}
-        <div className="mx-auto max-w-xs space-y-5">
-          {/* User — above the team */}
-          <div className="text-center">
-            <p className="text-sm font-semibold uppercase tracking-wide" style={{ color: "#e8e8e8" }}>
-              You are in the Chair.
-            </p>
+        {/* 4. You + Panel in one visual unit */}
+        <div className="mx-auto max-w-[380px] space-y-3">
+          {/* You row */}
+          <div className="flex items-center gap-x-2 text-sm leading-relaxed">
+            <span className="shrink-0" style={{ color: "#555555" }} aria-hidden>•</span>
+            <span className="font-semibold" style={{ color: "#e8e8e8" }}>You</span>
+            <span style={{ color: "#555555" }}>·</span>
+            <span style={{ color: "#888888" }}>in the chair</span>
           </div>
 
-          {/* THE PANEL */}
-          <div>
-            <h2 className="mb-3 text-center text-xs font-semibold uppercase tracking-wide text-text-secondary">
-              The Panel
-            </h2>
-            <div className="space-y-2">
-              {panelRows.map((row) => (
-                <div key={row.key} className="flex items-center gap-x-2 text-sm leading-relaxed">
-                  <span className="shrink-0 text-sm text-[#888888]" aria-hidden>
-                    •
-                  </span>
-                  <span className="font-semibold" style={{ color: row.nameColor }}>
-                    {row.name}
-                  </span>
-                  <span style={{ color: "#e8e8e8" }}>:</span>{" "}
-                  <span className="text-[#888888]">{row.role}</span>
-                </div>
-              ))}
-            </div>
+          {/* THE PANEL inline divider */}
+          <div className="flex items-center gap-3 py-1">
+            <hr className="flex-1 border-0 border-t" style={{ borderColor: "#2a2a2a" }} />
+            <span className="text-xs font-semibold uppercase tracking-widest" style={{ color: "#aaaaaa" }}>The Panel</span>
+            <hr className="flex-1 border-0 border-t" style={{ borderColor: "#2a2a2a" }} />
+          </div>
+
+          {/* Panel rows */}
+          <div className="space-y-3">
+            {panelRows.map((row) => (
+              <div key={row.key} className="flex items-center gap-x-2 text-sm leading-relaxed">
+                <span className="shrink-0" style={{ color: "#555555" }} aria-hidden>•</span>
+                <span className="font-semibold" style={{ color: row.nameColor }}>{row.name}</span>
+                <span style={{ color: "#555555" }}>·</span>
+                <span style={{ color: "#cccccc", fontWeight: 500 }}>{row.archetype}</span>
+                <span style={{ color: "#555555" }}>·</span>
+                <span style={{ color: "#888888" }}>{row.descriptor}</span>
+              </div>
+            ))}
           </div>
         </div>
 
