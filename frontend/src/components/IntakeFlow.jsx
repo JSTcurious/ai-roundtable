@@ -177,10 +177,12 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
         onSaveExit={typeof onBack === "function" ? onBack : undefined}
       />
 
-      {/* YOUR PROMPT — persistent strip always visible above the Q&A */}
-      <div className="shrink-0 border-b border-[#1a1a1a] px-6 py-3">
-        <p className="text-[10px] font-semibold uppercase tracking-widest text-[#555555]">Your prompt</p>
-        <p className="mt-0.5 truncate text-sm text-[#888888]">{initialUserMessage}</p>
+      {/* YOUR PROMPT — persistent strip, content aligned to same column as body */}
+      <div className="shrink-0 border-b border-[#1a1a1a] py-3">
+        <div className="mx-auto w-full max-w-xl px-6">
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-[#555555]">Your prompt</p>
+          <p className="mt-0.5 truncate text-sm text-[#888888]">{initialUserMessage}</p>
+        </div>
       </div>
 
       {/* Scrollable content area */}
@@ -221,7 +223,7 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
 
           {/* ── Clarifying question ── */}
           {phase === "clarifying" && (
-            <div className="space-y-6 py-10">
+            <div className="space-y-6 pt-8 pb-6">
 
               {/* Progress segments */}
               <div className="flex items-center gap-1.5">
@@ -240,8 +242,8 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
                 <span className="ml-1 text-xs text-[#888888]">Question {questionCount}</span>
               </div>
 
-              {/* Opening framing — shown when server provides it */}
-              {openingMessage && (
+              {/* Opening framing — shown on first question only */}
+              {openingMessage && questionCount === 1 && (
                 <p className="text-sm leading-relaxed text-[#aaaaaa]">{openingMessage}</p>
               )}
 
@@ -272,9 +274,9 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
                       >
                         <span className="flex items-center justify-between">
                           {chip}
-                          {isSubmitting && (
-                            <span className="text-xs text-[#F5A623] opacity-70">...</span>
-                          )}
+                          <span className="text-xs opacity-40">
+                            {isSubmitting ? "…" : "›"}
+                          </span>
                         </span>
                       </button>
                     );
@@ -300,7 +302,7 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
                 <textarea
                   id="clarify-answer"
                   ref={answerRef}
-                  rows={3}
+                  rows={2}
                   value={answer}
                   onChange={(e) => setAnswer(e.target.value)}
                   disabled={submittingAnswer}
