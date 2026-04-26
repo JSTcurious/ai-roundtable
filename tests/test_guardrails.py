@@ -330,10 +330,10 @@ def test_synthesis_prompt_contains_all_four_models():
 
 
 def test_claude_round1_system_prompt_has_independence_note():
-    """Claude's round-1 system prompt contains the independence note."""
+    """Claude's round-1 system prompt emphasises independent reasoning."""
     prompt = get_round1_system_prompt("claude")
-    assert "independent research" in prompt
-    assert "not a preview of your synthesis" in prompt
+    assert "independent reasoning" in prompt
+    assert "ANALYST" in prompt
 
 
 def test_synthesis_role_says_four_perspectives():
