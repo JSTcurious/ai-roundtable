@@ -129,12 +129,8 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
     })();
   }, [initialUserMessage, onComplete]);
 
-  /**
-   * Submit an answer. Accepts an optional overrideValue for direct chip submits
-   * so we don't depend on async state settling.
-   */
   const submitAnswer = useCallback(async (overrideValue) => {
-    const text = (overrideValue !== undefined ? overrideValue : answer).trim();
+    const text = (overrideValue !== undefined ? overrideValue : (selectedChip || answer)).trim();
     if (!text || !sessionId || submittingAnswer) return;
     setSubmittingAnswer(true);
     setError(null);
@@ -168,7 +164,7 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
     } finally {
       setSubmittingAnswer(false);
     }
-  }, [answer, sessionId, submittingAnswer, onComplete]);
+  }, [answer, selectedChip, sessionId, submittingAnswer, onComplete]);
 
   return (
     <div className="flex h-[100dvh] min-h-0 flex-col bg-[#0d0d0d] text-[#e8e8e8]">
@@ -252,7 +248,7 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
                 {clarifyingQuestion}
               </p>
 
-              {/* Answer option rows — each chip is a direct submit */}
+              {/* Answer option rows — click to select, → to submit */}
               {suggestedOptions.length > 0 && (
                 <div className="space-y-2">
                   {suggestedOptions.map((chip) => {
@@ -264,7 +260,7 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
                         disabled={submittingAnswer}
                         onClick={() => {
                           setSelectedChip(chip);
-                          submitAnswer(chip);
+                          setAnswer("");
                         }}
                         className={`w-full rounded-lg border px-4 py-3 text-left text-sm transition-all focus:outline-none disabled:cursor-not-allowed ${
                           chip === selectedChip
@@ -304,7 +300,10 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
                   ref={answerRef}
                   rows={2}
                   value={answer}
-                  onChange={(e) => setAnswer(e.target.value)}
+                  onChange={(e) => {
+                    setAnswer(e.target.value);
+                    if (selectedChip) setSelectedChip(null);
+                  }}
                   disabled={submittingAnswer}
                   placeholder={suggestedOptions.length > 0 ? "Add detail or type a different answer…" : "Your answer…"}
                   className="min-h-[2.75rem] min-w-0 flex-1 resize-y rounded-lg border border-[#2a2a2a] bg-[#141414] px-3 py-2 text-sm text-[#e8e8e8] placeholder:text-[#444444] focus:border-[#6B6B6B] focus:outline-none disabled:opacity-60"
@@ -317,14 +316,25 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
                 />
                 <button
                   type="submit"
-                  disabled={submittingAnswer || !answer.trim()}
+                  disabled={submittingAnswer || (!selectedChip && !answer.trim())}
                   style={{ background: "#F5A623", color: "#0d0d0d" }}
                   className="inline-flex h-10 w-10 shrink-0 items-center justify-center self-start rounded-lg font-bold transition-opacity hover:opacity-90 focus:outline-none disabled:opacity-40"
                   aria-label={submittingAnswer ? "Submitting" : "Submit answer"}
                 >
-                  <span aria-hidden>{submittingAnswer && !selectedChip ? "…" : "→"}</span>
+                  <span aria-hidden>{submittingAnswer ? "…" : "→"}</span>
                 </button>
               </form>
+
+              {/* Skip — only shown on open-ended questions with no chip options */}
+              {suggestedOptions.length === 0 && !submittingAnswer && (
+                <button
+                  type="button"
+                  onClick={() => submitAnswer("I'd prefer not to say")}
+                  className="text-xs text-[#555555] hover:text-[#888888] focus:outline-none"
+                >
+                  Skip this question
+                </button>
+              )}
 
               {error && <p className="text-sm text-red-400" role="alert">{error}</p>}
             </div>
