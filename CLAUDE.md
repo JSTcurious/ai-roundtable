@@ -53,13 +53,61 @@ fact-check. User engages with the draft, not a blank textarea.
 - frontend/src/components/SessionView.jsx — session UI, dialogue loop
 - frontend/src/components/SynthesisPanel.jsx — DRAFT/REVISED/FINAL badges
 
+## Prompt architecture
+
+All prompt strings live in backend/prompts.py.
+Never inline prompts in router.py, main.py, or any client module.
+Never redefine wrap_model_response() outside prompts.py.
+
+### Layer 1 — Optimized Brief
+Variable: INTAKE_BRIEF_PROMPT
+Purpose: Converts intake session config into a structured
+research brief for the four-model panel.
+Template variables: {problem}, {output_intent},
+{user_context}, {timeline}, {stakes}
+
+### Layer 2 — Per-Model System Prompts
+Variable: ROUND1_SYSTEM_PROMPTS
+Keys: "claude", "gpt", "gemini", "grok"
+
+Cognitive roles:
+- claude  → ANALYST (first principles reasoning)
+- gpt     → PRAGMATIST (practical, concrete, actionable)
+- gemini  → SCOUT (finds angles and options others miss)
+- grok    → CHALLENGER (stress-tests the premise itself)
+
+All four model responses must be wrapped with
+wrap_model_response() before synthesis injection.
+Do not apply wrapper to Perplexity output.
+
+### Layer 3 — Synthesis
+Variables: SELF_CRITIQUE_PROMPT, SYNTHESIS_PROMPT
+
+Pipeline order (two separate API calls):
+  Step 1: Self-critique (intermediate Claude call)
+  Step 2: Synthesis (final Claude call)
+
+Synthesis output format — four required sections:
+  THE VERDICT
+  THE HINGE
+  WHERE THE PANEL DISAGREED
+  ONE NEXT ACTION
+
+### Prompt rules
+- Never rename prompt variables without updating all call sites
+- Template variables use {curly_brace} syntax
+- [TRANSCRIPT] in Layer 2 prompts marks runtime injection point
+- wrap_model_response() imported from prompts.py only
+- Grok system prompt exists but Grok API key not yet configured
+  — do not remove the prompt, fix the key separately
+
 ## Git workflow
 - Terminal: branch creation and pushing
 - Claude Code: file changes and commits
 - GitHub: PR review and merge
 - Always specify branch name explicitly — never use claude/ prefix
 
-## Branch naming
+## Branch naming:
 feat/description — new features
 fix/description — bug fixes
 docs/description — documentation only
