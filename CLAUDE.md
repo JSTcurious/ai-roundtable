@@ -40,6 +40,10 @@ fact-check. User engages with the draft, not a blank textarea.
 - Persona: Archetype 3 — Thoughtful Analyst (see system prompt)
 - JSON output enforced with explicit format constraints
 - max_tokens=2000 on all intake callers
+- Chip UX: clicking a chip selects it (highlighted), does not submit;
+  → button submits selected chip or free-form textarea text
+- Open-ended questions (no chips) show a "Skip this question" link
+  that submits "I'd prefer not to say" so user is never forced to type
 
 ## Key files
 - backend/main.py — FastAPI app, WebSocket session handler
@@ -49,6 +53,8 @@ fact-check. User engages with the draft, not a blank textarea.
 - backend/models/anthropic_client.py — Claude API client
 - backend/models/model_config.py — all model IDs (single source of truth)
 - backend/models/intake_decision.py — IntakeDecision Pydantic schema
+- frontend/src/components/LandingPage.jsx — landing page; panel member descriptions
+  must stay aligned with cognitive roles in ROUND1_SYSTEM_PROMPTS (router.py)
 - frontend/src/components/IntakeFlow.jsx — intake UI, multi-turn handling
 - frontend/src/components/SessionView.jsx — session UI, dialogue loop
 - frontend/src/components/SynthesisPanel.jsx — DRAFT/REVISED/FINAL badges
