@@ -55,19 +55,19 @@ fact-check. User engages with the draft, not a blank textarea.
 
 ## Prompt architecture
 
-All prompt strings live in backend/prompts.py.
-Never inline prompts in router.py, main.py, or any client module.
-Never redefine wrap_model_response() outside prompts.py.
+All prompt strings live in backend/router.py.
+Never inline prompts in main.py or any client module.
+Never redefine wrap_model_response() outside router.py.
 
 ### Layer 1 — Optimized Brief
-Variable: INTAKE_BRIEF_PROMPT
+Location: backend/models/openai_client.py → _build_intake_system_prompt()
 Purpose: Converts intake session config into a structured
 research brief for the four-model panel.
 Template variables: {problem}, {output_intent},
 {user_context}, {timeline}, {stakes}
 
 ### Layer 2 — Per-Model System Prompts
-Variable: ROUND1_SYSTEM_PROMPTS
+Variable: ROUND1_SYSTEM_PROMPTS in backend/router.py
 Keys: "claude", "gpt", "gemini", "grok"
 
 Cognitive roles:
@@ -81,7 +81,8 @@ wrap_model_response() before synthesis injection.
 Do not apply wrapper to Perplexity output.
 
 ### Layer 3 — Synthesis
-Variables: SELF_CRITIQUE_PROMPT, SYNTHESIS_PROMPT
+Variables: SELF_CRITIQUE_SYSTEM, SYNTHESIS_SYSTEM_PROMPT
+Location: backend/router.py
 
 Pipeline order (two separate API calls):
   Step 1: Self-critique (intermediate Claude call)
@@ -96,10 +97,8 @@ Synthesis output format — four required sections:
 ### Prompt rules
 - Never rename prompt variables without updating all call sites
 - Template variables use {curly_brace} syntax
-- [TRANSCRIPT] in Layer 2 prompts marks runtime injection point
-- wrap_model_response() imported from prompts.py only
-- Grok system prompt exists but Grok API key not yet configured
-  — do not remove the prompt, fix the key separately
+- wrap_model_response() defined in router.py only
+- Never hardcode model IDs — always use model_config.py constants
 
 ## Git workflow
 - Terminal: branch creation and pushing
@@ -107,14 +106,14 @@ Synthesis output format — four required sections:
 - GitHub: PR review and merge
 - Always specify branch name explicitly — never use claude/ prefix
 
-## Branch naming:
+## Branch naming
 feat/description — new features
 fix/description — bug fixes
 docs/description — documentation only
 
 ## Testing
 uv run pytest — always run before committing
-243 tests passing as of April 2026
+250 tests passing as of April 2026
 
 ## Environment
 - Python 3.13 (pinned via .python-version)
@@ -124,14 +123,32 @@ uv run pytest — always run before committing
 - override=True to handle empty shell variables
 
 ## Deployment
-- Backend: Railway (ai-roundtable-backend-production.up.railway.app)
-- Frontend: Railway (ai-roundtable-frontend-production.up.railway.app)
+- Backend: Railway (ai-roundtable-bk-production.up.railway.app)
+- Frontend: Railway (ai-roundtable-frnt-production.up.railway.app)
 - Port: 8080 (set in Railway networking settings)
 - FRONTEND_URL env var set in Railway backend for CORS
 
+## Frontend build
+Railway serves frontend/build/ as a static site — it does NOT
+rebuild from source on deploy. After any frontend JSX/CSS change,
+run a local build and commit the artifacts before pushing to main:
+
+  cd frontend
+  npm run build
+  cd ..
+  git add frontend/build/
+  git commit -m "chore: rebuild frontend for production"
+  git push origin main
+
+Never push frontend code changes without a matching build commit.
+The two must travel together in the same push or Railway will serve
+stale UI.
+
 ## Known issues and notes
 - Gemini 503s intermittently (upstream capacity on preview models)
-- Grok API key not configured (xAI Bearer warning on startup is harmless)
+- Grok API key confirmed loading correctly (PR #35)
+- Grok stale model ID warnings on startup are cosmetic —
+  model aliases resolve correctly at runtime
 - Intake max 7 questions not yet enforced (v2 spec in docs/)
 - Intake v2 architecture spec: docs/INTAKE_V2_SPEC.md
 - Intake v2 PM addendum: docs/INTAKE_V2_PM_ADDENDUM.md
