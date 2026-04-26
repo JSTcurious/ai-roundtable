@@ -276,7 +276,13 @@ function IntakeFlow({ initialUserMessage, onComplete, onBack }) {
                 ref={answerRef}
                 rows={3}
                 value={answer}
-                onChange={(e) => setAnswer(e.target.value)}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setAnswer(val);
+                  if (selectedChip !== null && val !== selectedChip) {
+                    setSelectedChip(null);
+                  }
+                }}
                 disabled={submittingAnswer}
                 placeholder="Your answer…"
                 className="min-h-[2.75rem] min-w-0 flex-1 resize-y rounded-lg border border-[#2a2a2a] bg-[#1e1e1e] px-3 py-2 text-sm text-[#e8e8e8] placeholder:text-[#888888] focus:border-[#6B6B6B] focus:outline-none disabled:opacity-60"
