@@ -1070,10 +1070,10 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
             )}
           </div>
 
-          {/* What I'll research */}
+          {/* What I'll research — capped so buttons stay in view */}
           <div>
             <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#888888]">What I'll research</p>
-            <div className="rounded-lg border border-[#2a2a2a] bg-[#1e1e1e] px-4 py-3 text-sm leading-relaxed text-[#e8e8e8]">
+            <div className="max-h-40 overflow-y-auto rounded-lg border border-[#2a2a2a] bg-[#1e1e1e] px-4 py-3 text-sm leading-relaxed text-[#e8e8e8]">
               {promptReviewData.optimized_prompt}
             </div>
           </div>
@@ -1085,37 +1085,6 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
               <div className="rounded-lg border border-[#2a2a2a] bg-[#1e1e1e] px-4 py-3 text-sm text-[#e8e8e8]">
                 {promptReviewData.output_intent}
               </div>
-            </div>
-          )}
-
-          {/* Still unknown */}
-          {Array.isArray(promptReviewData.open_questions) && promptReviewData.open_questions.length > 0 && (
-            <div>
-              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#888888]">Still unknown</p>
-              <ul className="space-y-1">
-                {promptReviewData.open_questions.map((q, i) => (
-                  <li key={i} className="flex items-start gap-2 text-sm text-[#888888]">
-                    <span className="mt-0.5 shrink-0">⚠</span>
-                    <span>{q}</span>
-                  </li>
-                ))}
-              </ul>
-              <p className="mt-1 text-xs text-[#555555]">The research panel will treat these as open variables.</p>
-            </div>
-          )}
-
-          {/* What I confirmed */}
-          {Array.isArray(promptReviewData.confirmed_assumptions) && promptReviewData.confirmed_assumptions.length > 0 && (
-            <div>
-              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#888888]">What I confirmed with you</p>
-              <ul className="space-y-1">
-                {promptReviewData.confirmed_assumptions.map((a, i) => (
-                  <li key={i} className="flex items-start gap-2 text-sm text-[#888888]">
-                    <span className="mt-0.5 shrink-0 text-[#F5A623]">✓</span>
-                    <span>{a}</span>
-                  </li>
-                ))}
-              </ul>
             </div>
           )}
 
@@ -1145,7 +1114,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
             </div>
           )}
 
-          {/* Action buttons */}
+          {/* Action buttons — placed before supplementary details so they're always in view */}
           {!reviewAdjusting && (
             <div className="flex flex-wrap gap-3">
               <button
@@ -1163,6 +1132,37 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
               >
                 Let me adjust something
               </button>
+            </div>
+          )}
+
+          {/* Still unknown — supplementary, below CTA */}
+          {Array.isArray(promptReviewData.open_questions) && promptReviewData.open_questions.length > 0 && (
+            <div>
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#888888]">Still unknown</p>
+              <ul className="space-y-1">
+                {promptReviewData.open_questions.map((q, i) => (
+                  <li key={i} className="flex items-start gap-2 text-sm text-[#888888]">
+                    <span className="mt-0.5 shrink-0">⚠</span>
+                    <span>{q}</span>
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-1 text-xs text-[#555555]">The research panel will treat these as open variables.</p>
+            </div>
+          )}
+
+          {/* What I confirmed — supplementary, below CTA */}
+          {Array.isArray(promptReviewData.confirmed_assumptions) && promptReviewData.confirmed_assumptions.length > 0 && (
+            <div>
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#888888]">What I confirmed with you</p>
+              <ul className="space-y-1">
+                {promptReviewData.confirmed_assumptions.map((a, i) => (
+                  <li key={i} className="flex items-start gap-2 text-sm text-[#888888]">
+                    <span className="mt-0.5 shrink-0 text-[#F5A623]">✓</span>
+                    <span>{a}</span>
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
         </div>
