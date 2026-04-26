@@ -49,8 +49,10 @@ from backend.router import (
     build_synthesis_prompt,
     build_synthesis_system,
     call_synthesis_refinement,
+    call_self_critique,
     parse_closing_questions,
     select_synthesis_model,
+    perplexity_contradicts_round1,
     USE_CASE_LIBRARY,
     get_use_case,
 )
@@ -1181,11 +1183,31 @@ async def session_websocket(websocket: WebSocket):
             "factcheck_availability": _fc_avail,
         })
 
+        # ── Self-critique pre-flight ──────────────────────────────────────────
+        # A fast Sonnet call audits round-1 quality before synthesis begins.
+        # The critique notes are injected into the synthesis system prompt so
+        # Claude addresses flagged gaps and unsupported claims in its verdict.
+        try:
+            round1_for_critique = {
+                "gemini": gemini_text,
+                "gpt":    gpt_text,
+                "grok":   grok_text,
+                "claude": claude_r1_text,
+            }
+            critique_notes = await call_self_critique(
+                round1_responses=round1_for_critique,
+                perplexity_findings=audit_text,
+                contradiction_flag=perplexity_contradicts_round1(audit_text),
+            )
+        except Exception as exc:
+            print(f"[self-critique] failed ({exc}) — continuing without", flush=True)
+            critique_notes = None
+
         # ── Synthesis draft — fires automatically after fact-check ────────────
         # No user gate. The user refines via the dialogue loop below.
         synthesis_model_id, synthesis_route = select_synthesis_model(audit_text)
         synthesis_system = build_synthesis_system(
-            citations=citations, audit_text=audit_text
+            citations=citations, audit_text=audit_text, critique_notes=critique_notes
         )
         synthesis_messages = [{"role": "user", "content": prompt}]
 
