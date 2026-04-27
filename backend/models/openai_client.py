@@ -331,6 +331,11 @@ optimized_prompt: A structured research brief for four AI research
   stakes, general research = standard). Reflect stakes in how
   you frame the tension and wrong-answer sections.
 
+  If the Q&A history contains an answer to "Tell me a bit about
+  yourself", include a "User background: [their answer]" line
+  in the brief, positioned immediately after the decision
+  statement and before THE TENSION.
+
   Populate using: problem (user's original prompt + intake answers),
   output_intent, user_context, timeline_pressure from what you
   gathered in intake.

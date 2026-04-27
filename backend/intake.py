@@ -81,6 +81,23 @@ _OUTPUT_INTENT_FALLBACK: dict = {
     ],
 }
 
+BACKGROUND_CONTEXT_QUESTION: dict = {
+    "question": (
+        "Tell me a bit about yourself — your current role, "
+        "relevant background, and what you're working on. "
+        "This helps the panel give you advice that fits your actual situation."
+    ),
+    "options": [
+        "Software / Data Engineer transitioning to AI",
+        "Product Manager exploring AI tools",
+        "Founder / Independent builder",
+        "Student or early career",
+        "Other — I'll type it",
+    ],
+}
+
+BACKGROUND_CONTEXT_DEFAULT = "Not provided — treat as general professional context"
+
 FALLBACK_QUESTIONS: dict[str, list[dict]] = {
     "immigration_legal": [
         {
@@ -362,6 +379,8 @@ class IntakeSession:
         self.detected_domain: Optional[str] = None
         self._asked_questions: list[str] = []
         self._qa_history: list[tuple[str, str]] = []
+        self._background_context: Optional[str] = None
+        self._background_answered: bool = False
 
     def start(self) -> str:
         """
@@ -391,6 +410,18 @@ class IntakeSession:
         self._original_prompt = prompt
         self.detected_domain = _detect_domain(prompt)
 
+        # Background context question fires first on every session before any
+        # model call. Not counted toward MINIMUM_QUESTIONS_REQUIRED enforcement.
+        if not self._background_answered:
+            q = BACKGROUND_CONTEXT_QUESTION
+            self._clarifying_question = q["question"]
+            return {
+                "status": "clarifying",
+                "clarifying_question": q["question"],
+                "suggested_options": q["options"],
+                "config": None,
+            }
+
         decision, provider_used = call_intake(prompt)
         self._intake_provider = provider_used
         return self._route_decision(decision, context_text=prompt)
@@ -410,12 +441,36 @@ class IntakeSession:
                 "config": self.session_config,
             }
 
+        # Intercept the answer to the pre-flight background context question.
+        # Store it, mark background as answered, then run the real intake model.
+        if not self._background_answered:
+            bg = answer.strip()
+            self._background_context = bg if bg else BACKGROUND_CONTEXT_DEFAULT
+            self._background_answered = True
+            self._clarifying_question = None
+            # Detect domain from the original prompt only — before adding the
+            # background answer to history. Background answers often mention
+            # career words ("transitioning") that would falsely trigger domain
+            # detection if included in the accumulated context at this stage.
+            if self.detected_domain is None:
+                self.detected_domain = _detect_domain(self._original_prompt or "")
+            self._qa_history.append((
+                BACKGROUND_CONTEXT_QUESTION["question"],
+                self._background_context,
+            ))
+            combined = self._build_combined_prompt()
+            decision, provider_used = call_intake(combined)
+            self._intake_provider = provider_used
+            return self._route_decision(decision, context_text=self._accumulated_context())
+
         if self._clarifying_question:
             self._qa_history.append((self._clarifying_question, answer))
 
         # Domain may become detectable only after the user elaborates.
+        # Exclude background Q&A from domain detection — background answers
+        # describe who the user is, not what decision domain they are in.
         if self.detected_domain is None:
-            self.detected_domain = _detect_domain(self._accumulated_context())
+            self.detected_domain = _detect_domain(self._accumulated_context_for_domain())
 
         combined = self._build_combined_prompt()
         decision, provider_used = call_intake(combined)
@@ -509,6 +564,9 @@ class IntakeSession:
         # Close the session.
         self.complete = True
         self.session_config = _decision_to_config(decision)
+        self.session_config["background_context"] = (
+            self._background_context or BACKGROUND_CONTEXT_DEFAULT
+        )
         return {
             "status": "complete",
             "clarifying_question": None,
@@ -544,6 +602,21 @@ class IntakeSession:
         """Concatenate original prompt + all Q/A pairs for domain detection + guard checks."""
         parts: list[str] = [self._original_prompt or ""]
         for q, a in self._qa_history:
+            parts.append(f"Q: {q}\nA: {a}")
+        return "\n".join(parts)
+
+    def _accumulated_context_for_domain(self) -> str:
+        """Like _accumulated_context but strips the background Q&A entry.
+
+        Background answers describe the user's role/career and often contain
+        words like 'transitioning' that would falsely trigger domain detection.
+        Domain should be inferred from what the user is deciding, not who they are.
+        """
+        parts: list[str] = [self._original_prompt or ""]
+        bg_q = BACKGROUND_CONTEXT_QUESTION["question"]
+        for q, a in self._qa_history:
+            if q == bg_q:
+                continue
             parts.append(f"Q: {q}\nA: {a}")
         return "\n".join(parts)
 

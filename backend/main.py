@@ -306,6 +306,9 @@ def _enrich_prompt(base_prompt: str, config: dict) -> str:
       should treat these as open variables, not assume defaults.
     """
     prompt = base_prompt
+    background_context = config.get("background_context") or ""
+    if background_context:
+        prompt += f"\n\nUser background: {background_context}"
     corrected = config.get("corrected_assumptions") or []
     open_qs = config.get("open_questions") or []
     if corrected:
@@ -372,7 +375,9 @@ async def session_run(req: SessionRunRequest):
                 content=msg["content"],
                 round=msg.get("round", "round1"),
             )
-    transcript.add_user_message(req.prompt)
+    # Use the enriched prompt (includes background_context) as the research message
+    # so all four panel models have the user's background as part of their context.
+    transcript.add_user_message(optimized_prompt)
 
     gemini_history = transcript.get_history_for_model("gemini")
     gpt_history    = transcript.get_history_for_model("gpt")
@@ -1021,7 +1026,8 @@ async def session_websocket(websocket: WebSocket):
         tier = "smart"
     health = PipelineHealth()
     optimized_prompt = _enrich_prompt(config.get("optimized_prompt", prompt), config)
-    transcript = _build_transcript(config, history, prompt)
+    # Use enriched prompt so all four panel models have background_context in context.
+    transcript = _build_transcript(config, history, optimized_prompt)
 
     dialogue_queue: asyncio.Queue = asyncio.Queue()
     ping_task = asyncio.create_task(_drain_client_messages(websocket, dialogue_queue))
