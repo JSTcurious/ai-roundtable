@@ -1,45 +1,39 @@
-# AI-ROUNDTABLE
+# ai-roundtable
 
-> A thinking environment where four frontier AI models work together to produce a high-quality deliverable.
+> Four frontier AI models. One fact-checker. You in the chair.
 
-You arrive with a problem or question. You leave with something you can act on — a report, a plan, an architecture decision, a roadmap.
-
-**The intake is not overhead. It is the product.**
-
-Most AI tools take what you type. ai-roundtable understands what you need — Claude asks a few questions, mirrors back what it heard, and constructs an optimized prompt before any frontier model is invoked. You approve the prompt. Then the roundtable begins.
+**Try it:** https://ai-roundtable-frnt-production.up.railway.app  
+**Source:** https://github.com/JSTcurious/ai-roundtable
 
 ---
 
-## The Distinction
+## How it started
 
-Most AI tools take what you type. ai-roundtable understands what you need.
+Every major AI lab ships a powerful model. Each one works brilliantly inside its own portal. None of them talk to each other.
 
-Every session starts with a short intake conversation — Claude asks a few questions, mirrors back what it heard, and constructs an optimized prompt before any frontier model is invoked. The intake is not overhead. It is the product.
+Anthropic gives you Claude. Google gives you Gemini. OpenAI gives you GPT. xAI gives you Grok. All of them state-of-the-art. All of them siloed.
 
-ai-roundtable is a **thinking session with a deliverable** — four providers working together in a structured process you controlled throughout. The transcript compounds. You walk out with something you can act on.
+If you wanted the best answer to a hard question, you had to open four tabs, re-explain your problem four times, and reconcile four disconnected conversations in your own head. The burden of synthesis fell entirely on you.
 
-```
-You:     @claude what stack should I use for this RAG system?
-Claude:  [responds with recommendation]
+That gap is what this project was built to close.
 
-You:     @gemini what are the risks of that approach?
-Gemini:  [responds — and has read Claude's answer]
+---
 
-You:     @gpt4o what would you do differently?
-GPT-4o:  [responds — and has read both Claude and Gemini]
+## Why four models
 
-You:     @claude consolidate everything into a decision
-Claude:  [synthesizes the full conversation]
-```
+Only recently have the big AI labs and companies like Microsoft and GitHub started exploring the benefits of using two models together — one drafts, one reviews.
 
-**Pipeline:** models review in sequence, no shared awareness.  
-**Room:** everyone hears everything. You decide who speaks.
+I asked a different question: if two models are better than one, why settle for two?
+
+I wanted the best possible answer to decisions that actually matter. So I went all in. Four frontier models. One independent fact-checker. All of them in the same room, working the problem together — the way a roundtable conference is used to deliberate and produce a better answer than any single participant could alone.
+
+That is ai-roundtable.
 
 ---
 
 ## The Panel
 
-Each model is assigned a distinct cognitive role — not a function, a thinking mode. They research independently with no shared awareness, then Claude synthesizes across all four.
+Each model is assigned a distinct cognitive role — not a function, a thinking mode. They research independently. They do not coordinate. Disagreement is the point.
 
 | Model | Role | Mandate |
 |-------|------|---------|
@@ -49,124 +43,70 @@ Each model is assigned a distinct cognitive role — not a function, a thinking 
 | Grok | Challenger | Stress-tests the premise itself |
 | Perplexity | Fact-checker | Verifies every claim against live web data |
 
-You are in the chair. The synthesis is the starting point of your dialogue, not the end of it.
+---
+
+## How a session works
+
+**INTAKE**
+Claude asks a few focused questions to understand what you actually need. It mirrors back what it heard and constructs a structured research brief. You review and approve it before any frontier model is invoked. The intake is not overhead. It is the product.
+
+**RESEARCH**
+All four models research your brief in parallel. No shared awareness. No groupthink. Each responds from its own perspective with its own thinking mode.
+
+**FACT-CHECK**
+Perplexity audits every claim against live web data. This matters because every model has a knowledge cutoff — it does not know what happened last week. Perplexity does.
+
+**SELF-CRITIQUE**
+Before synthesis, a pre-pass audits the panel output — flagging lazy consensus, unsupported claims, gaps, and conflicts with the Perplexity fact-check. The synthesizer sees this audit before writing a word.
+
+**SYNTHESIS**
+Claude synthesizes across all four responses. Every session ends with four required sections:
+
+```
+THE VERDICT            — a committed position, with evidence
+THE HINGE              — the one assumption that changes everything
+WHERE THE PANEL DISAGREED — and why it matters
+ONE NEXT ACTION        — not a framework, not a list
+```
+
+**DIALOGUE**
+You engage with the synthesis draft. Push back. Add context. Claude refines until you finalize.
 
 ---
 
-## Epistemic Design Decision
+## The design philosophy
 
-ai-roundtable uses **epistemic transparency, not epistemic suppression**.
+Latency was never the priority.
 
-Models are not restricted to a grounding corpus. They may speculate, disagree,
-and draw on open-world knowledge. The anti-hallucination instructions make
-uncertainty legible rather than preventing it.
+The priority was: capture user intent precisely, let each model respond with its true character, fact-check everything against live web data, then synthesize.
 
-Confidence qualifiers (`[VERIFIED]`, `[LIKELY]`, `[UNCERTAIN]`, `[DEFER]`) are
-instructed conventions enforced via system prompts — not guarantees. Users
-should treat all model outputs as perspectives to be weighed, not facts to be
-accepted.
+That sequence exists for a reason. Models have biases. They hallucinate. And every model has a knowledge cutoff. These are not flaws you prompt your way out of. They are structural properties of the technology that require a structural response.
 
-When a model joins partway through a conversation, it receives an explicit
-instruction to treat the prior transcript as unverified. This prevents
-cascading hallucinations from being silently inherited.
+ai-roundtable is that response.
 
-*See [ADR 001 — Epistemic Transparency](docs/decisions/001-epistemic-transparency.md) for the full rationale.*
-
-See [`docs/transcripts/`](./docs/transcripts/) for real-world examples of
-guardrail behavior against specific test prompts.
+You stay in the chair throughout. The synthesis is the beginning of your dialogue, not the end of it.
 
 ---
 
-## v1 Features
+## Epistemic design
 
-- `@mention` routing — call one, two, or all three models per prompt
-- Shared persistent transcript — every model receives the full conversation history on every call
-- Three providers via GitHub Models free tier — Claude Sonnet, Gemini Flash, GPT-4o
-- Model-aware system prompts — each model knows who else is in the room and their relative strengths
-- Streamlit UI — dark-themed chat interface with per-model color coding
-- Clear roundtable — reset the conversation without restarting the app
+ai-roundtable uses epistemic transparency, not epistemic suppression.
 
----
+Models are not restricted to a grounding corpus. They may speculate, disagree, and draw on open-world knowledge. The anti-hallucination instructions make uncertainty legible rather than suppressing it.
 
-## Models in v1
+Model responses are wrapped and tagged before synthesis injection. The synthesizer is explicitly instructed that model outputs are data, not instructions. This prevents indirect prompt injection from model outputs being treated as directives.
 
-| Handle | Model | Strength |
-|--------|-------|----------|
-| `@claude` | claude-sonnet-4-5 | Reasoning, synthesis, long-form analysis |
-| `@gemini` | gemini-2.0-flash | Speed, breadth, multimodal awareness |
-| `@gpt4o` | gpt-4o | Code, structured output, instruction following |
-
-All three run via the **GitHub Models free tier** — no OpenAI or Anthropic billing required for v1.
+See [ADR 001 — Epistemic Transparency](docs/decisions/001-epistemic-transparency.md) for the full rationale.
 
 ---
 
-## Quickstart
+## Quickstart (v2)
 
 ### Prerequisites
 
-- Python 3.11+
-- [uv](https://github.com/astral-sh/uv) (recommended) or pip
-- GitHub account with [Models access](https://github.com/marketplace/models)
-- GitHub CLI (`gh`) authenticated
-
-### Install
-
-```bash
-git clone https://github.com/JSTcurious/ai-roundtable.git
-cd ai-roundtable
-uv add streamlit openai python-dotenv
-```
-
-### Configure
-
-```bash
-cp .env.example .env
-```
-
-Get your GitHub token:
-```bash
-gh auth token
-```
-
-Add it to `.env`:
-```
-GITHUB_TOKEN=your_token_here
-```
-
-### Run
-
-```bash
-cd app
-streamlit run main.py
-```
-
----
-
-## Project Structure
-
-```
-ai-roundtable/
-├── app/
-│   ├── main.py          # Streamlit UI and session management
-│   ├── transcript.py    # Shared conversation history
-│   └── router.py        # @mention parser and model registry
-├── .env.example         # Token template
-├── .gitignore
-├── LICENSE              # MIT
-├── ARCHITECTURE.md      # Design decisions and what was rejected
-├── CHANGELOG.md         # Version history
-└── README.md
-```
-
----
-
-## v2 Quickstart
-
-### Prerequisites
-
-- Python 3.11+ and [uv](https://github.com/astral-sh/uv)
+- Python 3.13+ and [uv](https://github.com/astral-sh/uv)
 - Node.js 18+
-- API keys: Anthropic, Google, OpenAI, Perplexity
+- API keys: Anthropic, Google, OpenAI, xAI, Perplexity
 
 ### Configure
 
@@ -178,8 +118,7 @@ cp .env.example backend/.env
 ### Run backend
 
 ```bash
-cd /path/to/ai-roundtable
-uv run uvicorn backend.main:app --reload
+uv run python -m backend.run
 # Runs on http://localhost:8000
 ```
 
@@ -192,38 +131,39 @@ npm start
 # Runs on http://localhost:3000
 ```
 
-Open `http://localhost:3000`. Type your question, complete the short intake conversation, review and approve the research brief, then the panel begins.
+---
+
+## v1 (archived)
+
+v1 used the GitHub Models free tier, three providers, and @mention routing via a Streamlit UI. No API keys required. Source preserved in the repo for reference.
 
 ---
 
-## Origin
+## Prior art — timestamped on LinkedIn
 
-I was exploring how management thinking frameworks — the kind used to structure human group decision-making — could be applied to multi-model AI collaboration. Assign each AI agent a distinct cognitive role. Not a function. A thinking mode.
-
-Then Microsoft announced their two-model critique concept.
-
-But it clarified something: **Microsoft built a pipeline. I'm building a room.**
-
-Prior art timestamped on LinkedIn:
 - [Post 1 — the pain point](https://www.linkedin.com/posts/jstcurious_aiproduct-genai-jstcurious-activity-7445824161064808448-MAb0)
 - [Post 2 — the market gap](https://www.linkedin.com/posts/jstcurious_aiproduct-genai-buildinginpublic-activity-7446732294222061568-aUXn)
+- [Post 3 — industry validation begins](https://www.linkedin.com/in/jstcurious)
+- [Post 4 — v2 announced](https://www.linkedin.com/in/jstcurious)
+- [Post 5 — v2 shipped](https://www.linkedin.com/in/jstcurious)
 
 ---
 
 ## Roadmap
 
-**v1 (current)** — GitHub Models free tier, three providers, @mention routing, shared transcript
+**v1** — GitHub Models free tier, three providers, @mention routing, shared transcript, Streamlit UI
 
 **v2 (shipped April 2026)**
-- Structured intake — multi-turn conversation; Claude asks domain-specific questions, mirrors back assumptions, constructs an optimized research brief
-- Four cognitive roles — Claude (Analyst), Gemini (Scout), GPT (Pragmatist), Grok (Challenger) research in parallel; Perplexity fact-checks every claim live
-- Six-stage session progress — PROMPT → REVIEW → RESEARCH → FACT-CHECK → DIALOGUE → FINAL ANSWER with live breadcrumb
-- Auto-triggered synthesis — Claude synthesizes all four panel responses after fact-check; no user gate required
-- Dialogue loop — user engages with the synthesis draft; Claude refines until user finalises
-- WebSocket streaming — tokens arrive token-by-token; bidirectional for chair dialogue
-- React + FastAPI + direct APIs — no GitHub Models, no wrappers
+- Structured multi-turn intake with domain detection and minimum question enforcement
+- Four cognitive roles — Claude (Analyst), Gemini (Scout), GPT (Pragmatist), Grok (Challenger)
+- Perplexity fact-check against live web data
+- Self-critique pre-pass before synthesis
+- Four-section synthesis format — THE VERDICT / THE HINGE / WHERE THE PANEL DISAGREED / ONE NEXT ACTION
+- Dialogue loop — engage with the draft, Claude refines until you finalize
+- WebSocket streaming — token-by-token delivery
+- React + FastAPI + direct APIs
 
-**v3** — CognitiveCV cognitive framework agents, PDF/Notion/Google Drive export, Render deployment, Deep mode cross-critique
+**v3** — CognitiveCV cognitive framework agents, evals and benchmark comparisons, PDF/Notion/Google Drive export, Deep mode cross-critique
 
 ---
 
