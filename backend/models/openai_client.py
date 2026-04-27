@@ -369,6 +369,20 @@ The optimized_prompt must:
 - Preserve ALL user-provided proper nouns exactly
 - Read as if handed to a senior analyst, not typed into a chatbot
 
+MULTI-TRACK RULE: If the user's output intent specifies two or more parallel \
+tracks (e.g. "a career plan AND an immigration sequence", "a technical roadmap \
+AND a risk analysis"), the optimized_prompt MUST close with this exact \
+instruction after the pressure sentence: \
+\
+"TRACK PARITY REQUIRED: This brief has [N] parallel tracks. The panel must \
+address all [N] tracks with equal depth. Track [1]: [name]. Track [2]: [name]. \
+The synthesis must produce a verdict that covers every track. A response that \
+covers one track thoroughly while neglecting another is an incomplete answer \
+regardless of depth." \
+\
+Replace [N] and [name] with the actual count and track names from the user's \
+intake. If only one track exists, do not add this instruction. \
+
 CRITICAL OUTPUT FORMAT: Return raw JSON only. No markdown. \
 No backtick fences. No prose before or after the JSON object. \
 Your response must start with '{' and end with '}'. \

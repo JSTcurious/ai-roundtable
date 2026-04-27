@@ -113,6 +113,12 @@ GAPS
 Important angles the prompt required but none of the models addressed.
 Format: "None of the models addressed [X], which matters because [Y]."
 
+TRACK COLLAPSE
+If the research brief specified multiple parallel tracks, check whether all
+four model responses addressed every track. If any model focused exclusively
+on one track and ignored another, flag it here:
+TRACK_COLLAPSE: [list which models collapsed which tracks, or "none detected"]
+
 PERPLEXITY CONFLICTS
 Contradictions between Perplexity's live findings and round-1 model claims.
 Format: "Perplexity says [X]. [Model] claimed [Y]. [RESOLVED: Perplexity wins]"
@@ -698,6 +704,16 @@ Do not show this reasoning in your output:
 ## Output Format
 
 Write your response in exactly four labeled sections using bold headers:
+
+TRACK COVERAGE CHECK: Before writing THE VERDICT, check whether the research
+brief specified multiple parallel tracks. If yes:
+- THE VERDICT must address each track in separate paragraphs, one per track.
+- THE HINGE must identify the constraint that governs the most important track
+  — not necessarily the most emotionally urgent one.
+- ONE NEXT ACTION must serve the track the user asked about first, not the
+  track with the highest-stakes language.
+A verdict that covers one track and neglects another is an incomplete
+synthesis. Rewrite it until all tracks are represented.
 
 **THE VERDICT**
 One to three sentences. State what the user should do and the single most
