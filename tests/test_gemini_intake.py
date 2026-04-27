@@ -61,7 +61,10 @@ FINAL_DECISION = _decision(
 def test_clear_prompt_completes_in_one_turn():
     with patch("backend.intake.call_intake_sonnet", return_value=CLEAR_DECISION):
         session = IntakeSession()
-        result = session.analyze("How do I design a RAG pipeline?")
+        r0 = session.analyze("How do I design a RAG pipeline?")
+        # Background context question fires first on every session.
+        assert r0["status"] == "clarifying"
+        result = session.respond("Software / Data Engineer transitioning to AI")
 
     assert result["status"] == "complete"
     assert result["config"] is not None
@@ -94,8 +97,11 @@ def test_ambiguous_prompt_returns_clarifying_question():
 def test_clarification_answer_completes_session():
     with patch("backend.intake.call_intake_sonnet", side_effect=[AMBIGUOUS_DECISION, FINAL_DECISION]):
         session = IntakeSession()
-        r1 = session.analyze("I need help with my project")
-        assert r1["status"] == "clarifying"
+        r0 = session.analyze("I need help with my project")
+        assert r0["status"] == "clarifying"  # background context question
+
+        r1 = session.respond("Software / Data Engineer transitioning to AI")
+        assert r1["status"] == "clarifying"  # domain question from AMBIGUOUS_DECISION
 
         r2 = session.respond("A written report for my team")
 
@@ -114,7 +120,8 @@ def test_tier_is_always_smart():
     decision = _decision(tier="smart")
     with patch("backend.intake.call_intake_sonnet", return_value=decision):
         session = IntakeSession()
-        result = session.analyze("Test prompt")
+        session.analyze("Test prompt")
+        result = session.respond("Software / Data Engineer transitioning to AI")
     assert result["config"]["tier"] == "smart"
 
 
@@ -163,7 +170,8 @@ def test_architecture_prompt_maps_to_smart_tier():
     )
     with patch("backend.intake.call_intake_sonnet", return_value=arch_decision):
         session = IntakeSession()
-        result = session.analyze("Design the architecture for a real-time data processing pipeline")
+        session.analyze("Design the architecture for a real-time data processing pipeline")
+        result = session.respond("Software / Data Engineer transitioning to AI")
 
     assert result["config"]["tier"] == "smart"
 
@@ -178,7 +186,8 @@ def test_comparison_prompt_maps_to_smart_tier():
     )
     with patch("backend.intake.call_intake_sonnet", return_value=comparison_decision):
         session = IntakeSession()
-        result = session.analyze("Compare PostgreSQL vs MongoDB for a read-heavy web application")
+        session.analyze("Compare PostgreSQL vs MongoDB for a read-heavy web application")
+        result = session.respond("Software / Data Engineer transitioning to AI")
 
     assert result["config"]["tier"] == "smart"
 
@@ -190,11 +199,14 @@ def test_comparison_prompt_maps_to_smart_tier():
 def test_second_respond_returns_existing_config_without_api_call():
     with patch("backend.intake.call_intake_sonnet", side_effect=[AMBIGUOUS_DECISION, FINAL_DECISION]) as mock_api:
         session = IntakeSession()
-        session.analyze("Ambiguous prompt")
-        session.respond("First answer")
+        session.analyze("Ambiguous prompt")  # background question — no API call
+        session.respond("Software / Data Engineer transitioning to AI")  # bg answer → call #1 (AMBIGUOUS_DECISION)
+        assert mock_api.call_count == 1
+
+        session.respond("First domain answer")  # domain answer → call #2 (FINAL_DECISION)
         assert mock_api.call_count == 2
 
-        # Second respond() — session is already complete, should not call API again
+        # Session is now complete — third respond() must not call API again
         result = session.respond("Another answer")
         assert mock_api.call_count == 2  # no third call
 
@@ -371,7 +383,9 @@ def test_clarifying_question_with_substituted_names_is_detectable():
     """
     with patch("backend.intake.call_intake_sonnet", return_value=_SUBSTITUTED_QUESTION):
         session = IntakeSession()
-        result = session.analyze(_PRICING_PROMPT)
+        session.analyze(_PRICING_PROMPT)
+        # Answer background context question first; domain question comes next.
+        result = session.respond("Software / Data Engineer transitioning to AI")
 
     q = result["clarifying_question"]
     # These assertions should FAIL against the bad response — confirming detection works.
@@ -417,6 +431,9 @@ def test_turn1_optimized_prompt_preserves_original_model_names():
                side_effect=[_INTENT_ONLY_QUESTION, _PRESERVED_FINAL]):
         session = IntakeSession()
         session.analyze(_PRICING_PROMPT)
+        # Answer background context question; _INTENT_ONLY_QUESTION fires as domain question.
+        session.respond("Software / Data Engineer transitioning to AI")
+        # Answer domain question; _PRESERVED_FINAL closes with the preserved prompt.
         result = session.respond("Standard API pricing")
 
     op = result["config"]["optimized_prompt"]
@@ -438,6 +455,9 @@ def test_turn1_substituted_prompt_is_detectable():
                side_effect=[_INTENT_ONLY_QUESTION, _SUBSTITUTED_FINAL]):
         session = IntakeSession()
         session.analyze(_PRICING_PROMPT)
+        # Answer background context question; _INTENT_ONLY_QUESTION fires as domain question.
+        session.respond("Software / Data Engineer transitioning to AI")
+        # Answer domain question; _SUBSTITUTED_FINAL closes with the bad prompt.
         result = session.respond("Standard API pricing")
 
     op = result["config"]["optimized_prompt"]

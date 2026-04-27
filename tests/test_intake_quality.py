@@ -72,7 +72,8 @@ class TestImmigrationGuard:
     def test_intake_guard_fires_on_unknown_visa_type(self):
         """
         If the model returns needs_clarification=False but visa_type is 'unknown',
-        IntakeSession.analyze() must return status='clarifying' with a probing question.
+        the guard must return status='clarifying' with a visa probing question.
+        Background context question fires first; guard fires on the first respond().
         """
         from backend.intake import IntakeSession
 
@@ -85,7 +86,9 @@ class TestImmigrationGuard:
 
         with patch("backend.intake.call_intake", return_value=(decision_with_unknown_visa, "claude")):
             session = IntakeSession()
-            result = session.analyze("I have an active immigration case and am considering leaving my job")
+            bg = session.analyze("I have an active immigration case and am considering leaving my job")
+            assert bg["status"] == "clarifying"  # background context question
+            result = session.respond("Software / Data Engineer transitioning to AI")
 
         assert result["status"] == "clarifying", (
             "Guard should force clarifying status when visa_type is unknown"
@@ -351,8 +354,9 @@ class TestSuggestedOptions:
 
     def test_analyze_includes_suggested_options_in_clarifying_response(self):
         """
-        IntakeSession.analyze() includes 'suggested_options' in the clarifying
-        response dict when the model asks a clarifying question.
+        IntakeSession includes 'suggested_options' in the clarifying response dict
+        when the model asks a clarifying question. Background context question fires
+        first; domain question (with options) comes after the first respond().
         """
         from backend.intake import IntakeSession
         from backend.models.intake_decision import IntakeDecision
@@ -371,7 +375,9 @@ class TestSuggestedOptions:
             "backend.intake.call_intake", return_value=(decision_with_question, "claude")
         ):
             session = IntakeSession()
-            result = session.analyze("I have a visa and want to change jobs")
+            bg = session.analyze("I have a visa and want to change jobs")
+            assert bg["status"] == "clarifying"  # background context question
+            result = session.respond("Software / Data Engineer transitioning to AI")
 
         assert result["status"] == "clarifying"
         assert "suggested_options" in result
@@ -380,7 +386,8 @@ class TestSuggestedOptions:
     def test_immigration_guard_provides_visa_type_options(self):
         """
         When the immigration guard fires (visa_type unknown), the clarifying
-        response includes the standard visa type options.
+        response includes the standard visa type options. Background context
+        question fires first; guard fires on the first respond().
         """
         from backend.intake import IntakeSession
 
@@ -393,7 +400,8 @@ class TestSuggestedOptions:
             "backend.intake.call_intake", return_value=(decision_no_visa, "claude")
         ):
             session = IntakeSession()
-            result = session.analyze("I have an active immigration case and want to leave my job")
+            session.analyze("I have an active immigration case and want to leave my job")
+            result = session.respond("Software / Data Engineer transitioning to AI")
 
         assert result["status"] == "clarifying"
         assert "suggested_options" in result
@@ -412,13 +420,16 @@ class TestMinimumQuestionsEnforcement:
 
     def test_minimum_questions_enforced_immigration(self):
         """
-        Immigration domain requires 3 clarifying turns. If the model returns
-        needs_clarification=False after only 1 answer, intake must NOT close —
-        a fallback question is forced instead.
+        Immigration domain requires 4 clarifying turns. If the model returns
+        needs_clarification=False after only 1 domain answer, intake must NOT
+        close — a fallback question is forced instead.
+
+        Background context question fires first and is not counted toward the
+        per-domain minimum. Turn 0 (first domain question) fires on respond(bg).
         """
         from backend.intake import IntakeSession, MINIMUM_QUESTIONS_REQUIRED
 
-        # Turn 0: model asks a clarifying question (legitimate)
+        # Turn 0: model asks a clarifying question (legitimate, fired after bg answer)
         turn0 = IntakeDecision(
             needs_clarification=True,
             clarifying_question="What visa type are you currently on?",
@@ -437,19 +448,25 @@ class TestMinimumQuestionsEnforcement:
         with patch("backend.intake.call_intake",
                    side_effect=[(turn0, "claude"), (turn1_closed, "claude")]):
             session = IntakeSession()
-            r0 = session.analyze(
-                "I'm on H-1B with pending green card and considering a new job"
-            )
-            assert r0["status"] == "clarifying"
+
+            # Background question fires first — no intake call yet.
+            bg = session.analyze("I'm on H-1B with pending green card and considering a new job")
+            assert bg["status"] == "clarifying"
             assert session.detected_domain == "immigration_legal"
+            assert session.questions_asked == 0  # background not counted
+
+            # Answer background → intake fires turn0 (domain question, questions_asked=1).
+            r0 = session.respond("Software / Data Engineer transitioning to AI")
+            assert r0["status"] == "clarifying"
             assert session.questions_asked == 1
 
+            # Answer domain question → intake fires turn1_closed.
             r1 = session.respond("H-1B with I-140 approved")
 
-        # Model tried to close after 1 answer. Minimum for immigration_legal is 3.
-        # After the forced fallback, questions_asked=2 — still below min=3.
+        # Model tried to close after 1 domain answer. Minimum for immigration_legal is 4.
+        # A fallback question is forced; questions_asked=2 — still below min=4.
         assert r1["status"] == "clarifying", (
-            "Intake must NOT close before immigration_legal minimum (3) is reached"
+            "Intake must NOT close before immigration_legal minimum (4) is reached"
         )
         assert session.complete is False
         assert r1["config"] is None
@@ -461,9 +478,12 @@ class TestMinimumQuestionsEnforcement:
 
     def test_minimum_questions_enforced_career(self):
         """
-        Career-transition domain requires 2 clarifying turns. If the model
-        returns needs_clarification=False after only 1 answer, intake must NOT
-        close — a fallback question is forced instead.
+        Career-transition domain requires 3 clarifying turns. If the model
+        returns needs_clarification=False after only 1 domain answer, intake
+        must NOT close — a fallback question is forced instead.
+
+        Background context question fires first and is not counted toward the
+        per-domain minimum. Turn 0 (first domain question) fires on respond(bg).
         """
         from backend.intake import IntakeSession, MINIMUM_QUESTIONS_REQUIRED
 
@@ -484,20 +504,25 @@ class TestMinimumQuestionsEnforcement:
         with patch("backend.intake.call_intake",
                    side_effect=[(turn0, "claude"), (turn1_closed, "claude")]):
             session = IntakeSession()
-            r0 = session.analyze(
-                "I have a job offer at a new company and need to decide whether to leave"
-            )
-            assert r0["status"] == "clarifying"
+
+            # Background question fires first — no intake call yet.
+            bg = session.analyze("I have a job offer at a new company and need to decide whether to leave")
+            assert bg["status"] == "clarifying"
             assert session.detected_domain == "career_transition"
+            assert session.questions_asked == 0  # background not counted
+
+            # Answer background → intake fires turn0 (domain question, questions_asked=1).
+            r0 = session.respond("Software / Data Engineer transitioning to AI")
+            assert r0["status"] == "clarifying"
             assert session.questions_asked == 1
 
+            # Answer domain question → intake fires turn1_closed.
             r1 = session.respond("Senior backend engineer at a series B")
 
-        # Model tried to close after 1 answer. Minimum for career_transition is 2.
-        # The forced fallback pushes questions_asked to the minimum — the
-        # session is still open because a second answer has not yet arrived.
+        # Model tried to close after 1 domain answer. Minimum for career_transition is 3.
+        # The forced fallback is still open — session needs more turns.
         assert r1["status"] == "clarifying", (
-            "Intake must NOT close before career_transition minimum (2) is reached"
+            "Intake must NOT close before career_transition minimum (3) is reached"
         )
         assert session.complete is False
         assert r1["clarifying_question"] is not None
@@ -509,6 +534,11 @@ class TestMinimumQuestionsEnforcement:
         """
         Once the domain minimum has been met and the model returns
         needs_clarification=False, intake closes normally.
+
+        Background context question fires first (no intake call). The five
+        intake side_effects are consumed by five respond() calls, with the
+        first respond() answering the background question and triggering the
+        first domain question.
         """
         from backend.intake import IntakeSession, MINIMUM_QUESTIONS_REQUIRED
 
@@ -532,15 +562,16 @@ class TestMinimumQuestionsEnforcement:
         with patch(
             "backend.intake.call_intake",
             side_effect=[
-                (q("What visa type are you on?"), "claude"),
-                (q("What stage is your case at?"), "claude"),
-                (q("Has the new employer confirmed sponsorship?"), "claude"),
-                (q("What do you want to walk away with?"), "claude"),
-                (final, "claude"),
+                (q("What visa type are you on?"), "claude"),          # respond(bg)
+                (q("What stage is your case at?"), "claude"),         # respond("H-1B")
+                (q("Has the new employer confirmed sponsorship?"), "claude"),  # respond("I-140 approved")
+                (q("What do you want to walk away with?"), "claude"), # respond("Yes, confirmed")
+                (final, "claude"),                                    # respond("A clear recommendation")
             ],
         ):
             session = IntakeSession()
             session.analyze("I'm on H-1B with a green card pending and considering a new job")
+            session.respond("Software / Data Engineer transitioning to AI")  # bg answer
             session.respond("H-1B")
             session.respond("I-140 approved")
             session.respond("Yes, confirmed sponsorship")
