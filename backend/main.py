@@ -1212,10 +1212,19 @@ async def session_websocket(websocket: WebSocket):
         # ── Synthesis draft — fires automatically after fact-check ────────────
         # No user gate. The user refines via the dialogue loop below.
         synthesis_model_id, synthesis_route = select_synthesis_model(audit_text)
+        research_context = {
+            "gemini": gemini_text,
+            "gpt":    gpt_text,
+            "grok":   grok_text,
+            "claude": claude_r1_text,
+        }
         synthesis_system = build_synthesis_system(
-            citations=citations, audit_text=audit_text, critique_notes=critique_notes
+            citations=citations,
+            audit_text=audit_text,
+            critique_notes=critique_notes,
+            round1_responses=research_context,
         )
-        synthesis_messages = [{"role": "user", "content": prompt}]
+        synthesis_messages = [{"role": "user", "content": optimized_prompt}]
 
         await websocket.send_json({"type": "synthesis_thinking"})
         try:
@@ -1240,12 +1249,6 @@ async def session_websocket(websocket: WebSocket):
         current_synthesis, closing_questions = parse_closing_questions(raw_synthesis)
         revision_count = 0
         dialogue_history = [{"role": "assistant", "content": current_synthesis}]
-        research_context = {
-            "gemini": gemini_text,
-            "gpt":    gpt_text,
-            "grok":   grok_text,
-            "claude": claude_r1_text,
-        }
 
         await websocket.send_json({
             "type": "synthesis_draft",
@@ -1289,6 +1292,7 @@ async def session_websocket(websocket: WebSocket):
                         research_context=research_context,
                         audit_context=audit_text,
                         citations=citations,
+                        optimized_prompt=optimized_prompt,
                     )
                 except Exception as exc:
                     refined = {

@@ -838,6 +838,7 @@ async def call_synthesis_refinement(
     research_context: dict = None,
     audit_context: str = "",
     citations: list = None,
+    optimized_prompt: str = "",
 ) -> dict:
     """
     Call Claude Opus to refine the current synthesis based on user dialogue.
@@ -849,6 +850,7 @@ async def call_synthesis_refinement(
         research_context:   dict of round-1 model responses, for context
         audit_context:      Perplexity audit text
         citations:          ordered source URLs for inline [n] markers
+        optimized_prompt:   the intake brief the synthesis answered
 
     Returns:
         {"content": str, "closing_questions": list[str]}
@@ -858,12 +860,7 @@ async def call_synthesis_refinement(
 
     # Assemble the system prompt. The original synthesis system gives the model
     # full research/audit context; the refinement block layers the dialogue rules.
-    research_context = research_context or {}
-    round1_block = "\n\n".join(
-        f"{model.capitalize()}: {(text or '').strip()[:2000]}"
-        for model, text in research_context.items()
-        if (text or "").strip()
-    ) or "(no research context available)"
+    round1_block = _format_round1_responses(research_context or {})
 
     citation_lines = ""
     if citations:
@@ -884,6 +881,8 @@ async def call_synthesis_refinement(
     # dialogue_history already contains the assistant synthesis + user push-back,
     # but we ensure the original synthesis is present as grounding.
     messages = []
+    if optimized_prompt:
+        messages.append({"role": "user", "content": optimized_prompt})
     if not dialogue_history or dialogue_history[0].get("role") != "assistant":
         messages.append({"role": "assistant", "content": original_synthesis})
     messages.extend(dialogue_history)
@@ -957,6 +956,7 @@ def build_synthesis_system(
     citations: list = None,
     audit_text: str = None,
     critique_notes: str = None,
+    round1_responses: dict = None,
 ) -> str:
     """
     Assemble the synthesis system prompt for the initial synthesis draft.
@@ -978,6 +978,8 @@ def build_synthesis_system(
         critique_notes: output from call_self_critique(). When provided,
             injected as a pre-synthesis quality audit so Claude knows
             which claims to scrutinise before writing its verdict.
+        round1_responses: {model_name: response_text} for the four panel
+            models. Each is wrapped with wrap_model_response().
 
     Returns:
         Complete synthesis system prompt string.
@@ -992,6 +994,14 @@ def build_synthesis_system(
             "The following issues were flagged. Address each one explicitly in your "
             "synthesis — do not ignore flagged claims or gaps.\n\n"
             f"{critique_notes.strip()}\n"
+        )
+
+    # ── Round-1 panel responses ───────────────────────────────────────────────
+    research_section = ""
+    if round1_responses:
+        research_section = (
+            "\n## Round-1 panel responses\n\n"
+            f"{_format_round1_responses(round1_responses)}\n"
         )
 
     # ── Perplexity audit section ──────────────────────────────────────────────
@@ -1023,6 +1033,7 @@ def build_synthesis_system(
     return (
         SYNTHESIS_SYSTEM_PROMPT
         + critique_section
+        + research_section
         + perplexity_section
         + citation_section
     )

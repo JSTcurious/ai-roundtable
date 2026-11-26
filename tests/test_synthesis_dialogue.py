@@ -218,3 +218,101 @@ class TestBuildSynthesisSystem:
         from backend.router import SYNTHESIS_SYSTEM_PROMPT
         assert "Closing Questions" in SYNTHESIS_SYSTEM_PROMPT
         assert "?" in SYNTHESIS_SYSTEM_PROMPT
+
+
+# ── Synthesis receives the panel and the brief ───────────────────────────────
+
+class TestSynthesisInputs:
+    def test_build_synthesis_system_includes_wrapped_round1(self):
+        from backend.router import build_synthesis_system
+        prompt = build_synthesis_system(
+            round1_responses={"gemini": "GEMINI_TEXT", "grok": "GROK_TEXT"}
+        )
+        assert '<research_response source="Gemini">' in prompt
+        assert '<research_response source="Grok">' in prompt
+        assert "GEMINI_TEXT" in prompt and "GROK_TEXT" in prompt
+
+    def test_refinement_gets_brief_and_full_wrapped_research(self):
+        import asyncio
+        from backend import router
+
+        long_text = "x" * 5000 + "END_MARKER"
+        fake = MagicMock()
+        fake.content = [MagicMock(text="Revised.")]
+        with patch("backend.models.anthropic_client.call_claude", return_value=fake) as mock_call:
+            asyncio.run(router.call_synthesis_refinement(
+                original_synthesis="Draft.",
+                dialogue_history=[
+                    {"role": "assistant", "content": "Draft."},
+                    {"role": "user", "content": "push"},
+                ],
+                user_message="push",
+                research_context={"gpt": long_text},
+                optimized_prompt="THE BRIEF",
+            ))
+        kwargs = mock_call.call_args.kwargs
+        assert kwargs["messages"][0] == {"role": "user", "content": "THE BRIEF"}
+        assert '<research_response source="Gpt">' in kwargs["system"]
+        assert "END_MARKER" in kwargs["system"]
+
+
+class TestSessionSynthesisWiring:
+    """Drive /ws/session with mocked models and inspect what synthesis receives."""
+
+    BRIEF = "Career track and immigration track. TRACK PARITY REQUIRED: 2 tracks."
+
+    def _run_session(self, refine: bool = False):
+        from fastapi.testclient import TestClient
+        from backend import main
+
+        def r1(text):
+            return AsyncMock(return_value=(text, "primary"))
+
+        synth = AsyncMock(return_value="THE VERDICT\nbody\n\n? Does this fit?")
+        refinement = AsyncMock(return_value={"content": "Revised", "closing_questions": []})
+        with patch.object(main, "call_research_gemini_async", r1("GEMINI_R1")), \
+             patch.object(main, "call_research_gpt_async", r1("GPT_R1")), \
+             patch.object(main, "call_research_grok_async", r1("GROK_R1")), \
+             patch.object(main, "call_research_claude_async", r1("CLAUDE_R1")), \
+             patch.object(main, "perplexity_research", MagicMock(return_value="pre")), \
+             patch.object(main, "audit_with_fallback", MagicMock(return_value=("AUDIT", "primary", []))), \
+             patch.object(main, "call_self_critique", AsyncMock(return_value="- critique")), \
+             patch.object(main, "call_synthesis_async", synth), \
+             patch.object(main, "call_synthesis_refinement", refinement):
+            client = TestClient(main.app)
+            with client.websocket_connect("/ws/session") as ws:
+                ws.send_json({
+                    "prompt": "raw user prompt",
+                    "session_config": {"tier": "smart", "optimized_prompt": self.BRIEF},
+                    "history": [],
+                })
+                assert ws.receive_json()["type"] == "prompt_review"
+                ws.send_json({"type": "prompt_confirmed"})
+                while ws.receive_json()["type"] != "synthesis_draft":
+                    pass
+                if refine:
+                    ws.send_json({"type": "user_dialogue_response", "content": "push back"})
+                    while ws.receive_json()["type"] != "synthesis_draft":
+                        pass
+                ws.send_json({"type": "finalize_synthesis"})
+                while ws.receive_json()["type"] != "session_complete":
+                    pass
+        return synth, refinement
+
+    def test_synthesis_gets_brief_not_raw_prompt(self):
+        synth, _ = self._run_session()
+        _model, messages, _system, _tier = synth.call_args.args
+        assert "TRACK PARITY REQUIRED" in messages[0]["content"]
+        assert "raw user prompt" not in messages[0]["content"]
+
+    def test_synthesis_system_contains_all_four_panel_responses(self):
+        synth, _ = self._run_session()
+        system = synth.call_args.args[2]
+        for source, text in [("Gemini", "GEMINI_R1"), ("Gpt", "GPT_R1"),
+                             ("Grok", "GROK_R1"), ("Claude", "CLAUDE_R1")]:
+            assert f'<research_response source="{source}">' in system
+            assert text in system
+
+    def test_refinement_gets_brief(self):
+        _, refinement = self._run_session(refine=True)
+        assert "TRACK PARITY REQUIRED" in refinement.call_args.kwargs["optimized_prompt"]
