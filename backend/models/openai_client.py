@@ -7,10 +7,10 @@ GPT's role in the roundtable:
     - Round 1: structure, actionability, breadth
     - Intake: GPT-4o Mini analyzes prompts and returns structured IntakeDecision
 
-Tiers:
-    quick   — gpt-4o
-    smart   — executor: gpt-4o → advisor: gpt-4o (gpt-5 when available)
-    deep    — gpt-5
+Tiers (model IDs come from model_config.py):
+    quick   — smart executor
+    smart   — executor: RESEARCH_GPT_SMART_EXECUTOR → advisor: RESEARCH_GPT_SMART_ADVISOR
+    deep    — RESEARCH_GPT_DEEP
 
 Functions:
     call_gpt(messages, tier, system, stream)
@@ -43,16 +43,22 @@ _client = None
 def _get_client() -> OpenAI:
     global _client
     if _client is None:
-        _client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"), timeout=30.0)
+        # Reasoning models (GPT-5 family) routinely exceed 30s on research-length output.
+        _client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"), timeout=120.0)
     return _client
 
-MODELS = {
-    "quick": "gpt-4o",
-    "smart": "gpt-4o",   # executor model for smart tier
-    "deep":  "gpt-4o",
-}
+from backend.models.model_config import (
+    INTAKE_FALLBACK1,
+    get_advisor_model,
+    get_executor_model,
+    get_fallback_model,
+)
 
-from backend.models.model_config import INTAKE_FALLBACK1
+MODELS = {
+    "quick": get_executor_model("smart", "gpt"),
+    "smart": get_executor_model("smart", "gpt"),
+    "deep":  get_advisor_model("deep", "gpt"),
+}
 
 # OpenAI's intake model is GPT-4o Mini (INTAKE_FALLBACK1).
 # Must NOT use INTAKE_PRIMARY here — that is the Anthropic model (claude-sonnet-4-6)
@@ -508,9 +514,8 @@ def call_for_chips(prompt: str, system: str, max_tokens: int = 200) -> str:
 
 # ── Round 1 call functions ────────────────────────────────────────────────────
 
-# gpt-5 as advisor; fall back to gpt-4o if not yet available on this account
-_ADVISOR_MODEL = "gpt-4o"
-_ADVISOR_MODEL_FALLBACK = "gpt-4o"
+_ADVISOR_MODEL = get_advisor_model("smart", "gpt")
+_ADVISOR_MODEL_FALLBACK = get_fallback_model("gpt")
 
 _ADVISOR_PROMPT = (
     "Review this response and produce an improved final version.\n\n"
@@ -526,6 +531,7 @@ def call_gpt(
     tier: str = "quick",
     system: str = None,
     stream: bool = False,
+    model: str = None,
 ):
     """
     Call GPT with the given messages and tier.
@@ -535,12 +541,13 @@ def call_gpt(
         tier:     "quick" | "deep"
         system:   optional system prompt string — prepended as a system message
         stream:   if True, returns a streaming response
+        model:    explicit model ID; overrides the tier lookup
 
     Returns:
         Non-streaming: openai.types.chat.ChatCompletion
         Streaming:     generator of ChatCompletionChunk objects
     """
-    model = MODELS.get(tier, MODELS["quick"])
+    model = model or MODELS.get(tier, MODELS["quick"])
 
     full_messages = []
     if system:
@@ -559,9 +566,9 @@ def call_gpt_smart(messages: list, system: str = None) -> dict:
     """
     Two-call executor + advisor pattern for Smart tier.
 
-    1. gpt-4o (executor) produces an initial response.
-    2. gpt-5 (advisor) reviews it and returns an improved version.
-       Falls back to gpt-4o advisor if gpt-5 is unavailable.
+    1. The smart executor produces an initial response.
+    2. The smart advisor reviews it and returns an improved version.
+       Falls back to RESEARCH_GPT_FALLBACK if the advisor model is unavailable.
 
     Args:
         messages: list of {"role": str, "content": str} dicts
@@ -643,9 +650,9 @@ async def call_research_gpt_async(
             return result.choices[0].message.content, "primary"
     except Exception:
         try:
-            from backend.models.model_config import get_fallback_model
             result = await loop.run_in_executor(
-                None, partial(call_gpt, messages=history, tier="smart", system=system)
+                None,
+                partial(call_gpt, messages=history, system=system, model=get_fallback_model("gpt")),
             )
             return result.choices[0].message.content, "fallback"
         except Exception:

@@ -14,9 +14,9 @@ Perplexity runs in two phases per session:
       Cross-checks Gemini + GPT against the live research.
       Result streamed to frontend as perplexity_complete.
 
-Tiers:
-    quick   — sonar
-    deep    — sonar-pro
+Tiers (model IDs come from model_config.py):
+    quick         — FACTCHECK_FALLBACK1
+    smart / deep  — FACTCHECK_PRIMARY
 
 Functions:
     research(prompt, tier)        — Phase 1 live web pre-research
@@ -27,6 +27,8 @@ Functions:
 
 import os
 from openai import OpenAI
+
+from backend.models.model_config import FACTCHECK_FALLBACK1, FACTCHECK_PRIMARY
 
 _client = None
 
@@ -42,9 +44,9 @@ def _get_client() -> OpenAI:
 
 
 MODELS = {
-    "quick": "sonar",
-    "smart": "sonar-pro",   # sonar-pro for smart tier
-    "deep":  "sonar-pro",
+    "quick": FACTCHECK_FALLBACK1,
+    "smart": FACTCHECK_PRIMARY,
+    "deep":  FACTCHECK_PRIMARY,
 }
 
 
@@ -203,7 +205,7 @@ def _call_gpt_audit_with_web_search(
 
     response = client.chat.completions.create(
         model=FACTCHECK_FALLBACK2,
-        max_tokens=get_factcheck_max_tokens(tier),
+        max_completion_tokens=get_factcheck_max_tokens(tier),
         messages=[{"role": "user", "content": prompt}],
     )
     return response.choices[0].message.content.strip()

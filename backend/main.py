@@ -670,7 +670,7 @@ _ADVISOR_PROMPT = (
 def _gemini_advisor(executor_text: str, request: str) -> str:
     resp = call_gemini(
         messages=[{"role": "user", "content": _ADVISOR_PROMPT.format(request=request, response=executor_text)}],
-        tier="deep",  # gemini-2.5-pro
+        tier="deep",
     )
     return resp.text
 
@@ -678,7 +678,7 @@ def _gemini_advisor(executor_text: str, request: str) -> str:
 def _gpt_advisor(executor_text: str, request: str) -> str:
     resp = call_gpt(
         messages=[{"role": "user", "content": _ADVISOR_PROMPT.format(request=request, response=executor_text)}],
-        tier="deep",  # gpt-5 (or fallback to gpt-4o via call_gpt)
+        tier="deep",
     )
     return resp.choices[0].message.content
 
@@ -686,7 +686,7 @@ def _gpt_advisor(executor_text: str, request: str) -> str:
 def _grok_advisor(executor_text: str, request: str) -> str:
     resp = call_grok(
         messages=[{"role": "user", "content": _ADVISOR_PROMPT.format(request=request, response=executor_text)}],
-        tier="deep",  # grok-3
+        tier="deep",
     )
     return resp.choices[0].message.content
 
@@ -694,7 +694,7 @@ def _grok_advisor(executor_text: str, request: str) -> str:
 def _claude_advisor(executor_text: str, request: str) -> str:
     resp = call_claude(
         messages=[{"role": "user", "content": _ADVISOR_PROMPT.format(request=request, response=executor_text)}],
-        tier="deep",  # claude-opus-4-5
+        tier="deep",
     )
     return resp.content[0].text
 
@@ -786,12 +786,12 @@ async def call_synthesis_async(
             return result["advisor_text"]
         else:
             result = await asyncio.to_thread(
-                call_claude, messages=messages, tier="deep", system=system
+                call_claude, messages=messages, system=system, model=model
             )
             return result.content[0].text
     elif model.startswith("gpt"):
         result = await asyncio.to_thread(
-            call_gpt, messages=messages, tier="deep", system=system
+            call_gpt, messages=messages, system=system, model=model
         )
         return result.choices[0].message.content
     else:
