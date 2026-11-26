@@ -349,6 +349,25 @@ def wrap_model_response(model_name: str, response: str) -> str:
     )
 
 
+ADVISOR_REVIEW_PROMPT = (
+    "The previous assistant message is a draft response to this request. "
+    "Review it as a demanding editor against every instruction in the system "
+    "prompt and the request itself: strengthen weak reasoning, remove or qualify "
+    "unsupported claims, fill gaps and missing considerations, and make sure it "
+    "follows the required role, structure, and formatting exactly. Then output "
+    "the improved final version in full. Output only the final response — no "
+    "preamble and no commentary about what you changed."
+)
+
+
+def build_advisor_messages(messages: list, draft: str) -> list:
+    """Executor's conversation + its draft + the review instruction, for the advisor call."""
+    return list(messages) + [
+        {"role": "assistant", "content": draft},
+        {"role": "user", "content": ADVISOR_REVIEW_PROMPT},
+    ]
+
+
 def _format_round1_responses(responses: dict) -> str:
     """Format round-1 model responses as a labeled block for the synthesis task."""
     lines = []

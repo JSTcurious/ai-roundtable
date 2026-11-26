@@ -316,3 +316,44 @@ class TestSessionSynthesisWiring:
     def test_refinement_gets_brief(self):
         _, refinement = self._run_session(refine=True)
         assert "TRACK PARITY REQUIRED" in refinement.call_args.kwargs["optimized_prompt"]
+
+
+# ── Advisor sees the executor's full context ─────────────────────────────────
+
+def _fake_response(text):
+    r = MagicMock()
+    r.content = [MagicMock(text=text)]
+    r.choices = [MagicMock(message=MagicMock(content=text))]
+    r.text = text
+    return r
+
+
+class TestAdvisorContext:
+    @pytest.mark.parametrize("module,fn,smart", [
+        ("backend.models.anthropic_client", "call_claude", "call_claude_smart"),
+        ("backend.models.openai_client",    "call_gpt",    "call_gpt_smart"),
+        ("backend.models.grok_client",      "call_grok",   "call_grok_smart"),
+        ("backend.models.google_client",    "call_gemini", "call_gemini_smart"),
+    ])
+    def test_advisor_gets_system_prompt_and_full_conversation(self, module, fn, smart):
+        import importlib
+        from backend.router import ADVISOR_REVIEW_PROMPT
+
+        client = importlib.import_module(module)
+        messages = [
+            {"role": "user", "content": "earlier turn"},
+            {"role": "assistant", "content": "earlier reply"},
+            {"role": "user", "content": "THE BRIEF"},
+        ]
+        responses = [_fake_response("DRAFT"), _fake_response("FINAL")]
+        with patch(f"{module}.{fn}", side_effect=responses) as mocked:
+            result = getattr(client, smart)(messages, system="ROLE AND FORMAT RULES")
+
+        assert result["advisor_text"] == "FINAL"
+        advisor_call = mocked.call_args_list[1].kwargs
+        assert advisor_call["system"] == "ROLE AND FORMAT RULES"
+        assert advisor_call["model"] == client._ADVISOR_MODEL
+        assert advisor_call["messages"] == messages + [
+            {"role": "assistant", "content": "DRAFT"},
+            {"role": "user", "content": ADVISOR_REVIEW_PROMPT},
+        ]

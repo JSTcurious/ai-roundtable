@@ -652,53 +652,6 @@ def _grok_token_iter(messages, tier, system):
             yield delta
 
 
-# ── Smart tier advisor helpers ────────────────────────────────────────────────
-#
-# These run AFTER the executor has already streamed its tokens to the frontend.
-# Each helper calls the advisor model (pro/opus/gpt-5) with the executor's output
-# and returns the improved final text.  Called via asyncio.to_thread in the WS handler.
-
-_ADVISOR_PROMPT = (
-    "Review this response and produce an improved final version.\n\n"
-    "Original request: {request}\n"
-    "Response to review: {response}\n\n"
-    "Identify gaps, weak reasoning, missing considerations. "
-    "Output only the improved response — no preamble, no explanation."
-)
-
-
-def _gemini_advisor(executor_text: str, request: str) -> str:
-    resp = call_gemini(
-        messages=[{"role": "user", "content": _ADVISOR_PROMPT.format(request=request, response=executor_text)}],
-        tier="deep",
-    )
-    return resp.text
-
-
-def _gpt_advisor(executor_text: str, request: str) -> str:
-    resp = call_gpt(
-        messages=[{"role": "user", "content": _ADVISOR_PROMPT.format(request=request, response=executor_text)}],
-        tier="deep",
-    )
-    return resp.choices[0].message.content
-
-
-def _grok_advisor(executor_text: str, request: str) -> str:
-    resp = call_grok(
-        messages=[{"role": "user", "content": _ADVISOR_PROMPT.format(request=request, response=executor_text)}],
-        tier="deep",
-    )
-    return resp.choices[0].message.content
-
-
-def _claude_advisor(executor_text: str, request: str) -> str:
-    resp = call_claude(
-        messages=[{"role": "user", "content": _ADVISOR_PROMPT.format(request=request, response=executor_text)}],
-        tier="deep",
-    )
-    return resp.content[0].text
-
-
 # ── Retry helpers ─────────────────────────────────────────────────────────────
 
 # Delay sequence for up to 3 retries: 5s → 10s → 20s
