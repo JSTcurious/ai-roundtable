@@ -261,7 +261,7 @@ class TestSessionSynthesisWiring:
 
     BRIEF = "Career track and immigration track. TRACK PARITY REQUIRED: 2 tracks."
 
-    def _run_session(self, refine: bool = False):
+    def _run_session(self, refine: bool = False, audit_provider: str = "primary"):
         from fastapi.testclient import TestClient
         from backend import main
 
@@ -275,7 +275,7 @@ class TestSessionSynthesisWiring:
              patch.object(main, "call_research_grok_async", r1("GROK_R1")), \
              patch.object(main, "call_research_claude_async", r1("CLAUDE_R1")), \
              patch.object(main, "perplexity_research", MagicMock(return_value="pre")), \
-             patch.object(main, "audit_with_fallback", MagicMock(return_value=("AUDIT", "primary", []))), \
+             patch.object(main, "audit_with_fallback", MagicMock(return_value=("AUDIT", audit_provider, []))), \
              patch.object(main, "call_self_critique", AsyncMock(return_value="- critique")), \
              patch.object(main, "call_synthesis_async", synth), \
              patch.object(main, "call_synthesis_refinement", refinement):
@@ -286,17 +286,23 @@ class TestSessionSynthesisWiring:
                     "session_config": {"tier": "smart", "optimized_prompt": self.BRIEF},
                     "history": [],
                 })
-                assert ws.receive_json()["type"] == "prompt_review"
+                received = []
+
+                def until(msg_type):
+                    while True:
+                        received.append(ws.receive_json())
+                        if received[-1]["type"] == msg_type:
+                            return
+
+                until("prompt_review")
                 ws.send_json({"type": "prompt_confirmed"})
-                while ws.receive_json()["type"] != "synthesis_draft":
-                    pass
+                until("synthesis_draft")
                 if refine:
                     ws.send_json({"type": "user_dialogue_response", "content": "push back"})
-                    while ws.receive_json()["type"] != "synthesis_draft":
-                        pass
+                    until("synthesis_draft")
                 ws.send_json({"type": "finalize_synthesis"})
-                while ws.receive_json()["type"] != "session_complete":
-                    pass
+                until("session_complete")
+        self.received = received
         return synth, refinement
 
     def test_synthesis_gets_brief_not_raw_prompt(self):
@@ -316,6 +322,21 @@ class TestSessionSynthesisWiring:
     def test_refinement_gets_brief(self):
         _, refinement = self._run_session(refine=True)
         assert "TRACK PARITY REQUIRED" in refinement.call_args.kwargs["optimized_prompt"]
+
+    @pytest.mark.parametrize("provider,expected_avail", [
+        ("primary", "primary"), ("fallback1", "fallback"), ("emergency", "unavailable"),
+    ])
+    def test_factcheck_payload_reports_configured_model(self, provider, expected_avail):
+        from backend.models import model_config as mc
+        self._run_session(audit_provider=provider)
+        payload = next(m for m in self.received if m["type"] == "perplexity_complete")
+        expected_model = {
+            "primary": mc.FACTCHECK_PRIMARY,
+            "fallback1": mc.FACTCHECK_FALLBACK1,
+            "emergency": "unavailable",
+        }[provider]
+        assert payload["factcheck_model_used"] == expected_model
+        assert payload["factcheck_availability"] == expected_avail
 
 
 # ── Advisor sees the executor's full context ─────────────────────────────────

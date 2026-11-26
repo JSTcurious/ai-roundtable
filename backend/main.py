@@ -79,7 +79,12 @@ from backend.models.perplexity_client import (
     audit_with_fallback,
 )
 from backend.models.pipeline_health import PipelineHealth
-from backend.models.model_config import SYNTHESIS_FALLBACK
+from backend.models.model_config import (
+    FACTCHECK_FALLBACK1,
+    FACTCHECK_FALLBACK2,
+    FACTCHECK_PRIMARY,
+    SYNTHESIS_FALLBACK,
+)
 from backend.exporter import Exporter
 from backend.models.model_validator import validate_model_config
 
@@ -1127,12 +1132,12 @@ async def session_websocket(websocket: WebSocket):
 
         # Determine factcheck display info for frontend transparency
         _factcheck_display = {
-            "primary":   ("sonar-pro",  "primary"),
-            "fallback1": ("sonar",      "fallback"),
-            "fallback2": ("gpt-5.4",    "fallback2"),
+            "primary":   (FACTCHECK_PRIMARY,   "primary"),
+            "fallback1": (FACTCHECK_FALLBACK1, "fallback"),
+            "fallback2": (FACTCHECK_FALLBACK2, "fallback2"),
         }
         _fc_model, _fc_avail = _factcheck_display.get(
-            factcheck_provider, ("sonar-pro", "primary")
+            factcheck_provider, ("unavailable", "unavailable")
         )
         await websocket.send_json({
             "type": "perplexity_complete",
