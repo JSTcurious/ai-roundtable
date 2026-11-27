@@ -21,7 +21,7 @@ class StageTimer:
         self._start = time.perf_counter()
         self.stages: List[Tuple[str, float]] = []
 
-    def _record(self, name: str, seconds: float, failed: bool = False) -> None:
+    def record(self, name: str, seconds: float, failed: bool = False) -> None:
         self.stages.append((name, seconds))
         suffix = " (failed)" if failed else ""
         print(f"[TIMING] {name} {seconds:.1f}s{suffix}", flush=True)
@@ -37,7 +37,7 @@ class StageTimer:
             failed = True
             raise
         finally:
-            self._record(name, time.perf_counter() - t0, failed)
+            self.record(name, time.perf_counter() - t0, failed)
 
     async def timed(self, name: str, awaitable: Awaitable[T]) -> T:
         """Await ``awaitable`` inside a stage — for per-model times in a gather."""

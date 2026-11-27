@@ -1,7 +1,7 @@
 # Session Latency — Faster First Draft
 ## ai-roundtable · JSTcurious · November 2026
 
-**Status:** Draft, awaiting approval. Open questions are at the end.
+**Status:** Approved 2026-11-27 with the recommended answers to all open questions (see Decisions).
 
 ---
 
@@ -234,7 +234,54 @@ tests. PRs 2–4 are a few hours each.
 
 ---
 
-## Open Questions
+## Decisions (2026-11-27)
+
+- **Q1:** Yes. Smart-tier Claude research makes one call to
+  `research.claude.advisor` (L4, PR 4).
+- **Q2:** Yes. Smart and deep tier both make one synthesis call; the tiers
+  still differ in research.
+- **Q3:** The self-critique cap starts at 1,200 tokens. If AC11 isn't met,
+  next is running self-critique alongside the fact-check.
+- **Q4:** Four PRs, in the order under Implementation Tasks. This spec lands
+  with PR 1.
+
+## Implementation Notes
+
+### PR 1 — L1 + L2 + timing (2026-11-27)
+
+- `stream_claude_text()` (anthropic_client.py) makes one streamed call and
+  awaits an `on_token` callback per chunk. Model errors are raised as
+  `StreamFailed(tokens_sent=…)`; an exception from `on_token` propagates
+  unchanged and stops the SDK stream.
+- `call_synthesis_async()` makes one call to the given Claude model on every
+  tier, streamed when `on_token` is passed. `_call_with_retry_async()` never
+  retries a `StreamFailed` that already sent text.
+- `call_synthesis_refinement()` takes an optional `on_token`; a failed model
+  call returns the unavailable dict with `"error": True`.
+- In the session, `_SynthesisStream` sends `synthesis_token` frames and logs
+  `<stage>.first_token`. A failed send raises `ClientGone`, which ends the
+  session quietly without trying the Qwen fallback.
+- Frontend: `synthesisStreamText` holds streamed text. While it's non-empty,
+  SynthesisPanel shows it with the streaming cursor (a refinement shows as the
+  next REVISED round). `synthesis_draft`, `synthesis_final` and
+  `synthesis_reset` clear it.
+- Existing tests that mock `call_synthesis_async` / `call_synthesis_refinement`
+  keep working: the mocks accept the new `on_token` keyword and simply don't
+  stream.
+
+**Verification:**
+- `tests/test_latency_synthesis_stream.py` covers AC1–AC4, AC10 and AC12
+  (8 tests). `tests/test_ws_close_paths.py` path 7 covers a client that closes
+  or drops TCP mid-stream on a real uvicorn server.
+- `uv run pytest`: 358 passed, 1 skipped.
+- AC6 (synthesis part), checked in the browser against a local mock backend
+  with staggered delays: the draft and refinement stream in with the cursor
+  and the REVISED badge, and a refinement failing mid-stream clears the
+  partial text before the unavailable notice.
+- Still to do: AC9 (paid live check) and AC11 (production medians after
+  deploy).
+
+## Open Questions (resolved, kept for the record)
 
 - **Q1 — Claude research seat: one Opus call instead of Sonnet → Opus?**
   Recommended: yes. It's the critical path (66.6s vs 40.8s for the next

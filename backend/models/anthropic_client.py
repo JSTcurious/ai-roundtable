@@ -19,6 +19,8 @@ Functions:
         — two-call executor + advisor pattern for Smart tier
     call_claude_smart_async(messages, system)
         — async wrapper; runs call_claude_smart in a thread pool (non-blocking event loop)
+    stream_claude_text(messages, system, model, on_token)
+        — one streamed call; forwards each text chunk to an async callback
     ping()
         — smoke test: confirm API key and connectivity
 """
@@ -31,7 +33,9 @@ load_dotenv(Path(__file__).parent.parent / ".env", override=True)
 import asyncio
 import logging
 import os
+import threading
 from functools import partial
+from typing import Awaitable, Callable
 
 from anthropic import Anthropic
 
@@ -137,6 +141,76 @@ async def call_claude_smart_async(messages: list, system=None) -> dict:
         None,
         partial(call_claude_smart, messages, system=system),
     )
+
+
+class StreamFailed(RuntimeError):
+    """
+    The model side of a streamed call failed.
+
+    tokens_sent tells the caller whether any text already reached on_token, so
+    it can clear partial output before falling back. Errors raised by on_token
+    itself (e.g. the client went away) are never wrapped in this class.
+    """
+
+    def __init__(self, cause: Exception, tokens_sent: bool):
+        super().__init__(str(cause))
+        self.tokens_sent = tokens_sent
+
+
+async def stream_claude_text(
+    messages: list,
+    system: str,
+    model: str,
+    on_token: Callable[[str], Awaitable[None]],
+) -> str:
+    """
+    Make one streamed Claude call, awaiting on_token(chunk) for each text chunk.
+
+    The SDK stream is synchronous, so it runs in a thread and hands chunks to
+    the event loop through a queue. If on_token raises, the thread is told to
+    stop (closing the HTTP stream) and the exception propagates unchanged.
+
+    Returns the full text. Raises StreamFailed if the model call fails.
+    """
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue = asyncio.Queue()
+    stop = threading.Event()
+    done = object()
+
+    def _post(item) -> None:
+        try:
+            loop.call_soon_threadsafe(queue.put_nowait, item)
+        except RuntimeError:
+            pass  # event loop already closed — nobody is listening
+
+    def _run() -> None:
+        try:
+            with call_claude(messages=messages, system=system, model=model, stream=True) as stream:
+                for chunk in stream.text_stream:
+                    if stop.is_set():
+                        return
+                    if chunk:
+                        _post(chunk)
+        except Exception as exc:
+            _post(exc)
+        finally:
+            _post(done)
+
+    threading.Thread(target=_run, daemon=True).start()
+
+    parts: list = []
+    try:
+        while True:
+            item = await queue.get()
+            if item is done:
+                break
+            if isinstance(item, Exception):
+                raise StreamFailed(item, tokens_sent=bool(parts)) from item
+            parts.append(item)
+            await on_token(item)
+    finally:
+        stop.set()
+    return "".join(parts)
 
 
 def ping() -> dict:

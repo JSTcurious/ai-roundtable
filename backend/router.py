@@ -862,9 +862,14 @@ async def call_synthesis_refinement(
     citations: list = None,
     optimized_prompt: str = "",
     unavailable_models: list = None,
+    on_token=None,
 ) -> dict:
     """
     Call Claude Opus to refine the current synthesis based on user dialogue.
+
+    With on_token (an async callable), the call is streamed and each text chunk
+    is awaited through it. A failed model call still returns the unavailable
+    dict, with "error": True; an exception raised by on_token propagates.
 
     Args:
         original_synthesis: the most recent synthesis text (without closing questions)
@@ -875,12 +880,18 @@ async def call_synthesis_refinement(
         citations:          ordered source URLs for inline [n] markers
         optimized_prompt:   the intake brief the synthesis answered
         unavailable_models: panel models that did not answer this session
+        on_token:           optional async callback for streamed text chunks
 
     Returns:
         {"content": str, "closing_questions": list[str]}
+        plus "error": True when the model call failed
     """
     import asyncio as _asyncio
-    from backend.models.anthropic_client import call_claude
+    from backend.models.anthropic_client import (
+        StreamFailed,
+        call_claude,
+        stream_claude_text,
+    )
 
     # Assemble the system prompt. The original synthesis system gives the model
     # full research/audit context; the refinement block layers the dialogue rules.
@@ -914,17 +925,25 @@ async def call_synthesis_refinement(
     messages.extend(dialogue_history)
 
     try:
-        response = await _asyncio.to_thread(
-            call_claude,
-            messages=messages,
-            tier="deep",
-            system=system,
-        )
-        raw_text = response.content[0].text
+        if on_token is not None:
+            raw_text = await stream_claude_text(
+                messages, system, REFINEMENT_MODEL, on_token
+            )
+        else:
+            response = await _asyncio.to_thread(
+                call_claude,
+                messages=messages,
+                tier="deep",
+                system=system,
+            )
+            raw_text = response.content[0].text
     except Exception as exc:
+        if on_token is not None and not isinstance(exc, StreamFailed):
+            raise  # on_token failed (client gone) — not a model failure
         return {
             "content": f"[Refinement unavailable: {exc}]",
             "closing_questions": [],
+            "error": True,
         }
 
     cleaned, questions = parse_closing_questions(raw_text)

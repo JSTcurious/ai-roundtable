@@ -280,6 +280,8 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
   const [synthesisThinking, setSynthesisThinking] = useState(false);
   const [synthesisText, setSynthesisText] = useState("");
   const [synthesisStreaming, setSynthesisStreaming] = useState(false);
+  /** Text of the synthesis or refinement currently streaming in; "" when none. */
+  const [synthesisStreamText, setSynthesisStreamText] = useState("");
   const [synthesisFinal, setSynthesisFinal] = useState(false);
 
   const [sessionComplete, setSessionComplete] = useState(false);
@@ -500,6 +502,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
     setSynthesisThinking(false);
     setSynthesisText("");
     setSynthesisStreaming(false);
+    setSynthesisStreamText("");
     setSynthesisFinal(false);
     setSessionComplete(false);
     setCitations([]);
@@ -607,8 +610,19 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
             phaseRef.current = "synthesis";
             setStreamPhaseMarker((n) => n + 1);
             break;
+          case "synthesis_token":
+            // Streamed synthesis / refinement text; replaced by synthesis_draft.
+            setSynthesisStreamText((prev) => prev + (data.token ?? ""));
+            setSynthesisStreaming(true);
+            break;
+          case "synthesis_reset":
+            // The stream failed mid-way; a fallback draft follows.
+            setSynthesisStreamText("");
+            setSynthesisStreaming(false);
+            break;
           case "synthesis_draft": {
             const content = data.content ?? "";
+            setSynthesisStreamText("");
             setSynthesisDraft(content);
             setSynthesisText(content);
             setSynthesisRevision(Number(data.revision) || 0);
@@ -624,6 +638,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
           }
           case "synthesis_final": {
             const content = data.content ?? "";
+            setSynthesisStreamText("");
             setSynthesisDraft(content);
             setSynthesisText(content);
             setSynthesisRevision(Number(data.revision) || 0);
@@ -1371,14 +1386,25 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
               </p>
             )}
             <div className="space-y-4">
-              {(synthesisThinking || refinementPending) && !synthesisDraft && (
+              {(synthesisThinking || refinementPending) && !synthesisDraft && !synthesisStreamText && (
                 <ThinkingDotsBubble
                   label="🟠 CLAUDE"
                   color={MODEL_HEX.Claude}
                   subtitle="Synthesizing your roundtable..."
                 />
               )}
-              {synthesisDraft && (
+              {synthesisStreamText ? (
+                // Streaming: a refinement streams in as the next revision.
+                <SynthesisPanel
+                  content={synthesisStreamText}
+                  isStreaming
+                  complete={false}
+                  citations={citations}
+                  variant={synthesisDraft ? "revised" : "draft"}
+                  revision={synthesisDraft ? synthesisRevision + 1 : 0}
+                  modelId={synthesisModel}
+                />
+              ) : synthesisDraft && (
                 <SynthesisPanel
                   content={synthesisBody}
                   isStreaming={false}
