@@ -131,7 +131,10 @@ notes which direct dependency pulled it in.
   installs an exact set.
 - **Local:** `uv pip sync backend/requirements.txt backend/requirements-dev.txt`
   makes `.venv` match exactly (removes anything extra).
-- **Root `requirements.txt`:** empty since April and unused; removed.
+- **Root `requirements.txt`:** kept, with comments only (no packages). It is
+  Railpack's Python-detection marker: removing it (as this spec first did)
+  made Railway skip the Python provider, so the deploy built but crash-looped
+  with `uvicorn: command not found`. tests/test_dependency_pinning.py enforces it.
 
 ### WebSocket close handling
 

@@ -82,3 +82,13 @@ def test_ac5_startup_logs_python_and_package_versions(capsys):
     assert f"Python {sys.version.split()[0]}" in line
     for name in KEY_PACKAGES:
         assert f"{name} {version(name)}" in line
+
+
+def test_root_requirements_marker_exists_and_is_empty():
+    # Railpack detects Python by a root requirements.txt. Deleting it (#53)
+    # made Railway skip the Python provider and the deploy crash-looped with
+    # "uvicorn: command not found". Packages belong in backend/requirements.in.
+    root = BACKEND.parent / "requirements.txt"
+    assert root.is_file()
+    assert _requirement_lines(root) == []
+    assert not any(line.startswith("-") for line in root.read_text().splitlines())

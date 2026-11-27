@@ -1,0 +1,9 @@
+# Railway build marker — do not delete, do not add packages here.
+#
+# Railpack (Railway's builder) detects a Python app by a requirements.txt at
+# the repo root. Without this file it skips the Python provider: no /app/.venv,
+# the installed packages are not copied into the runtime image, and the
+# container crash-loops with "uvicorn: command not found" (PR #53, 2026-11-27).
+#
+# Real dependencies: backend/requirements.in -> backend/requirements.txt,
+# installed by the buildCommand in railway.toml.
