@@ -129,7 +129,7 @@ CI (.github/workflows/tests.yml) runs on every PR and push to main: clean
   pinned install, lockfile-in-sync check, full suite. No secrets needed
 tests/test_ws_close_paths.py runs the app on a real uvicorn server and fails
   on any server traceback when a WebSocket session ends (six close paths)
-345 tests passing as of November 2026
+348 tests passing as of November 2026
 
 ## Environment
 - Python 3.13 (pinned via .python-version)
@@ -194,6 +194,10 @@ stale UI.
 - Startup prints a [STARTUP] line with Python and key package versions, then
   the role → model table; ⚠️ lines after it are real (retiring,
   missing or unresolved models). Fix them in model_registry.json
+- Each session logs a [TIMING] line per stage (research.<model>, research,
+  research.emit, factcheck, self_critique, synthesis, refinement.N) and a
+  [TIMING] first_draft total=… summary. Timing starts after prompt review,
+  so user wait is excluded (backend/stage_timing.py)
 - python -m tools.check_models reports against live provider lists;
   --write adds new provider models as candidates (never approved) and
   refreshes retirement dates. Approving a model = editing its status in a PR
