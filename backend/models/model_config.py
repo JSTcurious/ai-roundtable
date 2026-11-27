@@ -1,31 +1,26 @@
 """
 backend/models/model_config.py
 
-Single source of truth for all model IDs in ai-roundtable.
-All values are env-overridable — change any model with a single .env change.
-No model names appear in variable names — only roles.
+Resolved model IDs for every pipeline role. IDs are not written here: they
+live in model_registry.json and are chosen at import time by
+registry.resolve() — see docs/MODEL_REGISTRY_SPEC.md.
 
-Architecture:
-    Two tiers only: smart (default) and deep (user opt-in).
-    No quick tier — ai-roundtable is for serious deliberation.
+Resolution runs once per process:
+    1. Load and validate model_registry.json.
+    2. Unless MODEL_DISCOVERY=0, read provider model lists (availability,
+       retirement dates) — best effort, never blocks startup.
+    3. Apply per-role env overrides (RESEARCH_GPT_DEEP, SYNTHESIS_ANALYTICAL, …),
+       which always win.
 
-Smart tier uses Executor + Advisor pattern:
-    Each lab runs a cost-effective executor model first (streamed to user),
-    then a more capable advisor model reviews and improves silently.
+The constants below keep their historical names so call sites are unchanged.
+A role with no eligible model resolves to None; callers' existing error paths
+then report that seat or stage as unavailable.
 
-Deep tier uses top models throughout:
-    Each lab runs its most capable model with full thinking budget.
-    No executor/advisor split — single high-quality pass.
-
-Grok participates in both Smart and Deep.
-Deep sessions are assigned by intake for high-stakes questions, or upgraded by user.
-
-Factcheck always uses deep audit depth (~2000 tokens output).
-The Smart/Deep audit prompt distinction is preserved in perplexity_client.py
-for future flexibility, but get_factcheck_max_tokens() always returns
-FACTCHECK_DEEP_MAX_TOKENS. See ADR 004 addendum.
+Smart tier uses Executor + Advisor; Deep uses one top model per lab.
+Factcheck always uses deep audit depth (~2000 tokens) — see ADR 004 addendum.
 """
 
+import logging
 import os
 from pathlib import Path
 
@@ -33,130 +28,61 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent.parent / ".env", override=True)
 
+from backend.models import discovery
+from backend.models.registry import env_overrides, load_registry, resolve
 
-# ── Research — Gemini (Google) ────────────────────────────────────────────────
-# All currently Preview — validate at startup via model_validator.py
+logger = logging.getLogger(__name__)
 
-# Smart executor: fast, cost-effective
-RESEARCH_GEMINI_SMART_EXECUTOR = os.getenv(
-    "RESEARCH_GEMINI_SMART_EXECUTOR", "gemini-3-flash-preview"
-)
-# Smart advisor / Deep: most capable
-RESEARCH_GEMINI_SMART_ADVISOR = os.getenv(
-    "RESEARCH_GEMINI_SMART_ADVISOR", "gemini-3.1-pro-preview"
-)
-RESEARCH_GEMINI_DEEP = os.getenv(
-    "RESEARCH_GEMINI_DEEP", "gemini-3.1-pro-preview"
-)
-# Fallback: stable non-preview model
-RESEARCH_GEMINI_FALLBACK = os.getenv(
-    "RESEARCH_GEMINI_FALLBACK", "gemini-2.5-flash"
-)
+REGISTRY = load_registry()
+DISCOVERY = discovery.discover() if os.getenv("MODEL_DISCOVERY", "1") != "0" else {}
+RESOLUTION = resolve(REGISTRY, availability=DISCOVERY, overrides=env_overrides(REGISTRY))
+_M = RESOLUTION.models
 
-# ── Research — GPT (OpenAI) ───────────────────────────────────────────────────
+# ── Research ──────────────────────────────────────────────────────────────────
 
-RESEARCH_GPT_SMART_EXECUTOR = os.getenv(
-    "RESEARCH_GPT_SMART_EXECUTOR", "gpt-5.4-mini"
-)
-RESEARCH_GPT_SMART_ADVISOR = os.getenv(
-    "RESEARCH_GPT_SMART_ADVISOR", "gpt-5.4"
-)
-RESEARCH_GPT_DEEP = os.getenv(
-    "RESEARCH_GPT_DEEP", "gpt-5.4"
-)
-RESEARCH_GPT_FALLBACK = os.getenv(
-    "RESEARCH_GPT_FALLBACK", "gpt-5.4-mini"
-)
+RESEARCH_GEMINI_SMART_EXECUTOR = _M["research.gemini.executor"]
+RESEARCH_GEMINI_SMART_ADVISOR  = _M["research.gemini.advisor"]
+RESEARCH_GEMINI_DEEP           = _M["research.gemini.deep"]
+RESEARCH_GEMINI_FALLBACK       = _M["research.gemini.fallback"]
 
-# ── Research — Grok (xAI) ────────────────────────────────────────────────────
-# Grok participates in both Smart and Deep.
-# grok-4.1-fast-* IDs were retired by xAI (404). Fallback is a different model
-# line so a 4.20 outage doesn't also take out the fallback.
+RESEARCH_GPT_SMART_EXECUTOR = _M["research.gpt.executor"]
+RESEARCH_GPT_SMART_ADVISOR  = _M["research.gpt.advisor"]
+RESEARCH_GPT_DEEP           = _M["research.gpt.deep"]
+RESEARCH_GPT_FALLBACK       = _M["research.gpt.fallback"]
 
-RESEARCH_GROK_SMART_EXECUTOR = os.getenv(
-    "RESEARCH_GROK_SMART_EXECUTOR", "grok-4.20-0309-non-reasoning"
-)
-RESEARCH_GROK_SMART_ADVISOR = os.getenv(
-    "RESEARCH_GROK_SMART_ADVISOR", "grok-4.20-0309-reasoning"
-)
-RESEARCH_GROK_DEEP = os.getenv(
-    "RESEARCH_GROK_DEEP", "grok-4.20-0309-reasoning"
-)
-RESEARCH_GROK_FALLBACK = os.getenv(
-    "RESEARCH_GROK_FALLBACK", "grok-4.3"
-)
+RESEARCH_GROK_SMART_EXECUTOR = _M["research.grok.executor"]
+RESEARCH_GROK_SMART_ADVISOR  = _M["research.grok.advisor"]
+RESEARCH_GROK_DEEP           = _M["research.grok.deep"]
+RESEARCH_GROK_FALLBACK       = _M["research.grok.fallback"]
 
-# ── Research — Claude (Anthropic) ────────────────────────────────────────────
-# Confirmed model IDs from platform.claude.com/docs/en/about-claude/models/overview
-# Opus 4.7:  $5/$25 per MTok, 1M context, Jan 2026 knowledge cutoff
-# Sonnet 4.6: $3/$15 per MTok, 1M context, Aug 2025 knowledge cutoff
-# Haiku 4.5:  $1/$5 per MTok,  200K context, Feb 2025 knowledge cutoff
-
-RESEARCH_CLAUDE_SMART_EXECUTOR = os.getenv(
-    "RESEARCH_CLAUDE_SMART_EXECUTOR", "claude-sonnet-4-6"
-)
-RESEARCH_CLAUDE_SMART_ADVISOR = os.getenv(
-    "RESEARCH_CLAUDE_SMART_ADVISOR", "claude-opus-4-6"
-)
-RESEARCH_CLAUDE_DEEP = os.getenv(
-    "RESEARCH_CLAUDE_DEEP", "claude-opus-4-6"
-)
-RESEARCH_CLAUDE_FALLBACK = os.getenv(
-    "RESEARCH_CLAUDE_FALLBACK", "claude-haiku-4-5-20251001"
-)
+RESEARCH_CLAUDE_SMART_EXECUTOR = _M["research.claude.executor"]
+RESEARCH_CLAUDE_SMART_ADVISOR  = _M["research.claude.advisor"]
+RESEARCH_CLAUDE_DEEP           = _M["research.claude.deep"]
+RESEARCH_CLAUDE_FALLBACK       = _M["research.claude.fallback"]
 
 # ── Fact-check ────────────────────────────────────────────────────────────────
-# Perplexity is the primary fact-checker — search-native, live citations,
-# structurally independent from all four round-1 providers.
-#
-# Fallback1 stays within Perplexity (cheaper Sonar tier).
-# A cheaper Perplexity model is still structurally better for fact-checking
-# than cross-provider web search — same grounding architecture, lower cost.
-# Fallback2 crosses to OpenAI web search only on full Perplexity outage.
-#
-# Audit depth is controlled by prompt, not model:
-#   Smart: targeted, signal-focused (~800 token output)
-#   Deep:  comprehensive, adversarial (~2000 token output)
+# Perplexity primary (search-native, live citations); fallback1 stays within
+# Perplexity; fallback2 crosses to OpenAI only on a full Perplexity outage.
 
-FACTCHECK_PRIMARY   = os.getenv(
-    "FACTCHECK_PRIMARY",   "sonar-pro"  # Perplexity Sonar Pro — confirmed working Apr 2026
-)
-FACTCHECK_FALLBACK1 = os.getenv(
-    "FACTCHECK_FALLBACK1", "sonar"      # Perplexity Sonar — cheaper tier, same grounding
-)
-FACTCHECK_FALLBACK2 = os.getenv(
-    "FACTCHECK_FALLBACK2", "gpt-5.4"   # cross-provider last resort with web search
-)
+FACTCHECK_PRIMARY   = _M["factcheck.primary"]
+FACTCHECK_FALLBACK1 = _M["factcheck.fallback1"]
+FACTCHECK_FALLBACK2 = _M["factcheck.fallback2"]
 
-# Audit depth token limits — enforced at API level
 FACTCHECK_SMART_MAX_TOKENS = int(os.getenv("FACTCHECK_SMART_MAX_TOKENS", "800"))
 FACTCHECK_DEEP_MAX_TOKENS  = int(os.getenv("FACTCHECK_DEEP_MAX_TOKENS",  "2000"))
 
 # ── Synthesis ─────────────────────────────────────────────────────────────────
-# Primary: Claude — leads on reasoning, attribution, narrative synthesis.
-#   The GPT route for post-cutoff facts was removed; see ADR 002 addendum.
-# Fallback (any synthesis failure):
-#   Qwen 2.5 72B — open-weight, 100% eval score, different provider
+# Claude primary (ADR 002 addendum); open-weight fallback on a different provider.
 
-SYNTHESIS_ANALYTICAL = os.getenv("SYNTHESIS_ANALYTICAL", "claude-opus-4-6")
-SYNTHESIS_FALLBACK   = os.getenv("SYNTHESIS_FALLBACK",   "qwen/qwen-2.5-72b-instruct")
+SYNTHESIS_ANALYTICAL = _M["synthesis.primary"]
+SYNTHESIS_FALLBACK   = _M["synthesis.fallback"]
 
 # ── Intake ────────────────────────────────────────────────────────────────────
-# Intake assigns "smart" or "deep" based on prompt complexity.
-# Deep is assigned for architecture decisions, build/buy, strategic choices,
-# and high-stakes questions. Smart is the default for most sessions.
-# If intake assigns deep, deep runs — user cannot downgrade. See ADR 003 addendum.
-#
-# Fallback chain uses provider diversity:
-#   Primary:   GPT-4o Mini  (OpenAI — 16/16 eval, $0.23/1K sessions)
-#   Primary:   Claude Sonnet (Anthropic — quality ceiling, full intent capture)
-#   Fallback1: GPT-4o Mini  (OpenAI — fast, reliable second choice)
-#   Fallback2: Qwen 2.5 72B (OpenRouter — third provider for diversity)
-#   Emergency: Passthrough  (smart tier defaults, never fails user)
+# Provider diversity across the chain: Anthropic → OpenAI → OpenRouter → passthrough.
 
-INTAKE_PRIMARY   = os.getenv("INTAKE_PRIMARY",   "claude-sonnet-4-6")
-INTAKE_FALLBACK1 = os.getenv("INTAKE_FALLBACK1", "gpt-4o-mini")
-INTAKE_FALLBACK2 = os.getenv("INTAKE_FALLBACK2", "qwen/qwen-2.5-72b-instruct")
+INTAKE_PRIMARY   = _M["intake.primary"]
+INTAKE_FALLBACK1 = _M["intake.fallback1"]
+INTAKE_FALLBACK2 = _M["intake.fallback2"]
 
 
 # ── Tier helper functions ─────────────────────────────────────────────────────

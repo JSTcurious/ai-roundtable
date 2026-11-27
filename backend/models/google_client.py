@@ -37,7 +37,7 @@ from google import genai
 from google.genai import types
 
 from backend.models.intake_decision import IntakeDecision
-from backend.models.model_config import get_advisor_model, get_executor_model
+from backend.models.model_config import get_advisor_model, get_executor_model, get_fallback_model
 from backend.router import build_advisor_messages
 
 logger = logging.getLogger(__name__)
@@ -60,7 +60,7 @@ _ADVISOR_MODEL = get_advisor_model("smart", "gemini")
 
 # Intake uses a separate model constant so it can be pinned or overridden independently
 # of the round-1 research models. Reuses GOOGLE_API_KEY — no new credentials needed.
-INTAKE_MODEL = os.getenv("GEMINI_INTAKE_MODEL", "gemini-2.5-flash")
+INTAKE_MODEL = os.getenv("GEMINI_INTAKE_MODEL") or get_fallback_model("gemini")
 
 GEMINI_INTAKE_SYSTEM = """
 You are an intake analyst for an AI research roundtable. Your job is to

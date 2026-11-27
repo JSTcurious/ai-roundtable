@@ -1,9 +1,19 @@
 name: Weekly Model Currency Check
 
+# Reports on backend/models/model_registry.json against live provider model
+# lists (python -m tools.check_models). Fails when an in-use model retires
+# within the registry's buffer, is missing from its provider's list, or a role
+# cannot be resolved — and keeps one open issue updated instead of opening a
+# new one every week. Spec: docs/MODEL_REGISTRY_SPEC.md.
+
 on:
   schedule:
-    - cron: '0 9 * * 1'  # Every Monday 9am UTC
-  workflow_dispatch:       # Allow manual trigger
+    - cron: '0 9 * * 1'  # Mondays 09:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
 
 jobs:
   check-models:
@@ -11,43 +21,56 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
 
       - name: Install dependencies
-        run: pip install uv && uv sync
+        run: pip install -r backend/requirements.txt
 
-      - name: Run model currency check
-        id: check
+      - name: Run model report
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY:    ${{ secrets.OPENAI_API_KEY }}
           GOOGLE_API_KEY:    ${{ secrets.GOOGLE_API_KEY }}
-          XAI_API_KEY:       ${{ secrets.XAI_API_KEY }}
-        run: uv run python -m tools.check_models
+          GROK_API_KEY:      ${{ secrets.GROK_API_KEY }}
+        run: |
+          set -o pipefail
+          python -m tools.check_models | tee report.txt
 
-      - name: Open issue if stale models found
+      - name: Open or update the model-currency issue
         if: failure()
         uses: actions/github-script@v7
         with:
           script: |
-            github.rest.issues.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              title: 'Model currency check — stale model IDs detected',
-              body: [
-                '## Stale Model IDs Detected',
-                '',
-                'The weekly model currency check found one or more stale model IDs.',
-                '',
-                '**Action required:**',
-                '1. Run `python -m tools.check_models --fix` locally',
-                '2. Update `backend/.env` or `model_config.py` with current IDs',
-                '3. Open a PR with the updates',
-                '',
-                'Check the workflow run for specific details.',
-              ].join('\n'),
-              labels: ['maintenance', 'model-config']
-            })
+            const fs = require('fs');
+            const title = 'Model currency check failed';
+            const report = fs.existsSync('report.txt')
+              ? fs.readFileSync('report.txt', 'utf8')
+              : 'The check failed before producing a report — see the workflow run.';
+            const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = [
+              `Run: ${run}`,
+              '',
+              'Fix by updating `backend/models/model_registry.json` (approve a replacement,',
+              'or disable a retiring model) and run `python -m tools.check_models` locally.',
+              '',
+              '```',
+              report.slice(-60000),
+              '```',
+            ].join('\n');
+
+            const { data: open } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo, state: 'open', per_page: 100,
+            });
+            const existing = open.find(i => i.title === title && !i.pull_request);
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: existing.number, body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo, title, body,
+              });
+            }

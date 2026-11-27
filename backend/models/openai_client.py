@@ -429,7 +429,7 @@ def _call_gpt4o_mini_intake_once(prompt: str) -> IntakeDecision:
     """Single attempt against INTAKE_MODEL — no retry logic."""
     response = _get_client().chat.completions.create(
         model=INTAKE_MODEL,
-        max_tokens=2000,
+        max_completion_tokens=2000,
         temperature=0.1,
         response_format={"type": "json_object"},
         messages=[
@@ -495,7 +495,7 @@ call_intake_primary = call_gpt4o_mini_intake
 
 def call_for_chips(prompt: str, system: str, max_tokens: int = 200) -> str:
     """
-    Call INTAKE_MODEL (GPT-4o Mini) with a custom prompt/system and return raw text.
+    Call INTAKE_MODEL (the intake.fallback1 role) with a custom prompt/system and return raw text.
 
     Used by generate_user_take_chips() in router.py. Shares the same model and
     client as intake to keep chip generation cheap and fast. No retry — chip
@@ -503,7 +503,7 @@ def call_for_chips(prompt: str, system: str, max_tokens: int = 200) -> str:
     """
     response = _get_client().chat.completions.create(
         model=INTAKE_MODEL,
-        max_tokens=max_tokens,
+        max_completion_tokens=max_tokens,
         temperature=0.3,
         messages=[
             {"role": "system", "content": system},
