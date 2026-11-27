@@ -129,7 +129,7 @@ CI (.github/workflows/tests.yml) runs on every PR and push to main: clean
   pinned install, lockfile-in-sync check, full suite. No secrets needed
 tests/test_ws_close_paths.py runs the app on a real uvicorn server and fails
   on any server traceback when a WebSocket session ends (six close paths)
-358 tests passing as of November 2026
+362 tests passing as of November 2026
 
 ## Environment
 - Python 3.13 (pinned via .python-version)

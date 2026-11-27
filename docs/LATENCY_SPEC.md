@@ -130,15 +130,35 @@ measured on its own.
 - The other three seats keep executor → advisor. They aren't on the critical
   path once Claude is faster: Gemini at ~41s becomes the slowest.
 
-### L5 — Self-critique: short and capped (est. −25 to −35s)
+### L5 — Self-critique: short by prompt, capped as a backstop (measured −21s)
 
-- Give the self-critique call its own output cap of **1,200 tokens**, instead
-  of the 4,096 shared with every `call_claude` caller. The prompt already asks
-  for "bullet points only"; the cap enforces it.
+*Revised 2026-11-27 after measurement. The original design was a hard
+1,200-token cap; see Evidence below.*
+
+- `SELF_CRITIQUE_SYSTEM` gets a length rule: at most 3 bullets per section,
+  each under 30 words, only issues that could change the final
+  recommendation, and every section must appear (even if just "None.").
+- The call gets its own output cap of **1,500 tokens**, as a safety net only.
+  Every other `call_claude` caller keeps 4,096.
 - `call_claude` gains an optional `max_tokens` parameter. It defaults to 4096,
   so other callers are unchanged.
-- If the cap cuts the output short, the truncated notes are still injected,
-  followed by a line saying they were truncated.
+- If the cap is ever hit, the truncated notes are still injected, followed by
+  a line saying they were truncated.
+
+**Evidence (2026-11-27).** Input: the production Heroku session
+(4 research answers + audit, 9,213 input tokens), run through Sonnet as
+production does:
+
+| Variant | Output tokens | Time | Sections kept (of 6) |
+|---|---|---|---|
+| Today, no limit | 1,759 | 46.6s | 6 |
+| Hard 1,200-token cap (original design) | 1,200, cut off | 33.0s | 4 (drops TRACK COLLAPSE, PERPLEXITY CONFLICTS) |
+| Prompt length rule + 1,500 cap (3 runs) | 910–1,052 | 24.7–27.4s | 6 every run |
+
+The hard cap cuts the output at the end, and the last section is the one that
+carries fact-check conflicts into synthesis. The prompt rule shortens every
+section instead. On ADR 002's small T1 fixture (1,295 input tokens) the
+critique is already about 1,100 tokens, so neither change affects it.
 - **Not proposed:** running self-critique alongside the fact-check. It reads
   the audit, so it would need the pre-research text instead. That's a bigger
   prompt change for at most 10s. Revisit if L5 isn't enough (Q3).
@@ -157,9 +177,13 @@ measured on its own.
 |---|---|---|
 | Research | 66.6s | ~41s (Gemini) |
 | Fact-check | 9.9s | ~10s |
-| Self-critique | 44.3s | ~12s |
-| Synthesis | 84.3s | ~40–50s, first words in < 15s |
-| **First draft** | **205s** | **~105–115s** |
+| Self-critique | 44.3s | ~26s (measured) |
+| Synthesis | 84.3s | 40.4s measured (PR 1), first words at 1.5s |
+| **First draft** | **205s** | **~117s** |
+
+With L5 measured at ~26s rather than the ~12s first estimated, the sum is
+about 117s, a little over the 110s goal. If AC11 misses, Q3's next step
+(self-critique alongside the fact-check) is the remaining lever.
 
 These are estimates from one session. The goal is checked against the
 median of the first five production sessions after deploy (AC11).
@@ -194,9 +218,10 @@ All run under `uv run pytest` with mocked providers, except AC9 and AC11.
   unchanged. It clears the text on `synthesis_reset`.
 - **AC7** (if Q1 is approved) Smart-tier Claude research makes one call with
   model `research.claude.advisor`. Deep tier is unchanged.
-- **AC8** Self-critique calls `call_claude` with `max_tokens=1200`. Every
-  other caller still gets 4096. Output that hits the cap is still injected,
-  marked as truncated.
+- **AC8** Self-critique calls `call_claude` with `max_tokens=1500`, and its
+  system prompt carries the length rule and still names all six sections.
+  Every other caller still gets 4096. Output that hits the cap is still
+  injected, marked as truncated.
 - **AC9** Paid live check passes:
   `RUN_LIVE_EVALS=1 uv run pytest tests/test_live_synthesis_post_cutoff.py`.
   The test is updated to exercise the new single-call smart path.
@@ -222,7 +247,7 @@ before the next one ships.
    `synthesis_token`/`synthesis_reset` frames, SynthesisPanel streaming
    render, frontend rebuild committed. ACs 1–4, 6 (synthesis part), 9, 10, 12.
 2. **L3:** per-seat emit. ACs 5, 6 (research part), 12.
-3. **L5:** self-critique cap. AC8.
+3. **L5:** self-critique length rule + safety cap. AC8.
 4. **L4:** Claude research seat single call (only if Q1 is approved), with a
    paid live session before merge. AC7.
 5. Record before/after numbers (AC11).
@@ -242,8 +267,14 @@ tests. PRs 2–4 are a few hours each.
   still differ in research.
 - **Q3:** The self-critique cap starts at 1,200 tokens. If AC11 isn't met,
   next is running self-critique alongside the fact-check.
+  *Superseded 2026-11-27:* measured on a production session, the 1,200 cap
+  dropped the last two sections. Approved instead: a length rule in the
+  prompt plus a 1,500-token safety cap (see L5).
 - **Q4:** Four PRs, in the order under Implementation Tasks. This spec lands
   with PR 1.
+- **Order change (2026-11-27, after PR 1):** L5 ships second, ahead of L3.
+  The first session on PR 1 showed self-critique at 44.6s on the critical
+  path of every session; L3 only changes when research appears, not the total.
 
 ## Implementation Notes
 
@@ -284,6 +315,18 @@ tests. PRs 2–4 are a few hours each.
   pricing, Claude 3 Opus retirement mentioned, no "fabricated". The streamed
   run's chunks joined equal its returned text. Both runs together took 41s.
 - Still to do: AC11 (production medians after deploy).
+
+### PR 2 — L5 self-critique (2026-11-27)
+
+- `SELF_CRITIQUE_SYSTEM` carries the length rule; `call_self_critique` passes
+  `max_tokens=SELF_CRITIQUE_MAX_TOKENS` (1,500) and appends
+  `SELF_CRITIQUE_TRUNCATED_NOTE` if the cap is hit. `call_claude` takes an
+  optional `max_tokens` (default 4096).
+- `tests/test_latency_self_critique_cap.py` covers AC8 (4 tests).
+  `uv run pytest`: 362 passed, 2 skipped.
+- Live, with the committed code on the production Heroku session: 26.2s and
+  21.8s, all six sections, not truncated (was 46.6s uncapped).
+- Paid live synthesis check (the critique feeds synthesis): 2 passed.
 
 ## Open Questions (resolved, kept for the record)
 
