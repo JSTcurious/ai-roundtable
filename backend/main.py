@@ -49,6 +49,7 @@ from backend.router import (
     build_synthesis_prompt,
     build_synthesis_system,
     call_synthesis_refinement,
+    REFINEMENT_MODEL,
     call_self_critique,
     parse_closing_questions,
     select_synthesis_model,
@@ -1238,6 +1239,7 @@ async def session_websocket(websocket: WebSocket):
                 health.synthesis_routed = f"{synthesis_route}_fallback"
 
         current_synthesis, closing_questions = parse_closing_questions(raw_synthesis)
+        current_synthesis_model = health.synthesis_model or synthesis_model_id
         revision_count = 0
         dialogue_history = [{"role": "assistant", "content": current_synthesis}]
         research_context = {
@@ -1252,7 +1254,7 @@ async def session_websocket(websocket: WebSocket):
             "content": current_synthesis,
             "revision": revision_count,
             "closing_questions": closing_questions,
-            "synthesis_model_used": health.synthesis_model or synthesis_model_id,
+            "synthesis_model_used": current_synthesis_model,
             "synthesis_route": health.synthesis_routed or synthesis_route,
         })
 
@@ -1271,6 +1273,7 @@ async def session_websocket(websocket: WebSocket):
                     "type": "synthesis_final",
                     "content": current_synthesis,
                     "revision": revision_count,
+                    "synthesis_model_used": current_synthesis_model,
                 })
                 break
 
@@ -1298,6 +1301,7 @@ async def session_websocket(websocket: WebSocket):
 
                 current_synthesis = refined["content"]
                 closing_questions = refined["closing_questions"]
+                current_synthesis_model = REFINEMENT_MODEL
                 revision_count += 1
 
                 dialogue_history.append({
@@ -1310,7 +1314,7 @@ async def session_websocket(websocket: WebSocket):
                     "content": current_synthesis,
                     "revision": revision_count,
                     "closing_questions": closing_questions,
-                    "synthesis_model_used": health.synthesis_model or synthesis_model_id,
+                    "synthesis_model_used": current_synthesis_model,
                     "synthesis_route": health.synthesis_routed or synthesis_route,
                 })
 

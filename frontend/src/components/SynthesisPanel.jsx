@@ -1,14 +1,35 @@
 /**
  * frontend/src/components/SynthesisPanel.jsx
  *
- * Screen 4 — Claude synthesis output (scroll-contained body).
+ * Screen 4 — synthesis output (scroll-contained body).
  *
  * Figma frame: 04-Synthesis-Panel
  */
 
 import React, { useMemo } from "react";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { MODEL_HEX } from "../constants/modelColors";
+
+const SYNTHESIZER_FAMILIES = [
+  ["claude", "Claude"],
+  ["gpt", "GPT"],
+  ["gemini", "Gemini"],
+  ["grok", "Grok"],
+  ["qwen", "Qwen"],
+];
+
+export function synthesizerName(modelId) {
+  const id = (modelId || "").toLowerCase();
+  const family = SYNTHESIZER_FAMILIES.find(([key]) => id.includes(key));
+  return family ? family[1] : null;
+}
+
+// react-markdown blanks hrefs with non-allowlisted protocols, which would
+// erase the citation://n links before components.a can resolve them.
+function urlTransform(url) {
+  return url.startsWith("citation://") ? url : defaultUrlTransform(url);
+}
 
 /**
  * @param {Object}   props
@@ -18,8 +39,10 @@ import remarkGfm from "remark-gfm";
  * @param {string[]} props.citations    — ordered source URLs from Perplexity fact-check
  * @param {string}   props.variant      — "draft" | "revised" | "final" (border color)
  * @param {number}   props.revision     — 0 for draft, >0 for revised
+ * @param {string}   props.modelId      — model ID that wrote the current text
  */
-function SynthesisPanel({ content, isStreaming, complete, citations = [], variant = "draft", revision = 0 }) {
+function SynthesisPanel({ content, isStreaming, complete, citations = [], variant = "draft", revision = 0, modelId }) {
+  const modelName = synthesizerName(modelId);
   const borderColor = variant === "final" ? "#22c55e" : "#E8712A";
   const badgeLabel =
     variant === "final"
@@ -42,9 +65,15 @@ function SynthesisPanel({ content, isStreaming, complete, citations = [], varian
 
   return (
     <div className="flex max-h-[400px] w-full flex-col overflow-hidden rounded-lg border border-border bg-surface px-4 py-3" style={{ borderLeft: `3px solid ${borderColor}` }}>
-      <div className="mb-2 flex shrink-0 items-center gap-2 text-xs font-semibold uppercase tracking-wide text-claude">
-        <span>CLAUDE</span>
-        <span className="font-normal text-text-secondary">- Synthesis</span>
+      <div className="mb-2 flex shrink-0 items-center gap-2 text-xs font-semibold uppercase tracking-wide">
+        {modelName ? (
+          <>
+            <span style={{ color: MODEL_HEX[modelName] }}>{modelName}</span>
+            <span className="font-normal text-text-secondary">- Synthesis</span>
+          </>
+        ) : (
+          <span className="text-text-secondary">Synthesis</span>
+        )}
         <span
           className="ml-auto rounded px-1.5 py-0.5 text-[0.65rem] font-semibold tracking-wider"
           style={{ color: badgeColor, border: `1px solid ${badgeColor}` }}
@@ -56,6 +85,7 @@ function SynthesisPanel({ content, isStreaming, complete, citations = [], varian
         <div className="markdown-session break-words text-[0.9375rem] leading-relaxed text-text-primary">
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
+            urlTransform={urlTransform}
             components={{
               a: ({ href, children }) => {
                 // Citation superscript: [n](citation://n) → <a href="url"><sup>n</sup></a>
@@ -68,7 +98,7 @@ function SynthesisPanel({ content, isStreaming, complete, citations = [], varian
                         href={url}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="text-[#F5A623] hover:opacity-80 no-underline"
+                        className="ml-0.5 text-[#F5A623] hover:opacity-80 no-underline"
                       >
                         <sup>{children}</sup>
                       </a>
