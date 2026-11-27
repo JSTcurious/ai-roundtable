@@ -1,7 +1,7 @@
 # Intake Brief Fidelity — Keep Every Fact the User Stated
 ## ai-roundtable · JSTcurious · November 2026
 
-**Status:** Draft, awaiting approval.
+**Status:** Approved 2026-11-27: carry-over rule plus an editable stated-facts list at prompt review, in one PR (see Decisions).
 
 ---
 
@@ -99,35 +99,84 @@ Draft rule text:
 > TENSION or THE WRONG ANSWER must address it directly. Intake answers add to
 > the original prompt. They never replace it.
 
-### 2. Verbatim backstop (code)
+### 2. Stated facts the user can see and edit (the human check)
 
-- `IntakeSession._route_decision()` saves `original_prompt` in
-  `session_config` (sanitized, like the rest of the config).
-- `_enrich_prompt()` appends
-  `The user's original question, in their own words: "<original_prompt>"`
-  when it is present and is not already contained in the brief. This
-  covers the research panel, Perplexity, and everything downstream that
-  uses the enriched prompt.
+The product is a roundtable the user takes part in, not a black box. The
+review gate already shows the brief before research, but as one dense
+paragraph, and a fact that was dropped or reworded is easy to miss there. So
+the facts become a list the user checks.
 
-The cost is about 50 extra input tokens per research call. It doesn't affect
-latency.
+- **Schema:** `IntakeDecision.stated_facts: list[str]`. The system prompt
+  asks for one short line per explicit fact from the original prompt and the
+  intake answers, in the user's own words.
+- **Config:** `_decision_to_config()` carries `stated_facts`.
+  `IntakeSession._route_decision()` adds `original_prompt`.
+- **Review gate (`prompt_review`):** sends `stated_facts` next to the brief.
+  The review screen shows them under "What I'm telling the panel about your
+  situation". The user can edit any line, remove it, or add a missing one.
+  "Start Research" and "Submit Adjustment" send the final list back as
+  `stated_facts` on `prompt_confirmed` / `prompt_adjusted`.
+- **Research input:** after the gate, the brief gets a facts block built by
+  `build_stated_facts_block()` in `router.py`:
+  - If the user's list (or, from an older client, the intake's list) is
+    non-empty, the block lists those facts under a header that says the user
+    confirmed them.
+  - Otherwise the block falls back to the original prompt verbatim (unless the
+    brief already contains it).
+
+  The facts the user saw are the facts the panel gets, word for word.
+  Incoming lines are sanitized, stripped, and capped at 20 lines of 300
+  characters each.
+- The REST path (`/api/session/run`) has no review gate. It uses the same
+  block from the config.
+
+### 3. Fix: corrections at review never reached the four panel models
+
+`ws_session` builds the research transcript *before* the review gate, and the
+four research models read their input from that transcript. A "User
+correction" typed at review only changed the local `optimized_prompt` string,
+which reaches Perplexity and synthesis but not Claude, GPT, Gemini or Grok.
+The transcript is now built after the gate, so the corrections and the edited
+facts reach all of them.
 
 ## Acceptance Criteria
 
 | AC | Criterion |
 |---|---|
 | AC1 | `_build_combined_prompt()` output contains the user's original prompt verbatim and `BRIEF_FACT_CARRYOVER_RULE`. |
-| AC2 | `_build_intake_system_prompt()` contains `BRIEF_FACT_CARRYOVER_RULE` and names the THE FACTS AS STATED part. |
-| AC3 | A completed `IntakeSession` config contains `original_prompt` equal to the user's prompt. |
-| AC4 | `_enrich_prompt()` appends the verbatim original prompt once, and doesn't append it when the brief already contains it or the key is missing. |
-| AC5 | The rule string is defined only in `router.py`. |
-| AC6 | **Paid check (manual):** live Sonnet intake on 3 prompts (the consultancy prompt above plus two others with a self-stated limitation) produces briefs that state each such fact, before vs. after. |
-| AC7 | `uv run pytest` passes. |
+| AC2 | `_build_intake_system_prompt()` contains `BRIEF_FACT_CARRYOVER_RULE`, names THE FACTS AS STATED, and lists `stated_facts` in the JSON schema. |
+| AC3 | A completed `IntakeSession` config contains `original_prompt` and `stated_facts`. |
+| AC4 | `build_stated_facts_block()`: lists facts when present; falls back to the verbatim prompt when no facts are present; adds nothing when neither is present or the brief already contains the prompt; drops blank lines and enforces the caps. |
+| AC5 | Review gate: `prompt_review` carries `stated_facts`. The research transcript for the four panel models contains the facts the user sent back and any `User correction`. |
+| AC6 | Review screen shows the facts as editable lines (edit, remove, add) and sends them on confirm and adjust. Frontend build is committed. |
+| AC7 | Prompt strings live only in `router.py`. |
+| AC8 | **Paid check (manual):** live Sonnet intake on 3 prompts with a self-stated limitation (including the consultancy prompt above) produces a brief and `stated_facts` that state each such fact, before vs. after. |
+| AC9 | `uv run pytest` passes. |
 
-## Open Questions
+## Decisions
 
-1. **Include the verbatim backstop (Design §2)?** Proposed: yes. The prompt
-   rule alone is probabilistic. The backstop makes the guarantee
-   deterministic for about 50 tokens.
-2. **Leave the intake system prompt in `openai_client.py` for now?**
-   Proposed: yes, and do the move separately.
+1. Both parts ship in one PR: the prompt rule and the editable facts list.
+   The verbatim prompt is kept as the fallback when there are no facts.
+2. The intake system prompt stays in `openai_client.py` for now. New strings
+   go in `router.py`.
+
+## Paid Check Results (AC8, 2026-11-27)
+
+Live Sonnet (`INTAKE_PRIMARY`), closing turn, 3 prompts × 2 runs, old prompt
+(`aa524b72`) vs. new. Each session had the background answer, two domain
+answers, the output intent, and an assumptions confirmation.
+
+| Prompt (self-stated limit) | Old: fact in brief | New: fact in brief | New: fact in `stated_facts` |
+|---|---|---|---|
+| Consultancy ("never done a fixed-price deal") | 2/2 | 2/2 | 2/2 |
+| Engineer → manager ("never managed anyone") | 2/2 | 2/2 | 2/2 |
+| SaaS fundraise ("neither of us has ever raised") | 2/2 | 2/2 | 2/2 |
+
+The new prompt produced 8–11 `stated_facts` per run, each in the user's
+wording. These short synthetic sessions **did not reproduce** the production
+drop: the old prompt kept the fact in every run. In one old run it survived
+only inside the `User background:` line, which is where the production
+session reworded it. So this check does not show that the prompt rule alone
+fixes the drop. The guarantee comes from the stated-facts list the user
+checks at review and the block added to the research input, both covered by
+`tests/test_intake_brief_fidelity.py`.

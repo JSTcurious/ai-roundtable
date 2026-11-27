@@ -211,6 +211,10 @@ stale UI.
 - Synthesis and refinement stream to the client as synthesis_token frames,
   then a synthesis_draft with the cleaned text; synthesis_reset clears a
   stream that failed mid-way. Latency plan: docs/LATENCY_SPEC.md
+- Intake returns stated_facts (the user's own facts, one per line). The review
+  screen lets the user edit them; the confirmed list is appended to the brief
+  for all research models (falls back to the verbatim original prompt).
+  Spec: docs/INTAKE_BRIEF_FIDELITY_SPEC.md
 - Intake v2 architecture spec: docs/INTAKE_V2_SPEC.md
 - Intake v2 PM addendum: docs/INTAKE_V2_PM_ADDENDUM.md
 

@@ -54,6 +54,8 @@ from backend.router import (
     parse_closing_questions,
     USE_CASE_LIBRARY,
     get_use_case,
+    build_stated_facts_block,
+    clean_stated_facts,
 )
 from backend.models.anthropic_client import (
     call_claude,
@@ -320,7 +322,7 @@ async def intake_respond(req: IntakeRespondRequest):
 
 # ── Prompt enrichment ────────────────────────────────────────────────────────
 
-def _enrich_prompt(base_prompt: str, config: dict) -> str:
+def _enrich_prompt(base_prompt: str, config: dict, include_facts: bool = True) -> str:
     """
     Append corrected_assumptions and open_questions from intake config
     to the optimized prompt so research models have full context.
@@ -331,6 +333,11 @@ def _enrich_prompt(base_prompt: str, config: dict) -> str:
 
     open_questions: things the user said they don't know yet — models
       should treat these as open variables, not assume defaults.
+
+    stated_facts / original_prompt (include_facts=True): the facts block from
+      build_stated_facts_block(), so nothing the user stated is lost even if
+      the brief dropped it. The WebSocket path passes include_facts=False and
+      adds the block after the review gate, using the facts the user edited.
     """
     prompt = base_prompt
     background_context = config.get("background_context") or ""
@@ -351,6 +358,10 @@ def _enrich_prompt(base_prompt: str, config: dict) -> str:
     output_intent = config.get("output_intent")
     if output_intent:
         prompt += f"\n\nOutput format requested by user: {output_intent}"
+    if include_facts:
+        prompt += build_stated_facts_block(
+            config.get("stated_facts"), config.get("original_prompt", ""), prompt
+        )
     return prompt
 
 
@@ -1048,9 +1059,11 @@ async def session_websocket(websocket: WebSocket):
     if tier not in ("smart", "deep"):
         tier = "smart"
     health = PipelineHealth()
-    optimized_prompt = _enrich_prompt(config.get("optimized_prompt", prompt), config)
-    # Use enriched prompt so all four panel models have background_context in context.
-    transcript = _build_transcript(config, history, optimized_prompt)
+    # Facts are added after the review gate, from the list the user confirmed.
+    optimized_prompt = _enrich_prompt(
+        config.get("optimized_prompt", prompt), config, include_facts=False
+    )
+    review_facts = clean_stated_facts(config.get("stated_facts"))
 
     dialogue_queue: asyncio.Queue = asyncio.Queue()
     ping_task = asyncio.create_task(_drain_client_messages(websocket, dialogue_queue))
@@ -1063,15 +1076,26 @@ async def session_websocket(websocket: WebSocket):
             "output_intent": config.get("output_intent", ""),
             "open_questions": config.get("open_questions", []),
             "confirmed_assumptions": config.get("confirmed_assumptions", []),
+            "stated_facts": review_facts,
         })
         review_msg = await dialogue_queue.get()
         if review_msg is CLIENT_DISCONNECTED:
             print("[SESSION] client disconnected at prompt review", flush=True)
             return
+        # The user's edited list wins; an older client that sends none keeps
+        # the intake's list.
+        if isinstance(review_msg.get("stated_facts"), list):
+            review_facts = clean_stated_facts(review_msg["stated_facts"])
+        optimized_prompt += build_stated_facts_block(
+            review_facts, config.get("original_prompt", ""), optimized_prompt
+        )
         if review_msg.get("type") == "prompt_adjusted":
             adjustment = (review_msg.get("adjustment") or "").strip()
             if adjustment:
                 optimized_prompt += f"\n\nUser correction: {adjustment}"
+        # Built after the gate so the four panel models see the confirmed
+        # facts and any correction (before, only Perplexity and synthesis did).
+        transcript = _build_transcript(config, history, optimized_prompt)
 
         await websocket.send_json({"type": "session_started"})
         timer = StageTimer()  # starts after the review gate: user wait is not latency

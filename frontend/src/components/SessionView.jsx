@@ -317,6 +317,8 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
   const [promptReviewData, setPromptReviewData] = useState(null);
   const [reviewAdjusting, setReviewAdjusting] = useState(false);
   const [reviewAdjustText, setReviewAdjustText] = useState("");
+  /** Facts the user stated — editable at review; the confirmed list goes to the panel */
+  const [reviewFacts, setReviewFacts] = useState([]);
 
   // ── Live WS ref — used by dialogue buttons to send refinement/finalize ───
   const wsRef = useRef(/** @type {WebSocket|null} */ (null));
@@ -556,6 +558,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
             break;
           case "prompt_review":
             setPromptReviewData(data);
+            setReviewFacts(Array.isArray(data.stated_facts) ? data.stated_facts : []);
             break;
           case "session_started":
             setPromptReviewData(null);
@@ -811,18 +814,25 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
   const handleReviewConfirm = useCallback(() => {
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    ws.send(JSON.stringify({ type: "prompt_confirmed" }));
-  }, []);
+    ws.send(JSON.stringify({
+      type: "prompt_confirmed",
+      stated_facts: reviewFacts.map((f) => f.trim()).filter(Boolean),
+    }));
+  }, [reviewFacts]);
 
   const handleReviewAdjust = useCallback(() => {
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     const text = reviewAdjustText.trim();
     if (!text) return;
-    ws.send(JSON.stringify({ type: "prompt_adjusted", adjustment: text }));
+    ws.send(JSON.stringify({
+      type: "prompt_adjusted",
+      adjustment: text,
+      stated_facts: reviewFacts.map((f) => f.trim()).filter(Boolean),
+    }));
     setReviewAdjusting(false);
     setReviewAdjustText("");
-  }, [reviewAdjustText]);
+  }, [reviewAdjustText, reviewFacts]);
 
   const handleFinalize = useCallback(() => {
     const ws = wsRef.current;
@@ -1099,6 +1109,43 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
             <div className="max-h-40 overflow-y-auto rounded-lg border border-[#2a2a2a] bg-[#1e1e1e] px-4 py-3 text-sm leading-relaxed text-[#e8e8e8]">
               {promptReviewData.optimized_prompt}
             </div>
+          </div>
+
+          {/* What I'm telling the panel — the user's own facts, editable */}
+          <div>
+            <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-[#888888]">What I'm telling the panel about your situation</p>
+            <p className="mb-2 text-xs text-[#888888]">In your words. The panel treats each line as true — fix anything wrong, remove what doesn't matter, add what I missed.</p>
+            <ul className="space-y-2">
+              {reviewFacts.map((fact, i) => (
+                <li key={i} className="flex items-start gap-2">
+                  <textarea
+                    aria-label={`Fact ${i + 1}`}
+                    rows={1}
+                    value={fact}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setReviewFacts((prev) => prev.map((f, j) => (j === i ? v : f)));
+                    }}
+                    className="min-h-[2.25rem] flex-1 resize-y rounded-lg border border-[#2a2a2a] bg-[#1e1e1e] px-3 py-1.5 text-sm text-[#e8e8e8] focus:border-[#6B6B6B] focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    aria-label={`Remove fact ${i + 1}`}
+                    onClick={() => setReviewFacts((prev) => prev.filter((_, j) => j !== i))}
+                    className="mt-1 rounded px-2 text-sm text-[#888888] hover:text-[#F5A623] focus:outline-none"
+                  >
+                    ✕
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <button
+              type="button"
+              onClick={() => setReviewFacts((prev) => [...prev, ""])}
+              className="mt-2 text-sm text-[#888888] hover:text-[#F5A623] focus:outline-none"
+            >
+              + Add something I missed
+            </button>
           </div>
 
           {/* What you want to walk away with */}

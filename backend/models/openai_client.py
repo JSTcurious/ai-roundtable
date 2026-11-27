@@ -37,7 +37,11 @@ from functools import partial
 from openai import OpenAI
 
 from backend.models.intake_decision import IntakeDecision
-from backend.router import build_advisor_messages
+from backend.router import (
+    BRIEF_FACT_CARRYOVER_RULE,
+    STATED_FACTS_RULE,
+    build_advisor_messages,
+)
 
 _client = None
 
@@ -257,7 +261,8 @@ Then output a JSON object with exactly these fields:
   "corrected_assumptions": [list of strings],
   "open_questions": [list of strings],
   "session_title": string,
-  "output_intent": string or null
+  "output_intent": string or null,
+  "stated_facts": [list of strings]
 }
 
 ## Field rules
@@ -314,10 +319,14 @@ optimized_prompt: A structured research brief for four AI research
   different responses — not four versions of the same answer.
 
   Using the context gathered in intake, construct a brief with
-  exactly these five elements (no section headers — write as prose):
+  exactly these elements (no section headers — write as prose):
 
   1. THE DECISION — One sentence, "Should X do Y" form.
      Lead with the decision, not the background.
+
+  1b. THE FACTS AS STATED — One to three sentences, close to the
+     user's own wording, carrying every explicit fact from the
+     original prompt (see the carry-over rule below).
 
   2. THE TENSION — One or two sentences naming the two competing
      considerations that make this hard. If there is no genuine
@@ -341,7 +350,9 @@ optimized_prompt: A structured research brief for four AI research
   If the Q&A history contains an answer to "Tell me a bit about
   yourself", include a "User background: [their answer]" line
   in the brief, positioned immediately after the decision
-  statement and before THE TENSION.
+  statement and before THE FACTS AS STATED.
+
+""" + BRIEF_FACT_CARRYOVER_RULE + """
 
   Populate using: problem (user's original prompt + intake answers),
   output_intent, user_context, timeline_pressure from what you
@@ -365,10 +376,14 @@ open_questions: things the user said they do not know yet.
 output_intent: what the user wants to walk away with — the answer
   they gave to Step 3b. Null if not yet asked or not answered.
 
+""" + STATED_FACTS_RULE + """
+
 ## Quality Bar for the Optimized Prompt
 
 The optimized_prompt must:
 - Open with the decision in "Should X do Y" form — not background
+- State every explicit fact from the user's original prompt, in
+  their wording — especially limits on their own experience
 - Name the genuine tension (two competing considerations that make
   this hard)
 - Identify what a wrong answer would look like

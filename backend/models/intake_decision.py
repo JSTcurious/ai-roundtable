@@ -62,3 +62,8 @@ class IntakeDecision(BaseModel):
 
     output_intent: Optional[str] = None
     # What the user wants to walk away with, e.g. "A clear recommendation — tell me what to do"
+
+    stated_facts: list[str] = Field(default_factory=list)
+    # Every explicit fact the user stated, one line each, in their own words.
+    # Shown for editing at prompt review; the confirmed list goes to research.
+    # e.g. ["We are a 3-person data consultancy", "We've never done a fixed-price deal"]

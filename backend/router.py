@@ -35,6 +35,77 @@ from backend.models.model_config import (
 
 
 # ---------------------------------------------------------------------------
+# Intake brief fidelity — every fact the user stated reaches the research panel.
+# Spec: docs/INTAKE_BRIEF_FIDELITY_SPEC.md
+# ---------------------------------------------------------------------------
+
+BRIEF_FACT_CARRYOVER_RULE = """\
+FACT CARRY-OVER — CRITICAL: Every explicit fact the user stated in their \
+original prompt must appear in the optimized_prompt: numbers, amounts, \
+durations, team or company size, the options they named, and anything they \
+said about their own experience or limits (e.g. "we've never done X", "only \
+once", "first time"). Use the user's wording. Never replace a fact with a \
+weaker or different paraphrase ("has done Y" is not "has never done X"). If a \
+stated fact is a limitation or a first-time condition, THE TENSION or THE \
+WRONG ANSWER must address it directly. Intake answers add to the original \
+prompt. They never replace it."""
+
+STATED_FACTS_RULE = """\
+stated_facts: Every explicit fact the user stated, one short line each, in \
+the user's own words: first everything from the original prompt, then facts \
+from intake answers. Include numbers, amounts, durations, sizes, the options \
+they named, and anything they said about their own experience or limits. \
+No inferences, no assumptions, no advice. The user will see and edit this \
+list before research starts. Empty list while still clarifying."""
+
+STATED_FACTS_HEADER = (
+    "Facts the user stated about their situation, reviewed and confirmed by "
+    "the user (their own words). Treat each one as true, and address every "
+    "one that bears on the decision:"
+)
+
+ORIGINAL_PROMPT_HEADER = "The user's original question, in their own words:"
+
+STATED_FACTS_MAX_LINES = 20
+STATED_FACTS_MAX_CHARS = 300
+
+
+def clean_stated_facts(facts) -> list:
+    """Normalize a stated-facts list from the model or the client.
+
+    Keeps non-blank strings, strips them, truncates each to
+    STATED_FACTS_MAX_CHARS and the list to STATED_FACTS_MAX_LINES.
+    Anything that is not a list yields [].
+    """
+    if not isinstance(facts, list):
+        return []
+    cleaned = []
+    for f in facts:
+        if not isinstance(f, str):
+            continue
+        f = " ".join(f.split())
+        if f:
+            cleaned.append(f[:STATED_FACTS_MAX_CHARS])
+    return cleaned[:STATED_FACTS_MAX_LINES]
+
+
+def build_stated_facts_block(stated_facts, original_prompt: str, brief: str) -> str:
+    """Text appended to the research brief so stated facts can't be lost.
+
+    Facts present → a list of them under STATED_FACTS_HEADER.
+    No facts → the original prompt verbatim, unless the brief already
+    contains it. Neither → "".
+    """
+    facts = clean_stated_facts(stated_facts)
+    if facts:
+        return "\n\n" + STATED_FACTS_HEADER + "\n" + "\n".join(f"- {f}" for f in facts)
+    original = (original_prompt or "").strip()
+    if original and original not in (brief or ""):
+        return f'\n\n{ORIGINAL_PROMPT_HEADER} "{original}"'
+    return ""
+
+
+# ---------------------------------------------------------------------------
 # Epistemic guardrails — injected into every Round 1 system prompt.
 # Design principle: transparency over suppression. Models may speculate and
 # draw on open-world knowledge; uncertainty must be legible, not prevented.
