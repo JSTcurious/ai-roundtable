@@ -1,7 +1,7 @@
 # Dependency Pinning — Reproducible Backend Builds
 ## ai-roundtable · JSTcurious · November 2026
 
-**Status:** Draft — awaiting approval. No implementation until approved.
+**Status:** Approved 2026-11-27 with the proposed answers to all open questions (see Decisions).
 
 ---
 
@@ -202,7 +202,16 @@ About 1 day, most of it verification (tasks 3, 4, 7).
 
 ---
 
-## Open Questions (need a decision before implementation)
+## Decisions (2026-11-27)
+
+All four proposals accepted:
+
+1. Target **set C + `safe_close` fix** (latest stack).
+2. Tooling: **`requirements.in` + `uv pip compile`**; Railway's build command unchanged.
+3. **Hashes on** (`--generate-hashes`).
+4. **Manual upgrade PRs** when needed.
+
+## Open Questions (resolved — kept for the record)
 
 1. **Target set.** Set C + `safe_close` fix (proposed), or pin the local
    `.venv` versions (older SDKs, keeps uvicorn 0.32.1)?
