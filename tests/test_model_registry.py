@@ -322,3 +322,90 @@ def test_ac7_discovery_survives_failing_and_hanging_providers():
 
 def test_ac7_no_discovery_data_resolves_from_registry_alone(seed):
     assert resolve(seed, availability={}, today=TODAY).models == EXPECTED_PARITY
+
+
+# ── AC12 / AC13: tools/check_models ───────────────────────────────────────────
+
+def _discovered(vendor, ids, retires=None, aliases=None):
+    models = {i: {"retires_at": (retires or {}).get(i), "aliases": (aliases or {}).get(i, [])} for i in ids}
+    available = set(ids) | {a for v in (aliases or {}).values() for a in v}
+    return {vendor: {"available": available,
+                     "retires": {i: d for i, d in (retires or {}).items()},
+                     "models": models}}
+
+
+def _seed_vendor_ids(seed, vendor):
+    return [m["id"] for m in seed["models"] if m["vendor"] == vendor and m["status"] == "approved"]
+
+
+def test_ac12_report_lists_new_retiring_and_missing_models(seed):
+    from tools.check_models import build_report
+    discovered = {}
+    discovered.update(_discovered(
+        "anthropic",
+        _seed_vendor_ids(seed, "anthropic") + ["claude-opus-9"],
+        retires={"claude-sonnet-4-6": TODAY + timedelta(days=60)},
+    ))
+    discovered.update(_discovered(
+        "openai",
+        [i for i in _seed_vendor_ids(seed, "openai") if i != "gpt-5.4"] + ["gpt-7", "gpt-7-2027-01-01", "gpt-7-audio"],
+    ))
+    resolution = resolve(seed, availability=discovered, today=TODAY)
+    text, code = build_report(seed, discovered, resolution, today=TODAY)
+
+    assert "claude-opus-9" in text and "gpt-7" in text
+    assert "gpt-7-2027-01-01" not in text and "gpt-7-audio" not in text   # filtered snapshots/audio
+    assert "claude-sonnet-4-6" in text and "60 days" in text              # retiring, warning window
+    assert "gpt-5.4" in text and "missing" in text.lower()                # approved, not listed
+    assert code == 1   # in-use gpt-5.4 is missing from OpenAI's list
+
+
+def test_ac12_report_exits_0_when_healthy_and_1_inside_buffer(seed):
+    from tools.check_models import build_report
+    healthy = _discovered("anthropic", _seed_vendor_ids(seed, "anthropic"))
+    _, code = build_report(seed, healthy, resolve(seed, availability=healthy, today=TODAY), today=TODAY)
+    assert code == 0
+
+    soon = _discovered("anthropic", _seed_vendor_ids(seed, "anthropic"),
+                       retires={"claude-opus-4-6": TODAY + timedelta(days=10)})
+    _, code = build_report(seed, soon, resolve(seed, availability=soon, today=TODAY), today=TODAY)
+    assert code == 1
+
+
+def test_ac13_write_adds_candidates_updates_dates_never_changes_status(seed):
+    from tools.check_models import update_registry
+    discovered = {}
+    discovered.update(_discovered("anthropic", _seed_vendor_ids(seed, "anthropic") + ["claude-opus-9"],
+                                  retires={"claude-sonnet-4-6": date(2027, 3, 1)}))
+    discovered.update(_discovered("openai", ["gpt-4o-mini", "gpt-7"], retires={"gpt-4o-mini": date(2027, 1, 14)}))
+    before = {m["id"]: m["status"] for m in seed["models"]}
+
+    updated, changes = update_registry(copy.deepcopy(seed), discovered, today=TODAY)
+    by_id = {m["id"]: m for m in updated["models"]}
+
+    assert by_id["claude-opus-9"]["status"] == "candidate"
+    assert by_id["claude-opus-9"]["tier"] is None and by_id["claude-opus-9"]["rank"] is None
+    assert by_id["gpt-7"]["status"] == "candidate"
+    assert by_id["claude-sonnet-4-6"]["retires_at"] == "2027-03-01"
+    for mid, status in before.items():
+        assert by_id[mid]["status"] == status
+    validate_registry(updated)
+    assert changes
+
+
+def test_registry_dump_round_trips_in_one_model_per_line_format(seed):
+    import json
+    from tools.check_models import dump_registry
+    from backend.models.registry import REGISTRY_PATH
+    text = dump_registry(seed)
+    assert json.loads(text) == seed
+    assert text == REGISTRY_PATH.read_text()
+
+
+def test_ac13_models_already_retiring_are_not_added_as_candidates(seed):
+    from tools.check_models import update_registry
+    discovered = _discovered("anthropic", _seed_vendor_ids(seed, "anthropic") + ["claude-old", "claude-new"],
+                             retires={"claude-old": TODAY + timedelta(days=3)})
+    updated, _ = update_registry(copy.deepcopy(seed), discovered, today=TODAY)
+    ids = {m["id"] for m in updated["models"]}
+    assert "claude-new" in ids and "claude-old" not in ids
