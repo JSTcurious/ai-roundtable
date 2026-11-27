@@ -37,6 +37,7 @@ from functools import partial
 from openai import OpenAI
 
 from backend.models.intake_decision import IntakeDecision
+from backend.router import build_advisor_messages
 
 _client = None
 
@@ -517,14 +518,6 @@ def call_for_chips(prompt: str, system: str, max_tokens: int = 200) -> str:
 _ADVISOR_MODEL = get_advisor_model("smart", "gpt")
 _ADVISOR_MODEL_FALLBACK = get_fallback_model("gpt")
 
-_ADVISOR_PROMPT = (
-    "Review this response and produce an improved final version.\n\n"
-    "Original request: {request}\n"
-    "Response to review: {response}\n\n"
-    "Identify gaps, weak reasoning, missing considerations. "
-    "Output only the improved response — no preamble, no explanation."
-)
-
 
 def call_gpt(
     messages: list,
@@ -567,7 +560,8 @@ def call_gpt_smart(messages: list, system: str = None) -> dict:
     Two-call executor + advisor pattern for Smart tier.
 
     1. The smart executor produces an initial response.
-    2. The smart advisor reviews it and returns an improved version.
+    2. The smart advisor reviews it and returns an improved version. The
+       advisor gets the same system prompt and conversation as the executor.
        Falls back to RESEARCH_GPT_FALLBACK if the advisor model is unavailable.
 
     Args:
@@ -585,26 +579,14 @@ def call_gpt_smart(messages: list, system: str = None) -> dict:
     exec_resp = call_gpt(messages=messages, tier="smart", system=system)
     exec_text = exec_resp.choices[0].message.content
 
-    last_user = next(
-        (m["content"] for m in reversed(messages) if m["role"] == "user"), ""
-    )
-    advisor_messages = [{
-        "role": "user",
-        "content": _ADVISOR_PROMPT.format(request=last_user, response=exec_text),
-    }]
+    advisor_messages = build_advisor_messages(messages, exec_text)
 
     try:
-        adv_resp = _get_client().chat.completions.create(
-            model=_ADVISOR_MODEL,
-            max_completion_tokens=4096,
-            messages=advisor_messages,
-        )
+        adv_resp = call_gpt(messages=advisor_messages, system=system, model=_ADVISOR_MODEL)
     except Exception as e:
         if "404" in str(e) or "model" in str(e).lower():
-            adv_resp = _get_client().chat.completions.create(
-                model=_ADVISOR_MODEL_FALLBACK,
-                max_completion_tokens=4096,
-                messages=advisor_messages,
+            adv_resp = call_gpt(
+                messages=advisor_messages, system=system, model=_ADVISOR_MODEL_FALLBACK
             )
         else:
             raise
