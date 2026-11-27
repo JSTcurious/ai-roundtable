@@ -552,12 +552,14 @@ async def safe_close(ws):
 
     websocket.close() raises RuntimeError when called after the client has
     already disconnected (e.g. inside a WebSocketDisconnect handler) or when
-    a prior close frame was already sent.  Swallowing it here lets every
-    call site use a uniform close pattern without try/except boilerplate.
+    a prior close frame was already sent. uvicorn 0.54 (sans-I/O
+    protocol) reports a client that is already gone as WebSocketDisconnect
+    instead. Swallowing both here lets every call site use a uniform close
+    pattern without try/except boilerplate.
     """
     try:
         await ws.close()
-    except RuntimeError:
+    except (RuntimeError, WebSocketDisconnect):
         pass  # Already closed by client or a prior handler
 
 
