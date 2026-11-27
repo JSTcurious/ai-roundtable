@@ -29,10 +29,8 @@ from backend.models.model_config import (
     get_fallback_model,
     get_all_labs,
     SYNTHESIS_ANALYTICAL,
-    SYNTHESIS_FACTUAL,
     SYNTHESIS_FALLBACK,
 )
-from backend.models.perplexity_client import MODELS as PERPLEXITY_MODELS
 
 
 # ---------------------------------------------------------------------------
@@ -374,37 +372,6 @@ def _format_round1_responses(responses: dict) -> str:
     for model, text in responses.items():
         lines.append(wrap_model_response(model.capitalize(), text or "(not available)"))
     return "\n\n".join(lines) if lines else "(no round-1 responses available)"
-
-
-FACTUAL_CONTRADICTION_SIGNALS = [
-    "retired", "deprecated", "replaced by", "incorrect", "outdated",
-    "as of 2026", "as of april 2026", "current pricing", "launched",
-    "released", "no longer available", "wrong", "inaccurate",
-    "this is false", "this is incorrect", "has been superseded",
-    "contradicts", "disagrees", "not accurate", "factually wrong",
-]
-
-
-def perplexity_contradicts_round1(audit_text: str) -> bool:
-    """
-    Return True when Perplexity audit signals it is contradicting
-    round-1 model responses on verifiable current facts.
-
-    When True: route synthesis to SYNTHESIS_FACTUAL (GPT-5.4)
-    When False: route to SYNTHESIS_ANALYTICAL (Claude Opus 4.7)
-    """
-    audit_lower = audit_text.lower()
-    return any(signal in audit_lower for signal in FACTUAL_CONTRADICTION_SIGNALS)
-
-
-def select_synthesis_model(audit_text: str) -> tuple:
-    """
-    Route synthesis to appropriate model. Returns (model_id, route_name).
-    route_name is "analytical" or "factual" — used in PipelineHealth.
-    """
-    if perplexity_contradicts_round1(audit_text):
-        return SYNTHESIS_FACTUAL, "factual"
-    return SYNTHESIS_ANALYTICAL, "analytical"
 
 
 def get_tier_config(tier: str) -> dict:
@@ -927,7 +894,7 @@ async def call_synthesis_refinement(
 async def call_self_critique(
     round1_responses: dict,
     perplexity_findings: str,
-    contradiction_flag: bool = False,
+    optimized_prompt: str = "",
 ) -> str:
     """
     Run a pre-synthesis audit against the round-1 responses and Perplexity data.
@@ -938,25 +905,19 @@ async def call_self_critique(
     Args:
         round1_responses:    dict of {model_name: response_text}
         perplexity_findings: Perplexity live research / audit text
-        contradiction_flag:  True when perplexity_contradicts_round1() fired —
-                             directs the auditor to prioritise conflict detection
+        optimized_prompt:    the intake brief — the track-collapse and gap
+                             checks are judged against it
     """
     import asyncio as _asyncio
     from backend.models.anthropic_client import call_claude
 
-    flag_note = (
-        "\n\nCONTRADICTION FLAG ACTIVE: Perplexity's live data is known to "
-        "contradict one or more round-1 model claims on verifiable facts. "
-        "Prioritise PERPLEXITY CONFLICTS in your audit.\n"
-        if contradiction_flag else ""
-    )
-
     user_content = (
+        f"## The User's Request\n\n"
+        f"{optimized_prompt or '(not available)'}\n\n"
         f"## Round-1 Model Responses\n\n"
         f"{_format_round1_responses(round1_responses)}\n\n"
         f"## Perplexity Live Research\n\n"
         f"{perplexity_findings or '(not available)'}"
-        f"{flag_note}"
     )
 
     try:

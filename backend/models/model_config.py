@@ -133,15 +133,12 @@ FACTCHECK_SMART_MAX_TOKENS = int(os.getenv("FACTCHECK_SMART_MAX_TOKENS", "800"))
 FACTCHECK_DEEP_MAX_TOKENS  = int(os.getenv("FACTCHECK_DEEP_MAX_TOKENS",  "2000"))
 
 # ── Synthesis ─────────────────────────────────────────────────────────────────
-# Analytical queries (RLHF, architecture, domain knowledge):
-#   Claude Opus 4.7 — leads on reasoning, attribution, narrative synthesis
-# Post-cutoff factual queries (pricing, model releases, current events):
-#   GPT-5.4 — handles Perplexity grounded data without trained refusal
+# Primary: Claude — leads on reasoning, attribution, narrative synthesis.
+#   The GPT route for post-cutoff facts was removed; see ADR 002 addendum.
 # Fallback (any synthesis failure):
 #   Qwen 2.5 72B — open-weight, 100% eval score, different provider
 
 SYNTHESIS_ANALYTICAL = os.getenv("SYNTHESIS_ANALYTICAL", "claude-opus-4-6")
-SYNTHESIS_FACTUAL    = os.getenv("SYNTHESIS_FACTUAL",    "gpt-5.4")
 SYNTHESIS_FALLBACK   = os.getenv("SYNTHESIS_FALLBACK",   "qwen/qwen-2.5-72b-instruct")
 
 # ── Intake ────────────────────────────────────────────────────────────────────

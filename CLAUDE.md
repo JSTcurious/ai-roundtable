@@ -16,7 +16,7 @@ quality ceiling, not cost floor.
 | Intake | Claude Sonnet (primary) | GPT-4o-mini fallback, Qwen fallback |
 | Research | Sonnet executor + Opus advisor | Smart tier |
 | Fact-check | Perplexity Sonar Pro | Always deep |
-| Synthesis | Claude Opus | Analytical routing |
+| Synthesis | Claude (SYNTHESIS_ANALYTICAL) | Single route, Qwen fallback; GPT route removed (ADR 002 addendum) |
 | Chips/Direction | Claude Sonnet | Fast tier |
 
 ## Pipeline flow
@@ -119,6 +119,8 @@ docs/description — documentation only
 
 ## Testing
 uv run pytest — always run before committing
+RUN_LIVE_EVALS=1 uv run pytest tests/test_live_synthesis_post_cutoff.py —
+  paid live check; run when changing synthesis models or prompts
 250 tests passing as of April 2026
 
 ## Environment
