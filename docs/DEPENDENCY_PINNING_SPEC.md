@@ -211,6 +211,58 @@ All four proposals accepted:
 3. **Hashes on** (`--generate-hashes`).
 4. **Manual upgrade PRs** when needed.
 
+## Implementation Notes (2026-11-27)
+
+Where the implementation differs from or adds to the design above:
+
+1. **`--generate-hashes` is in both compile commands.** The Design section's
+   commands predate decision 3. The commands as run (and recorded in each
+   lockfile header, CI and CLAUDE.md) are:
+   ```
+   uv pip compile backend/requirements.in -o backend/requirements.txt --python-version 3.13 --generate-hashes
+   uv pip compile backend/requirements-dev.in -c backend/requirements.txt -o backend/requirements-dev.txt --python-version 3.13 --generate-hashes
+   ```
+2. **No `--universal` needed.** Compiling on macOS (arm64) and for
+   x86_64 manylinux gave identical pins and hashes, so the CI lock check on
+   ubuntu doesn't fail spuriously on a lock made on a Mac. CI pins
+   `uv==0.12.5` so a new uv release can't change the output format.
+3. **The SDKs now use `httpx2`/`httpcore2`**, not httpx. httpx 0.29.0 is
+   only in the dev lock (for starlette's TestClient). A new test
+   (`test_backend_never_imports_httpx`) fails if backend code imports httpx,
+   which would crash a Railway build.
+4. **The lock-in-sync half of AC1/AC4 lives in CI**, not pytest, because
+   re-resolving needs network access and the suite stays offline. Locally
+   verified: the check passes on the committed files and fails after
+   adding a package to `requirements.in` without regenerating.
+5. **Close-path tracebacks.** Before the fix, on set C, paths 1 (client
+   leaves at prompt review), 5 (TCP abort) and 6 (server shutdown) each
+   logged one `WebSocketDisconnect` traceback from `websocket.close()`
+   inside `safe_close()`; paths 2–4 were clean. The earlier evidence run
+   counted 11 tracebacks, presumably across repeated runs; the fix and the
+   test are unaffected. The test (`tests/test_ws_close_paths.py`) also
+   passes on the old uvicorn 0.32.1 stack.
+6. **Startup line format:** `[STARTUP] Python 3.13.12 · fastapi 0.165.0 ·
+   starlette 1.10.0 · uvicorn 0.54.0 · websockets 17.4 · anthropic 2.14.0 ·
+   openai 3.60.0 · google-genai 3.6.1`, printed before the role → model
+   table. A package that is not installed shows as `missing`.
+7. **Out of scope, noted:** FastAPI 0.165 warns that `@app.on_event` is
+   deprecated in favour of lifespan handlers. It still works; migrating is a
+   separate change.
+
+### Verification
+
+- AC2: clean Python 3.13.12 venv, `pip install -r` both lockfiles,
+  `pip check` clean → 345 passed, 1 skipped (also 345/1 in the existing
+  local `.venv`).
+- AC7 (live, 2026-11-27, worktree backend on port 8001, pinned venv):
+  Gemini, GPT, Grok and Claude `model_complete` all `primary`;
+  `factcheck_availability` `primary`; `synthesis_model_used`
+  `claude-opus-4-6`; server log `Pipeline healthy: synthesis=primary`;
+  server closed the socket with 1000 after `session_complete`, no
+  tracebacks. Intake primary (claude-sonnet-4-6) and fallback
+  (`call_gpt4o_mini_intake`, gpt-5.4-mini) both returned a valid
+  `IntakeDecision`.
+
 ## Open Questions (resolved — kept for the record)
 
 1. **Target set.** Set C + `safe_close` fix (proposed), or pin the local
