@@ -827,6 +827,9 @@ async def _stream_model(
     return text
 
 
+CLIENT_DISCONNECTED = {"type": "client_disconnected"}
+
+
 async def _drain_client_messages(
     websocket: WebSocket,
     dialogue_queue: "asyncio.Queue | None" = None,
@@ -837,7 +840,8 @@ async def _drain_client_messages(
 
     If dialogue_queue is provided, routes ``user_dialogue_response`` and
     ``finalize_synthesis`` messages into it so the session handler can drive
-    the synthesis refinement loop.
+    the synthesis refinement loop. When the client goes away, CLIENT_DISCONNECTED
+    is queued so a handler waiting on the queue exits instead of hanging.
     """
     try:
         while True:
@@ -853,12 +857,12 @@ async def _drain_client_messages(
                 )
             ):
                 await dialogue_queue.put(data)
-    except WebSocketDisconnect:
-        return
     except asyncio.CancelledError:
         raise
-    except Exception:
-        return
+    except Exception:  # WebSocketDisconnect, or a broken socket
+        pass
+    if dialogue_queue is not None:
+        await dialogue_queue.put(CLIENT_DISCONNECTED)
 
 
 async def _generate_observations(
@@ -1000,6 +1004,9 @@ async def session_websocket(websocket: WebSocket):
             "confirmed_assumptions": config.get("confirmed_assumptions", []),
         })
         review_msg = await dialogue_queue.get()
+        if review_msg is CLIENT_DISCONNECTED:
+            print("[SESSION] client disconnected at prompt review", flush=True)
+            return
         if review_msg.get("type") == "prompt_adjusted":
             adjustment = (review_msg.get("adjustment") or "").strip()
             if adjustment:
@@ -1222,6 +1229,9 @@ async def session_websocket(websocket: WebSocket):
         finalized = False
         while not finalized:
             msg = await dialogue_queue.get()
+            if msg is CLIENT_DISCONNECTED:
+                print(f"[SESSION] client disconnected during dialogue — {health.summary()}", flush=True)
+                return
             msg_type = msg.get("type")
 
             if msg_type == "finalize_synthesis":
