@@ -278,8 +278,12 @@ tests. PRs 2–4 are a few hours each.
   with staggered delays: the draft and refinement stream in with the cursor
   and the REVISED badge, and a refinement failing mid-stream clears the
   partial text before the unavailable notice.
-- Still to do: AC9 (paid live check) and AC11 (production medians after
-  deploy).
+- AC9: the live check now runs ADR 002's T1 fixture through both the
+  streamed (session) path and the single-call (REST) path. Both passed on
+  2026-11-27 against the pinned SDK (anthropic 2.14.0): correct April 2026
+  pricing, Claude 3 Opus retirement mentioned, no "fabricated". The streamed
+  run's chunks joined equal its returned text. Both runs together took 41s.
+- Still to do: AC11 (production medians after deploy).
 
 ## Open Questions (resolved, kept for the record)
 
