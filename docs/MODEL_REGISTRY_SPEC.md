@@ -1,7 +1,7 @@
 # Model Registry — Role-Based Model Selection
 ## ai-roundtable · JSTcurious · November 2026
 
-**Status:** Draft — awaiting approval. No implementation until approved.
+**Status:** Approved 2026-11-27 with the proposed answers to all open questions (see Decisions).
 **Scope:** Steps 1–3 (roles, registry + resolver, discovery). Eval-gated
 promotion (step 4) is a follow-on that depends on the V3 eval harness.
 
@@ -230,8 +230,8 @@ Each criterion maps to at least one automated test unless marked *(manual)*.
 | AC7 | With every provider API unreachable, startup completes and resolves from registry data alone. |
 | AC8 | A role with no eligible model leaves startup running, logs an error, and its seat/stage reports `unavailable` instead of raising. |
 | AC9 | Resolution runs once per process; repeated calls return the same map; startup logs the full table. |
-| AC10 | **Parity:** with the seed registry and no discovery data, the resolved map equals today's `model_config.py` defaults for all 24 roles. |
-| AC11 | **Parity with discovery:** with live discovery, the only change from today is `intake.fallback1` moving off `gpt-4o-mini` (shutdown 2027-01-14) to the next approved OpenAI fast model. |
+| AC10 | **Parity:** with the seed registry and no discovery data, the resolved map equals today's `model_config.py` defaults for 23 of 24 roles; `intake.fallback1` is `gpt-5.4-mini` (Decision 2). |
+| AC11 | **Retirement via discovery:** when discovery reports a retirement date inside the buffer for an in-use approved model, that role moves to the next eligible approved model; with live discovery today, the resolved map equals AC10. |
 | AC12 | `--report` lists new provider models, approved models retiring within the warning window, and approved models missing from the provider; it exits 1 when a resolved model retires within the buffer or is missing. |
 | AC13 | `--write` adds unknown models as `candidate` and updates `retires_at`, and never changes the status of an existing entry. |
 | AC14 | The weekly workflow installs dependencies, reaches every provider, and opens or updates a single issue on failure. *(manual: one `workflow_dispatch` run)* |
@@ -243,8 +243,9 @@ Each criterion maps to at least one automated test unless marked *(manual)*.
 
 - Every model ID in today's `model_config.py`, `status: "approved"`, with
   tiers and ranks that reproduce today's choices (AC10).
-- An approved OpenAI `fast` model ranked below `gpt-4o-mini`, so AC11 has a
-  reviewed successor to move to (see Open Question 2).
+- `gpt-4o-mini` as `disabled` (shutdown 2027-01-14), so `intake.fallback1`
+  resolves to `gpt-5.4-mini` immediately rather than 30 days before shutdown
+  (Decision 2).
 - Newer models visible in provider APIs (e.g. `claude-opus-5-5`,
   `claude-sonnet-5-5`, `gpt-6-*`, `grok-4.5+`, Gemini `-latest` aliases) as
   `status: "candidate"` — recorded, not used.
@@ -270,7 +271,10 @@ Each criterion maps to at least one automated test unless marked *(manual)*.
 2. Seed registry reproducing today's defaults. — AC10
 3. Resolver: overrides, eligibility, retirement window, `distinct_from`,
    unresolved roles. — AC3–AC5, AC8, AC9
-4. Wire `model_config.py` to the resolution; remove hardcoded defaults. — AC1, AC15
+4. Wire `model_config.py` to the resolution; remove hardcoded defaults. Change
+   the intake OpenAI call from `max_tokens` to `max_completion_tokens`:
+   `gpt-5.4-mini` rejects `max_tokens` with a 400 (verified live), which would
+   break the intake fallback. — AC1, AC15
 5. Discovery module with per-provider timeouts and metadata. — AC7, AC11
 6. `tools/check_models` `--report` / `--write`. — AC12, AC13
 7. CI workflow fix. — AC14
@@ -289,7 +293,19 @@ About 2.5 days: tasks 1–4 ≈ 1.5 days, tasks 5–6 ≈ 0.5 day, tasks 7–8 �
 
 ---
 
-## Open Questions (need a decision before implementation)
+## Decisions (2026-11-27)
+
+All five proposals accepted:
+
+1. Retirement buffer 30 days, warning window 90 days.
+2. `intake.fallback1` successor is `gpt-5.4-mini`; `gpt-4o-mini` is seeded as
+   `disabled` so the switch happens now, not 30 days before shutdown.
+3. Newer generations stay `candidate` in this PR.
+4. CI opens or updates a single GitHub issue.
+5. The GPT research fallback keeps matching its executor for parity; a
+   follow-up gives it a different model.
+
+## Open Questions (resolved — kept for the record)
 
 1. **Retirement buffer.** Skip a model 30 days before its retirement date, and
    warn 90 days before? (Proposed.)
