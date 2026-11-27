@@ -142,6 +142,9 @@ Spec: docs/DEPENDENCY_PINNING_SPEC.md
 - backend/requirements.in — direct dependencies, lower bounds only (edit this)
 - backend/requirements.txt — every package ==pinned with hashes, generated
   (Railway installs this with pip install -r backend/requirements.txt)
+- requirements.txt at the repo root — comments only, never delete: Railpack
+  needs it to detect Python (without it the deploy crash-loops on
+  "uvicorn: command not found")
 - backend/requirements-dev.in / requirements-dev.txt — pytest, httpx (for
   starlette's TestClient), constrained by requirements.txt
 - Never hand-edit the .txt files. Regenerate both after any .in change:
