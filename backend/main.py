@@ -51,8 +51,6 @@ from backend.router import (
     call_synthesis_refinement,
     call_self_critique,
     parse_closing_questions,
-    select_synthesis_model,
-    perplexity_contradicts_round1,
     USE_CASE_LIBRARY,
     get_use_case,
 )
@@ -83,6 +81,7 @@ from backend.models.model_config import (
     FACTCHECK_FALLBACK1,
     FACTCHECK_FALLBACK2,
     FACTCHECK_PRIMARY,
+    SYNTHESIS_ANALYTICAL,
     SYNTHESIS_FALLBACK,
 )
 from backend.exporter import Exporter
@@ -454,8 +453,8 @@ async def session_run(req: SessionRunRequest):
     health.factcheck_degraded = (factcheck_provider != "primary")
     transcript.add_model_message("Perplexity", audit_text, round="audit")
 
-    # ── Synthesis: route to analytical or factual model based on audit ────────
-    synthesis_model_id, synthesis_route = select_synthesis_model(audit_text)
+    # ── Synthesis ────────────────────────────────────────────────────────────
+    synthesis_model_id, synthesis_route = SYNTHESIS_ANALYTICAL, "primary"
     synthesis_system = build_synthesis_prompt(
         output_type=output_type,
         perplexity_findings=audit_text,
@@ -481,11 +480,11 @@ async def session_run(req: SessionRunRequest):
                 SYNTHESIS_FALLBACK, synthesis_messages, synthesis_system, tier
             )
             health.synthesis_model = SYNTHESIS_FALLBACK
-            health.synthesis_routed = f"{synthesis_route}_fallback"
+            health.synthesis_routed = "fallback"
         except Exception as exc2:
             synthesis_text = f"[Synthesis unavailable: {exc2}]"
             health.synthesis_model = "emergency"
-            health.synthesis_routed = f"{synthesis_route}_fallback"
+            health.synthesis_routed = "fallback"
 
     transcript.add_model_message("Claude", synthesis_text, round="synthesis")
     print(f"[SESSION] {health.summary()}", flush=True)
@@ -1161,7 +1160,7 @@ async def session_websocket(websocket: WebSocket):
             critique_notes = await call_self_critique(
                 round1_responses=round1_for_critique,
                 perplexity_findings=audit_text,
-                contradiction_flag=perplexity_contradicts_round1(audit_text),
+                optimized_prompt=optimized_prompt,
             )
         except Exception as exc:
             print(f"[self-critique] failed ({exc}) — continuing without", flush=True)
@@ -1169,7 +1168,7 @@ async def session_websocket(websocket: WebSocket):
 
         # ── Synthesis draft — fires automatically after fact-check ────────────
         # No user gate. The user refines via the dialogue loop below.
-        synthesis_model_id, synthesis_route = select_synthesis_model(audit_text)
+        synthesis_model_id, synthesis_route = SYNTHESIS_ANALYTICAL, "primary"
         research_context = {
             "gemini": gemini_text,
             "gpt":    gpt_text,
@@ -1198,11 +1197,11 @@ async def session_websocket(websocket: WebSocket):
                     SYNTHESIS_FALLBACK, synthesis_messages, synthesis_system, tier
                 )
                 health.synthesis_model = SYNTHESIS_FALLBACK
-                health.synthesis_routed = f"{synthesis_route}_fallback"
+                health.synthesis_routed = "fallback"
             except Exception as exc2:
                 raw_synthesis = f"[Synthesis unavailable: {exc2}]"
                 health.synthesis_model = "emergency"
-                health.synthesis_routed = f"{synthesis_route}_fallback"
+                health.synthesis_routed = "fallback"
 
         current_synthesis, closing_questions = parse_closing_questions(raw_synthesis)
         revision_count = 0

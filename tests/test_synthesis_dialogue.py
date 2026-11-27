@@ -261,7 +261,8 @@ class TestSessionSynthesisWiring:
 
     BRIEF = "Career track and immigration track. TRACK PARITY REQUIRED: 2 tracks."
 
-    def _run_session(self, refine: bool = False, audit_provider: str = "primary"):
+    def _run_session(self, refine: bool = False, audit_provider: str = "primary",
+                     audit_text: str = "AUDIT"):
         from fastapi.testclient import TestClient
         from backend import main
 
@@ -270,13 +271,15 @@ class TestSessionSynthesisWiring:
 
         synth = AsyncMock(return_value="THE VERDICT\nbody\n\n? Does this fit?")
         refinement = AsyncMock(return_value={"content": "Revised", "closing_questions": []})
+        critique = AsyncMock(return_value="- critique")
+        self.critique = critique
         with patch.object(main, "call_research_gemini_async", r1("GEMINI_R1")), \
              patch.object(main, "call_research_gpt_async", r1("GPT_R1")), \
              patch.object(main, "call_research_grok_async", r1("GROK_R1")), \
              patch.object(main, "call_research_claude_async", r1("CLAUDE_R1")), \
              patch.object(main, "perplexity_research", MagicMock(return_value="pre")), \
-             patch.object(main, "audit_with_fallback", MagicMock(return_value=("AUDIT", audit_provider, []))), \
-             patch.object(main, "call_self_critique", AsyncMock(return_value="- critique")), \
+             patch.object(main, "audit_with_fallback", MagicMock(return_value=(audit_text, audit_provider, []))), \
+             patch.object(main, "call_self_critique", critique), \
              patch.object(main, "call_synthesis_async", synth), \
              patch.object(main, "call_synthesis_refinement", refinement):
             client = TestClient(main.app)
@@ -322,6 +325,18 @@ class TestSessionSynthesisWiring:
     def test_refinement_gets_brief(self):
         _, refinement = self._run_session(refine=True)
         assert "TRACK PARITY REQUIRED" in refinement.call_args.kwargs["optimized_prompt"]
+
+    def test_synthesis_uses_primary_model_even_when_audit_corrects_panel(self):
+        # Vocabulary that the removed keyword router sent to GPT.
+        from backend.models.model_config import SYNTHESIS_ANALYTICAL
+        synth, _ = self._run_session(
+            audit_text="GPT's pricing is outdated and incorrect; v5 was released as of 2026."
+        )
+        assert synth.call_args.args[0] == SYNTHESIS_ANALYTICAL
+
+    def test_self_critique_gets_brief(self):
+        self._run_session()
+        assert "TRACK PARITY REQUIRED" in self.critique.call_args.kwargs["optimized_prompt"]
 
     @pytest.mark.parametrize("provider,expected_avail", [
         ("primary", "primary"), ("fallback1", "fallback"), ("emergency", "unavailable"),
@@ -378,3 +393,21 @@ class TestAdvisorContext:
             {"role": "assistant", "content": "DRAFT"},
             {"role": "user", "content": ADVISOR_REVIEW_PROMPT},
         ]
+
+
+class TestSelfCritiqueContext:
+    def test_brief_reaches_the_critique_prompt(self):
+        import asyncio
+        from backend import router
+
+        fake = MagicMock()
+        fake.content = [MagicMock(text="UNSUPPORTED CLAIMS\nNone.")]
+        with patch("backend.models.anthropic_client.call_claude", return_value=fake) as mock_call:
+            asyncio.run(router.call_self_critique(
+                round1_responses={"gpt": "answer"},
+                perplexity_findings="audit",
+                optimized_prompt="TRACK PARITY REQUIRED: two tracks",
+            ))
+        content = mock_call.call_args.kwargs["messages"][0]["content"]
+        assert "TRACK PARITY REQUIRED: two tracks" in content
+        assert '<research_response source="Gpt">' in content

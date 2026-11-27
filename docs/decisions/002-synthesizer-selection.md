@@ -1,6 +1,6 @@
 # ADR 002: Synthesizer Model Selection
 
-**Status:** Accepted  
+**Status:** Accepted, amended 2026-11-26 (GPT factual route removed — see addendum)  
 **Date:** 2026-04-17
 
 ## Context
@@ -142,3 +142,50 @@ Transcripts in `docs/transcripts/` document synthesis behavior across 15 real
 sessions including failure cases (sessions 007, 008, 013) and successful cases
 (003, 005, 006, 009, 010, 011, 012). Session 013 is the index case for Claude's
 post-cutoff refusal on live Perplexity pricing data.
+
+## Addendum — November 26, 2026: Factual Route Removed
+
+**Decision:** Synthesis always uses `SYNTHESIS_ANALYTICAL` (Claude), with
+Qwen as the failure fallback. The GPT-5.4 factual route and its keyword
+classifier (`perplexity_contradicts_round1()`) are removed, along with
+`SYNTHESIS_FACTUAL`.
+
+**Why the route stopped doing its job:**
+The keyword classifier matched words that appear in almost every audit —
+the audit prompt itself asks Perplexity to "flag clearly wrong or outdated
+facts", so "outdated", "incorrect", "released" and "as of 2026" were nearly
+always present. In practice nearly every session was routed to GPT,
+including ones with no post-cutoff facts at all, while the UI still labelled
+the synthesis as Claude's.
+
+**Why removal rather than a better classifier:**
+The route existed for one failure: Claude refusing Perplexity's
+post-cutoff data. T1 (this ADR's index case) was re-run through the
+production synthesis path — current synthesis prompt with
+`SYNTHESIS_TRUST_HIERARCHY`, current models:
+
+| Path | Runs | Correct Apr-2026 pricing | Mentions Claude 3 Opus retirement | Refused / "fabricated" |
+|---|---|---|---|---|
+| Claude, smart tier (live path) | 9 | 9 | 9 | 0 |
+| Claude Opus, single call | 3 | 3 | 3 | 0 |
+| GPT-5.4 (old factual route) | 3 | 3 | 3 | 0 |
+
+Every Claude verdict led with the Perplexity-verified figures and
+explicitly deferred to the audit. The refusal documented above does not
+reproduce, so the route adds a second synthesizer without a failure to
+handle.
+
+Classifier alternatives were also tested before this decision: a
+`MATERIAL_CONTRADICTIONS` count from Perplexity, and per-conflict
+`DECISION-CHANGING` tags from the self-critique (Sonnet). Both produced
+well-formed output but routed 2 of 3 clean sessions to GPT by counting
+omissions and trivial date errors as material.
+
+**Limits of the evidence:** one fixture (T1), 15 runs — not the original
+8 sessions × 4 prompt variants.
+
+**Regression guard:** `tests/test_live_synthesis_post_cutoff.py` runs T1
+through the production path. It calls paid APIs, so it is skipped unless
+`RUN_LIVE_EVALS=1`. Run it when changing synthesis models or prompts; if
+the refusal returns, revisit routing (a post-cutoff tag on self-critique
+conflicts is the leading candidate).

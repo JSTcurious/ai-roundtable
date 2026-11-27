@@ -92,8 +92,8 @@ def call_synthesis_fallback(
     """
     Synthesis fallback — Qwen 2.5 72B via OpenRouter.
 
-    Used when both SYNTHESIS_ANALYTICAL (Claude) and SYNTHESIS_FACTUAL (GPT)
-    fail. Open-weight model, different provider, 100% eval score on synthesis.
+    Used when SYNTHESIS_ANALYTICAL (Claude) fails. Open-weight model,
+    different provider, 100% eval score on synthesis.
 
     Args:
         messages: list of {"role": str, "content": str} dicts
