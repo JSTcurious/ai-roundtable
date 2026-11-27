@@ -1,0 +1,6 @@
+# Test-only dependencies — hand-edited. Constrained by backend/requirements.txt.
+# Regenerate:
+#   uv pip compile backend/requirements-dev.in -c backend/requirements.txt -o backend/requirements-dev.txt --python-version 3.13 --generate-hashes
+pytest
+# starlette's TestClient needs httpx, which the SDKs no longer install.
+httpx

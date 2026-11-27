@@ -1,0 +1,16 @@
+# Direct backend dependencies — hand-edited, lower bounds only.
+# backend/requirements.txt is generated from this file; never edit it by hand.
+# Regenerate (see "Dependencies" in CLAUDE.md):
+#   uv pip compile backend/requirements.in -o backend/requirements.txt --python-version 3.13 --generate-hashes
+#
+# Lower bounds are the versions the dependency-pinning spec verified
+# (docs/DEPENDENCY_PINNING_SPEC.md, set C). openai >= 3 and anthropic >= 2 no
+# longer install httpx: backend code must never import httpx.
+fastapi>=0.165.0
+uvicorn[standard]>=0.54.0
+starlette>=1.10.0
+websockets>=17.4
+anthropic>=2.14.0
+openai>=3.60.0
+google-genai>=3.6.1
+python-dotenv>=1.2.4

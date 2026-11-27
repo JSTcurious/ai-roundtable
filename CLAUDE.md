@@ -125,11 +125,40 @@ docs/description — documentation only
 uv run pytest — always run before committing
 RUN_LIVE_EVALS=1 uv run pytest tests/test_live_synthesis_post_cutoff.py —
   paid live check; run when changing synthesis models or prompts
-250 tests passing as of April 2026
+CI (.github/workflows/tests.yml) runs on every PR and push to main: clean
+  pinned install, lockfile-in-sync check, full suite. No secrets needed
+tests/test_ws_close_paths.py runs the app on a real uvicorn server and fails
+  on any server traceback when a WebSocket session ends (six close paths)
+345 tests passing as of November 2026
 
 ## Environment
 - Python 3.13 (pinned via .python-version)
 - uv for package management
+- Local setup (makes .venv match the lockfiles exactly, removes extras):
+    uv pip sync backend/requirements.txt backend/requirements-dev.txt
+
+## Dependencies
+Spec: docs/DEPENDENCY_PINNING_SPEC.md
+- backend/requirements.in — direct dependencies, lower bounds only (edit this)
+- backend/requirements.txt — every package ==pinned with hashes, generated
+  (Railway installs this with pip install -r backend/requirements.txt)
+- backend/requirements-dev.in / requirements-dev.txt — pytest, httpx (for
+  starlette's TestClient), constrained by requirements.txt
+- Never hand-edit the .txt files. Regenerate both after any .in change:
+    uv pip compile backend/requirements.in -o backend/requirements.txt --python-version 3.13 --generate-hashes
+    uv pip compile backend/requirements-dev.in -c backend/requirements.txt -o backend/requirements-dev.txt --python-version 3.13 --generate-hashes
+  CI fails if a lockfile is out of sync with its .in file
+- Never import httpx in backend code — the SDKs no longer install it, so it
+  exists only in the dev lock (tests/test_dependency_pinning.py enforces this)
+- Upgrades are deliberate PRs (no Dependabot):
+  1. Add --upgrade-package <name> (or --upgrade for all) to the compile
+     command, then regenerate the dev lock
+  2. CI must pass (clean install + tests + close paths)
+  3. SDK or server-stack changes (anthropic, openai, google-genai, fastapi,
+     starlette, uvicorn, websockets): run the paid live check above and one
+     full live session before merging
+  4. After deploy, check the [STARTUP] Python … version line in the Railway
+     log shows the new versions
 - backend/.env — all API keys (never commit)
 - load_dotenv at top of all client modules before SDK imports
 - override=True to handle empty shell variables
@@ -159,7 +188,8 @@ stale UI.
 ## Known issues and notes
 - Gemini 503s intermittently (upstream capacity on preview models)
 - Grok API key confirmed loading correctly (PR #35)
-- Startup prints the role → model table; ⚠️ lines after it are real (retiring,
+- Startup prints a [STARTUP] line with Python and key package versions, then
+  the role → model table; ⚠️ lines after it are real (retiring,
   missing or unresolved models). Fix them in model_registry.json
 - python -m tools.check_models reports against live provider lists;
   --write adds new provider models as candidates (never approved) and

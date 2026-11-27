@@ -1,0 +1,46 @@
+name: Tests
+
+# Installs the pinned backend set in a clean runner exactly as Railway does,
+# checks the lockfiles are in sync with their .in files, and runs the full
+# suite (including the real-server WebSocket close paths in
+# tests/test_ws_close_paths.py). Offline: conftest.py sets MODEL_DISCOVERY=0
+# and the paid live check stays skipped, so no secrets are needed.
+# Spec: docs/DEPENDENCY_PINNING_SPEC.md.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install pinned dependencies (clean, no cache)
+        run: |
+          python -m pip install --no-cache-dir \
+            -r backend/requirements.txt -r backend/requirements-dev.txt
+
+      - name: Lockfiles in sync with requirements*.in
+        # The same commands recorded in each lockfile's header. uv keeps the
+        # committed pins, so this only differs when a .in file and its lock
+        # disagree (someone edited one without regenerating the other).
+        # uv is pinned so a new release can't change the output format.
+        run: |
+          python -m pip install --no-cache-dir uv==0.12.5
+          uv pip compile backend/requirements.in -o backend/requirements.txt --python-version 3.13 --generate-hashes
+          uv pip compile backend/requirements-dev.in -c backend/requirements.txt -o backend/requirements-dev.txt --python-version 3.13 --generate-hashes
+          git diff --exit-code -- backend/requirements.txt backend/requirements-dev.txt \
+            || { echo "::error::Lockfiles are out of date. Re-run the uv pip compile commands in CLAUDE.md and commit the result."; exit 1; }
+
+      - name: Run tests
+        run: python -m pytest -q
