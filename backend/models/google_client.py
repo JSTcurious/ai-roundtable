@@ -47,7 +47,12 @@ _client = None
 def _get_client() -> genai.Client:
     global _client
     if _client is None:
-        _client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+        # v1beta explicitly: the Gemini seat's preview models 404 on v1, which
+        # google-genai 3.x uses by default.
+        _client = genai.Client(
+            api_key=os.getenv("GOOGLE_API_KEY"),
+            http_options={"api_version": "v1beta"},
+        )
     return _client
 
 MODELS = {
