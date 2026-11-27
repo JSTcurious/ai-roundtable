@@ -78,6 +78,7 @@ from backend.models.perplexity_client import (
     audit_with_fallback,
 )
 from backend.models.pipeline_health import PipelineHealth
+from backend.stage_timing import StageTimer
 from backend.models.model_config import (
     FACTCHECK_FALLBACK1,
     FACTCHECK_FALLBACK2,
@@ -1035,6 +1036,7 @@ async def session_websocket(websocket: WebSocket):
                 optimized_prompt += f"\n\nUser correction: {adjustment}"
 
         await websocket.send_json({"type": "session_started"})
+        timer = StageTimer()  # starts after the review gate: user wait is not latency
 
         # ── Round 1: all four labs + Perplexity pre-research ─────────────────
         gemini_history = transcript.get_history_for_model("gemini")
@@ -1057,14 +1059,19 @@ async def session_websocket(websocket: WebSocket):
             except Exception as exc:
                 return f"[Perplexity pre-research unavailable: {exc}]"
 
-        results = await asyncio.gather(
-            call_research_gemini_async(gemini_history, gemini_system, tier),
-            call_research_gpt_async(gpt_history, gpt_system, tier),
-            call_research_grok_async(grok_history, grok_system, tier),
-            call_research_claude_async(claude_history, claude_system, tier),
-            _research_task(),
-            return_exceptions=True,
-        )
+        async with timer.stage("research"):
+            results = await asyncio.gather(
+                timer.timed("research.gemini",
+                            call_research_gemini_async(gemini_history, gemini_system, tier)),
+                timer.timed("research.gpt",
+                            call_research_gpt_async(gpt_history, gpt_system, tier)),
+                timer.timed("research.grok",
+                            call_research_grok_async(grok_history, grok_system, tier)),
+                timer.timed("research.claude",
+                            call_research_claude_async(claude_history, claude_system, tier)),
+                timer.timed("research.perplexity_pre", _research_task()),
+                return_exceptions=True,
+            )
 
         def _unpack(result, lab: str) -> tuple:
             if isinstance(result, Exception):
@@ -1120,32 +1127,33 @@ async def session_websocket(websocket: WebSocket):
                     "availability": availability,
                 })
 
-        await asyncio.gather(
-            _emit_model_tokens(
-                "Gemini", gemini_text,
-                model_used=tier_config["gemini"]["executor"],
-                advisor_model=tier_config["gemini"]["advisor"],
-                availability=gemini_avail,
-            ),
-            _emit_model_tokens(
-                "GPT", gpt_text,
-                model_used=tier_config["gpt"]["executor"],
-                advisor_model=tier_config["gpt"]["advisor"],
-                availability=gpt_avail,
-            ),
-            _emit_model_tokens(
-                "Grok", grok_text,
-                model_used=tier_config["grok"]["executor"],
-                advisor_model=tier_config["grok"]["advisor"],
-                availability=grok_avail,
-            ),
-            _emit_model_tokens(
-                "Claude", claude_r1_text,
-                model_used=tier_config["claude"]["executor"],
-                advisor_model=tier_config["claude"]["advisor"],
-                availability=claude_avail,
-            ),
-        )
+        async with timer.stage("research.emit"):
+            await asyncio.gather(
+                _emit_model_tokens(
+                    "Gemini", gemini_text,
+                    model_used=tier_config["gemini"]["executor"],
+                    advisor_model=tier_config["gemini"]["advisor"],
+                    availability=gemini_avail,
+                ),
+                _emit_model_tokens(
+                    "GPT", gpt_text,
+                    model_used=tier_config["gpt"]["executor"],
+                    advisor_model=tier_config["gpt"]["advisor"],
+                    availability=gpt_avail,
+                ),
+                _emit_model_tokens(
+                    "Grok", grok_text,
+                    model_used=tier_config["grok"]["executor"],
+                    advisor_model=tier_config["grok"]["advisor"],
+                    availability=grok_avail,
+                ),
+                _emit_model_tokens(
+                    "Claude", claude_r1_text,
+                    model_used=tier_config["claude"]["executor"],
+                    advisor_model=tier_config["claude"]["advisor"],
+                    availability=claude_avail,
+                ),
+            )
 
         transcript.add_model_message("Gemini", gemini_text,    round="round1")
         transcript.add_model_message("GPT",    gpt_text,       round="round1")
@@ -1155,12 +1163,13 @@ async def session_websocket(websocket: WebSocket):
         # ── Perplexity audit (Phase 2) with fallback ──────────────────────────
         await websocket.send_json({"type": "perplexity_thinking"})
         try:
-            audit_text, factcheck_provider, citations = await asyncio.to_thread(
-                audit_with_fallback,
-                research_context,
-                perplexity_pre,
-                tier,
-            )
+            async with timer.stage("factcheck"):
+                audit_text, factcheck_provider, citations = await asyncio.to_thread(
+                    audit_with_fallback,
+                    research_context,
+                    perplexity_pre,
+                    tier,
+                )
         except Exception as exc:
             audit_text = f"[Perplexity audit unavailable: {exc}]"
             factcheck_provider = "emergency"
@@ -1191,11 +1200,12 @@ async def session_websocket(websocket: WebSocket):
         # The critique notes are injected into the synthesis system prompt so
         # Claude addresses flagged gaps and unsupported claims in its verdict.
         try:
-            critique_notes = await call_self_critique(
-                round1_responses=research_context,
-                perplexity_findings=audit_text,
-                optimized_prompt=optimized_prompt,
-                unavailable_models=unavailable_models,
+            async with timer.stage("self_critique"):
+                critique_notes = await call_self_critique(
+                  round1_responses=research_context,
+                  perplexity_findings=audit_text,
+                  optimized_prompt=optimized_prompt,
+                  unavailable_models=unavailable_models,
             )
         except Exception as exc:
             print(f"[self-critique] failed ({exc}) — continuing without", flush=True)
@@ -1215,17 +1225,19 @@ async def session_websocket(websocket: WebSocket):
 
         await websocket.send_json({"type": "synthesis_thinking"})
         try:
-            raw_synthesis = await call_synthesis_async(
-                synthesis_model_id, synthesis_messages, synthesis_system, tier
-            )
+            async with timer.stage("synthesis"):
+                raw_synthesis = await call_synthesis_async(
+                    synthesis_model_id, synthesis_messages, synthesis_system, tier
+                )
             health.synthesis_model = synthesis_model_id
             health.synthesis_routed = synthesis_route
         except Exception as exc:
             print(f"[synthesis] primary failed ({exc}) — using fallback", flush=True)
             try:
-                raw_synthesis = await call_synthesis_async(
-                    SYNTHESIS_FALLBACK, synthesis_messages, synthesis_system, tier
-                )
+                async with timer.stage("synthesis.fallback"):
+                    raw_synthesis = await call_synthesis_async(
+                        SYNTHESIS_FALLBACK, synthesis_messages, synthesis_system, tier
+                    )
                 health.synthesis_model = SYNTHESIS_FALLBACK
                 health.synthesis_routed = "fallback"
             except Exception as exc2:
@@ -1246,6 +1258,7 @@ async def session_websocket(websocket: WebSocket):
             "synthesis_model_used": current_synthesis_model,
             "synthesis_route": health.synthesis_routed or synthesis_route,
         })
+        print(timer.summary("first_draft"), flush=True)
 
         # ── Dialogue loop: refine on user_dialogue_response, exit on finalize ──
         finalized = False
@@ -1277,15 +1290,16 @@ async def session_websocket(websocket: WebSocket):
 
                 await websocket.send_json({"type": "synthesis_thinking"})
                 try:
-                    refined = await call_synthesis_refinement(
-                        original_synthesis=current_synthesis,
-                        dialogue_history=dialogue_history,
-                        user_message=user_text,
-                        research_context=research_context,
-                        audit_context=audit_text,
-                        citations=citations,
-                        optimized_prompt=optimized_prompt,
-                        unavailable_models=unavailable_models,
+                    async with timer.stage(f"refinement.{revision_count + 1}"):
+                        refined = await call_synthesis_refinement(
+                          original_synthesis=current_synthesis,
+                          dialogue_history=dialogue_history,
+                          user_message=user_text,
+                          research_context=research_context,
+                          audit_context=audit_text,
+                          citations=citations,
+                          optimized_prompt=optimized_prompt,
+                          unavailable_models=unavailable_models,
                     )
                 except Exception as exc:
                     refined = {
