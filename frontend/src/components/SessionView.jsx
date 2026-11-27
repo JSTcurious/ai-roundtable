@@ -295,6 +295,8 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
   const [synthesisDraft, setSynthesisDraft] = useState(null);
   /** Revision counter — 0 for initial draft, increments on each refinement. */
   const [synthesisRevision, setSynthesisRevision] = useState(0);
+  /** Model ID that wrote the current synthesis text (changes on refinement). */
+  const [synthesisModel, setSynthesisModel] = useState(null);
   /** Array of closing-question strings surfaced with the current draft. */
   const [closingQuestions, setClosingQuestions] = useState([]);
   /** User's in-progress dialogue input. */
@@ -610,6 +612,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
             setSynthesisDraft(content);
             setSynthesisText(content);
             setSynthesisRevision(Number(data.revision) || 0);
+            if (data.synthesis_model_used) setSynthesisModel(data.synthesis_model_used);
             setClosingQuestions(Array.isArray(data.closing_questions) ? data.closing_questions : []);
             setSynthesisStreaming(false);
             setSynthesisThinking(false);
@@ -624,6 +627,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
             setSynthesisDraft(content);
             setSynthesisText(content);
             setSynthesisRevision(Number(data.revision) || 0);
+            if (data.synthesis_model_used) setSynthesisModel(data.synthesis_model_used);
             setClosingQuestions([]);
             setSynthesisStreaming(false);
             setSynthesisThinking(false);
@@ -1378,6 +1382,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
                   citations={citations}
                   variant={synthesisFinal ? "final" : synthesisRevision > 0 ? "revised" : "draft"}
                   revision={synthesisRevision}
+                  modelId={synthesisModel}
                 />
               )}
 

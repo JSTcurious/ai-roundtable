@@ -831,6 +831,9 @@ after this dialogue turn — not repeat earlier questions.
 """
 
 
+REFINEMENT_MODEL = get_advisor_model("deep", "claude")
+
+
 async def call_synthesis_refinement(
     original_synthesis: str,
     dialogue_history: list,
