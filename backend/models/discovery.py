@@ -6,15 +6,22 @@ aliases. Best effort: a provider that errors, has no API key, or misses the
 deadline is simply absent from the result. Perplexity has no list endpoint.
 """
 
+import json
 import logging
 import os
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor, wait
-
-import httpx
 
 from backend.models.registry import parse_date
 
 logger = logging.getLogger(__name__)
+
+
+def _get_json(url: str, timeout: float, headers: dict = None) -> dict:
+    # stdlib on purpose: openai/anthropic releases no longer pull in httpx
+    request = urllib.request.Request(url, headers=headers or {})
+    with urllib.request.urlopen(request, timeout=timeout) as resp:
+        return json.load(resp)
 
 
 def _anthropic(timeout: float):
@@ -46,7 +53,9 @@ def _google(timeout: float):
     if not key:
         return None
     from google import genai
-    client = genai.Client(api_key=key, http_options={"timeout": int(timeout * 1000)})
+    # v1beta explicitly: preview models (the Gemini seat uses them) are not served on
+    # v1, which google-genai 3.x uses by default — list what the client can call.
+    client = genai.Client(api_key=key, http_options={"timeout": int(timeout * 1000), "api_version": "v1beta"})
     return {
         (m.name or "").removeprefix("models/"): {"retires_at": None, "aliases": []}
         for m in client.models.list()
@@ -58,21 +67,18 @@ def _xai(timeout: float):
     key = os.getenv("GROK_API_KEY")
     if not key:
         return None
-    resp = httpx.get("https://api.x.ai/v1/models",
-                     headers={"Authorization": f"Bearer {key}"}, timeout=timeout)
-    resp.raise_for_status()
+    data = _get_json("https://api.x.ai/v1/models", timeout, {"Authorization": f"Bearer {key}"})
     return {
         m["id"]: {"retires_at": None, "aliases": list(m.get("aliases") or [])}
-        for m in resp.json().get("data", [])
+        for m in data.get("data", [])
     }
 
 
 def _openrouter(timeout: float):
-    resp = httpx.get("https://openrouter.ai/api/v1/models", timeout=timeout)
-    resp.raise_for_status()
+    data = _get_json("https://openrouter.ai/api/v1/models", timeout)
     return {
         m["id"]: {"retires_at": parse_date(m.get("expiration_date")), "aliases": []}
-        for m in resp.json().get("data", [])
+        for m in data.get("data", [])
     }
 
 
