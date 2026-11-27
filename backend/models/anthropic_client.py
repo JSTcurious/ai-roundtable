@@ -67,6 +67,7 @@ def call_claude(
     system: str = None,
     stream: bool = False,
     model: str = None,
+    max_tokens: int = 4096,
 ):
     """
     Call Claude with the given messages and tier.
@@ -77,6 +78,7 @@ def call_claude(
         system:   optional system prompt string
         stream:   if True, returns a streaming context manager
         model:    explicit model ID; overrides the tier lookup
+        max_tokens: output cap (default 4096)
 
     Returns:
         Non-streaming: anthropic.types.Message
@@ -85,7 +87,7 @@ def call_claude(
     model = model or MODELS.get(tier, MODELS["quick"])
     kwargs = dict(
         model=model,
-        max_tokens=4096,
+        max_tokens=max_tokens,
         messages=messages,
     )
     if system:

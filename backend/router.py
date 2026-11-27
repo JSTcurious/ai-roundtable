@@ -87,6 +87,14 @@ Good:
 Do not substitute other phrasings. Use exactly the bracketed tags above.
 """
 
+# Safety cap for the self-critique pre-flight (docs/LATENCY_SPEC.md L5).
+# The length rule in SELF_CRITIQUE_SYSTEM is what keeps the call short
+# (~1,000 tokens measured); a hard cap alone cut off the last sections.
+SELF_CRITIQUE_MAX_TOKENS = 1500
+SELF_CRITIQUE_TRUNCATED_NOTE = (
+    f"\n\n[Self-critique truncated at {SELF_CRITIQUE_MAX_TOKENS} tokens.]"
+)
+
 SELF_CRITIQUE_SYSTEM = """\
 You are performing a pre-synthesis audit. You have the round-1 responses
 from the research panel and a Perplexity fact-check result. Your job is NOT to synthesize — it is
@@ -123,6 +131,10 @@ Contradictions between Perplexity's live findings and round-1 model claims.
 Format: "Perplexity says [X]. [Model] claimed [Y]. [RESOLVED: Perplexity wins]"
 
 Bullet points only. No prose. No synthesis. This is a pre-flight check.
+
+Length limit: at most 3 bullets per section, each under 30 words. Report only
+issues that could change the final recommendation; skip minor ones. Every
+section must appear, even if it is just "None."
 """
 
 
@@ -991,8 +1003,12 @@ async def call_self_critique(
                 + current_date_note()
                 + panel_status_note(unavailable_models)
             ),
+            max_tokens=SELF_CRITIQUE_MAX_TOKENS,
         )
-        return response.content[0].text
+        notes = response.content[0].text
+        if response.stop_reason == "max_tokens":
+            notes += SELF_CRITIQUE_TRUNCATED_NOTE
+        return notes
     except Exception as exc:
         return f"[Self-critique unavailable: {exc}]"
 
