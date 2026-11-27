@@ -29,6 +29,7 @@ import os
 from openai import OpenAI
 
 from backend.models.model_config import FACTCHECK_FALLBACK1, FACTCHECK_PRIMARY
+from backend.router import current_date_note
 
 _client = None
 
@@ -78,6 +79,7 @@ def research(prompt: str, tier: str = "quick") -> str:
         f"5. Current salary and market data\n\n"
         f"Return findings with citations and dates. "
         f"Flag anything that changed significantly in the last 6 months."
+        + current_date_note()
     )
 
     response = _get_client().chat.completions.create(
@@ -100,11 +102,11 @@ def _build_audit_prompt(
 
     base = f"""
 You are fact-checking AI model responses for accuracy and currency.
-
+{current_date_note()}
 ## Round-1 Responses to Audit
 {responses_block}
 
-## Pre-Research Context
+## Pre-Research Context (your own earlier web search — not a model response)
 {research_text or '(no pre-research available)'}
 """
 
