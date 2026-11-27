@@ -82,6 +82,7 @@ from backend.models.model_config import (
     FACTCHECK_FALLBACK1,
     FACTCHECK_FALLBACK2,
     FACTCHECK_PRIMARY,
+    RESOLUTION,
     SYNTHESIS_ANALYTICAL,
     SYNTHESIS_FALLBACK,
 )
@@ -109,12 +110,10 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup_event():
-    """Validate model config on startup. Logs warnings, never crashes."""
-    import asyncio
-    loop = asyncio.get_event_loop()
-    warnings = await loop.run_in_executor(None, validate_model_config)
-    if warnings:
-        print(f"⚠️  {len(warnings)} stale model ID(s) — run: python -m tools.check_models")
+    """Log the resolved role → model table and any registry problems. Never crashes."""
+    print(RESOLUTION.format_table(), flush=True)
+    for message in validate_model_config():
+        print(f"⚠️  {message}", flush=True)
 
 
 # In-memory session store — sufficient for v2. Replace with Redis for multi-user.
@@ -360,7 +359,7 @@ async def session_run(req: SessionRunRequest):
     Raises 400 if tier is invalid.
     """
     config = req.session_config
-    tier = config.get("tier", "smart"); print(f"[SESSION] tier={tier}", flush=True)
+    tier = config.get("tier", "smart"); print(f"[SESSION] tier={tier} models={RESOLUTION.fingerprint()}", flush=True)
     output_type = config.get("output_type", "report")
     optimized_prompt = _enrich_prompt(config.get("optimized_prompt", req.prompt), config)
     health = PipelineHealth()
@@ -973,7 +972,7 @@ async def session_websocket(websocket: WebSocket):
     prompt = data.get("prompt", "")
     config = data.get("session_config", {})
     history = data.get("history", [])
-    tier = config.get("tier", "smart"); print(f"[SESSION] tier={tier}", flush=True)
+    tier = config.get("tier", "smart"); print(f"[SESSION] tier={tier} models={RESOLUTION.fingerprint()}", flush=True)
     output_type = config.get("output_type", "report")
 
     try:

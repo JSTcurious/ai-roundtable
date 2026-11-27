@@ -51,7 +51,10 @@ fact-check. User engages with the draft, not a blank textarea.
 - backend/router.py — synthesis system prompt, refinement, closing questions
 - backend/models/openai_client.py — _build_intake_system_prompt()
 - backend/models/anthropic_client.py — Claude API client
-- backend/models/model_config.py — all model IDs (single source of truth)
+- backend/models/model_registry.json — every model ID, its tier/rank/status, and
+  the 24 pipeline roles (single source of truth; spec: docs/MODEL_REGISTRY_SPEC.md)
+- backend/models/registry.py — resolves each role to a model at startup
+- backend/models/model_config.py — resolved constants used by call sites
 - backend/models/intake_decision.py — IntakeDecision Pydantic schema
 - frontend/src/components/LandingPage.jsx — landing page; panel member descriptions
   must stay aligned with cognitive roles in ROUND1_SYSTEM_PROMPTS (router.py)
@@ -104,7 +107,8 @@ Synthesis output format — four required sections:
 - Never rename prompt variables without updating all call sites
 - Template variables use {curly_brace} syntax
 - wrap_model_response() defined in router.py only
-- Never hardcode model IDs — always use model_config.py constants
+- Never hardcode model IDs — they live only in model_registry.json; code uses
+  model_config.py constants (tests/test_model_registry.py AC1 enforces this)
 
 ## Git workflow
 - Terminal: branch creation and pushing
@@ -155,8 +159,14 @@ stale UI.
 ## Known issues and notes
 - Gemini 503s intermittently (upstream capacity on preview models)
 - Grok API key confirmed loading correctly (PR #35)
-- Stale model ID warnings from model_validator.py on startup are real —
-  the IDs 404 at runtime. Fix them in model_config.py; don't ignore them
+- Startup prints the role → model table; ⚠️ lines after it are real (retiring,
+  missing or unresolved models). Fix them in model_registry.json
+- python -m tools.check_models reports against live provider lists;
+  --write adds new provider models as candidates (never approved) and
+  refreshes retirement dates. Approving a model = editing its status in a PR
+- Per-role env vars (RESEARCH_GPT_DEEP, SYNTHESIS_ANALYTICAL, …) still override
+  the registry — use them to pin production without a deploy
+- MODEL_DISCOVERY=0 skips provider API calls at startup (tests set this)
 - Provider clients must read model IDs from model_config.py — never add
   a local MODELS dict (tests/test_model_config.py enforces this)
 - Intake max 7 questions not yet enforced (v2 spec in docs/)
@@ -166,7 +176,7 @@ stale UI.
 ## What not to do
 - Never use claude/ prefixed branch names
 - Never merge PRs without review
-- Never hardcode model IDs — always use model_config.py constants
+- Never hardcode model IDs — add them to model_registry.json
 - Never commit backend/.env
 - Never use worktree mode when debugging live backend issues
 - Never run bare pytest — always use uv run pytest

@@ -409,3 +409,23 @@ def test_ac13_models_already_retiring_are_not_added_as_candidates(seed):
     updated, _ = update_registry(copy.deepcopy(seed), discovered, today=TODAY)
     ids = {m["id"] for m in updated["models"]}
     assert "claude-new" in ids and "claude-old" not in ids
+
+
+def test_ac9_session_log_line_carries_resolution_fingerprint(capsys):
+    import asyncio
+    from backend.models.model_config import RESOLUTION
+    from tests.test_ws_disconnect import HANDSHAKE, FakeWebSocket, _run
+
+    ws = FakeWebSocket(disconnect_after_type="prompt_review")
+    ws.inbound.put_nowait(HANDSHAKE)
+    asyncio.run(_run(ws))
+    assert f"models={RESOLUTION.fingerprint()}" in capsys.readouterr().out
+
+
+def test_ac9_startup_logs_table(capsys):
+    import asyncio
+    from backend import main
+    from backend.models.model_config import RESOLUTION
+    asyncio.run(main.startup_event())
+    out = capsys.readouterr().out
+    assert RESOLUTION.fingerprint() in out and "synthesis.primary" in out

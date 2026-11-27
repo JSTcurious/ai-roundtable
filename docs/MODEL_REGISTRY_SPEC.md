@@ -1,7 +1,7 @@
 # Model Registry — Role-Based Model Selection
 ## ai-roundtable · JSTcurious · November 2026
 
-**Status:** Approved 2026-11-27 with the proposed answers to all open questions (see Decisions).
+**Status:** Approved 2026-11-27 (see Decisions); implemented on `feat/model-registry`.
 **Scope:** Steps 1–3 (roles, registry + resolver, discovery). Eval-gated
 promotion (step 4) is a follow-on that depends on the V3 eval harness.
 
@@ -292,6 +292,26 @@ replacement, which must happen before 2027-01-14 regardless.
 About 2.5 days: tasks 1–4 ≈ 1.5 days, tasks 5–6 ≈ 0.5 day, tasks 7–8 ≈ 0.5 day.
 
 ---
+
+## Implementation Notes (deviations found while building)
+
+- **Discovery uses the standard library for HTTP.** A clean install of
+  `backend/requirements.txt` (unpinned, as Railway builds it) now pulls
+  `openai` 3.x and `anthropic` 2.x, which no longer depend on `httpx`; an
+  `import httpx` in discovery would have crashed app startup on the next
+  Railway build.
+- **Google models are listed from `v1beta`.** `google-genai` 3.x defaults to
+  the `v1` API, where the Gemini seat's preview models return 404 — so a
+  default listing reports them missing. Discovery lists what the client
+  actually calls. The same default is the likely cause of "Gemini
+  unavailable" on Railway; the client fix ships separately.
+- **Already-retiring models are not added as candidates** (extends AC13):
+  `claude-sonnet-4-5` and `claude-opus-4-5` were deprecated when first seen.
+- **Per-vendor include/exclude filters** in the registry's `discovery` block
+  keep audio, image, realtime, dated snapshots and OpenRouter variants out
+  of the candidate list.
+- **Seeded with `--write` against live APIs:** 64 candidates; resolution
+  unchanged (fingerprint `06ae7817`).
 
 ## Decisions (2026-11-27)
 
