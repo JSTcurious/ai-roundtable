@@ -262,23 +262,29 @@ class TestSessionSynthesisWiring:
     BRIEF = "Career track and immigration track. TRACK PARITY REQUIRED: 2 tracks."
 
     def _run_session(self, refine: bool = False, audit_provider: str = "primary",
-                     audit_text: str = "AUDIT"):
+                     audit_text: str = "AUDIT", unavailable: tuple = ()):
         from fastapi.testclient import TestClient
         from backend import main
 
         def r1(text):
+            lab = text.split("_")[0].capitalize()
+            if lab.lower() in unavailable:
+                return AsyncMock(return_value=(f"[{lab} unavailable this session]", "unavailable"))
             return AsyncMock(return_value=(text, "primary"))
 
         synth = AsyncMock(return_value="THE VERDICT\nbody\n\n? Does this fit?")
         refinement = AsyncMock(return_value={"content": "Revised", "closing_questions": []})
         critique = AsyncMock(return_value="- critique")
         self.critique = critique
+        audit = MagicMock(return_value=(audit_text, audit_provider, []))
+        self.audit = audit
+        self.refinement = refinement
         with patch.object(main, "call_research_gemini_async", r1("GEMINI_R1")), \
              patch.object(main, "call_research_gpt_async", r1("GPT_R1")), \
              patch.object(main, "call_research_grok_async", r1("GROK_R1")), \
              patch.object(main, "call_research_claude_async", r1("CLAUDE_R1")), \
              patch.object(main, "perplexity_research", MagicMock(return_value="pre")), \
-             patch.object(main, "audit_with_fallback", MagicMock(return_value=(audit_text, audit_provider, []))), \
+             patch.object(main, "audit_with_fallback", audit), \
              patch.object(main, "call_self_critique", critique), \
              patch.object(main, "call_synthesis_async", synth), \
              patch.object(main, "call_synthesis_refinement", refinement):
@@ -337,6 +343,21 @@ class TestSessionSynthesisWiring:
     def test_self_critique_gets_brief(self):
         self._run_session()
         assert "TRACK PARITY REQUIRED" in self.critique.call_args.kwargs["optimized_prompt"]
+
+    def test_unavailable_panelist_is_excluded_and_named(self):
+        synth, refinement = self._run_session(refine=True, unavailable=("gemini",))
+        system = synth.call_args.args[2]
+        assert '<research_response source="Gemini">' not in system
+        assert "Unavailable this session: Gemini" in system
+        assert "GPT_R1" in system and "GROK_R1" in system and "CLAUDE_R1" in system
+        assert "gemini" not in self.audit.call_args.args[1]
+        assert self.critique.call_args.kwargs["unavailable_models"] == ["gemini"]
+        assert "gemini" not in self.critique.call_args.kwargs["round1_responses"]
+        assert refinement.call_args.kwargs["unavailable_models"] == ["gemini"]
+
+    def test_full_panel_has_no_panel_status_note(self):
+        synth, _ = self._run_session()
+        assert "Panel Status" not in synth.call_args.args[2]
 
     @pytest.mark.parametrize("provider,expected_avail", [
         ("primary", "primary"), ("fallback1", "fallback"), ("emergency", "unavailable"),

@@ -725,7 +725,11 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
       const res = await fetch(`${API_BASE}/api/export/markdown`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: "full", transcript: transcriptForExport, session_config: sessionConfig }),
+        body: JSON.stringify({
+          mode: "full",
+          transcript: transcriptForExport,
+          session_config: { ...sessionConfig, synthesis_model: synthesisModel },
+        }),
       });
       if (!res.ok) return;
       const blob = await res.blob();
@@ -738,7 +742,7 @@ function SessionView({ sessionConfig, resumeTranscript = null, onSynthesisComple
       a.remove();
       URL.revokeObjectURL(url);
     } catch { /* navigate home regardless */ }
-  }, [transcriptForExport, sessionConfig]);
+  }, [transcriptForExport, sessionConfig, synthesisModel]);
 
   const downloadFinalAnswerTxt = useCallback(() => {
     if (!synthesisText) return;

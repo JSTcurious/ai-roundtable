@@ -1056,6 +1056,17 @@ async def session_websocket(websocket: WebSocket):
             "grok":   grok_avail,
             "claude": claude_avail,
         }
+        unavailable_models = [
+            lab for lab, status in health.research_models.items() if status == "unavailable"
+        ]
+        research_context = {
+            lab: text
+            for lab, text in (
+                ("gemini", gemini_text), ("gpt", gpt_text),
+                ("grok", grok_text), ("claude", claude_r1_text),
+            )
+            if lab not in unavailable_models
+        }
 
         async def _emit_model_tokens(
             sender: str,
@@ -1117,8 +1128,7 @@ async def session_websocket(websocket: WebSocket):
         try:
             audit_text, factcheck_provider, citations = await asyncio.to_thread(
                 audit_with_fallback,
-                {"gemini": gemini_text, "gpt": gpt_text,
-                 "grok": grok_text, "claude": claude_r1_text},
+                research_context,
                 perplexity_pre,
                 tier,
             )
@@ -1152,16 +1162,11 @@ async def session_websocket(websocket: WebSocket):
         # The critique notes are injected into the synthesis system prompt so
         # Claude addresses flagged gaps and unsupported claims in its verdict.
         try:
-            round1_for_critique = {
-                "gemini": gemini_text,
-                "gpt":    gpt_text,
-                "grok":   grok_text,
-                "claude": claude_r1_text,
-            }
             critique_notes = await call_self_critique(
-                round1_responses=round1_for_critique,
+                round1_responses=research_context,
                 perplexity_findings=audit_text,
                 optimized_prompt=optimized_prompt,
+                unavailable_models=unavailable_models,
             )
         except Exception as exc:
             print(f"[self-critique] failed ({exc}) — continuing without", flush=True)
@@ -1170,17 +1175,12 @@ async def session_websocket(websocket: WebSocket):
         # ── Synthesis draft — fires automatically after fact-check ────────────
         # No user gate. The user refines via the dialogue loop below.
         synthesis_model_id, synthesis_route = SYNTHESIS_ANALYTICAL, "primary"
-        research_context = {
-            "gemini": gemini_text,
-            "gpt":    gpt_text,
-            "grok":   grok_text,
-            "claude": claude_r1_text,
-        }
         synthesis_system = build_synthesis_system(
             citations=citations,
             audit_text=audit_text,
             critique_notes=critique_notes,
             round1_responses=research_context,
+            unavailable_models=unavailable_models,
         )
         synthesis_messages = [{"role": "user", "content": optimized_prompt}]
 
@@ -1253,6 +1253,7 @@ async def session_websocket(websocket: WebSocket):
                         audit_context=audit_text,
                         citations=citations,
                         optimized_prompt=optimized_prompt,
+                        unavailable_models=unavailable_models,
                     )
                 except Exception as exc:
                     refined = {

@@ -25,6 +25,21 @@ from datetime import datetime
 
 from backend.transcript import Transcript
 
+_SYNTHESIZER_FAMILIES = (
+    ("claude", "Claude"),
+    ("gpt", "GPT"),
+    ("gemini", "Gemini"),
+    ("grok", "Grok"),
+    ("qwen", "Qwen"),
+)
+
+
+def _synthesis_byline(config: dict) -> str:
+    """Italic byline naming the model family that wrote the synthesis, if known."""
+    model_id = (config.get("synthesis_model") or "").lower()
+    name = next((label for key, label in _SYNTHESIZER_FAMILIES if key in model_id), None)
+    return f"*{name} · incorporating all rounds*" if name else "*Incorporating all rounds*"
+
 
 class Exporter:
     """Generates markdown exports for completed roundtable sessions."""
@@ -139,6 +154,8 @@ class Exporter:
             lines += ["### 🔵 Gemini", "", round1["gemini"], ""]
         if round1.get("gpt"):
             lines += ["### 🟢 GPT", "", round1["gpt"], ""]
+        if round1.get("grok"):
+            lines += ["### ⚫ Grok", "", round1["grok"], ""]
 
         lines += ["---", ""]
 
@@ -163,7 +180,7 @@ class Exporter:
         if synthesis_text:
             lines += [
                 "## Synthesis",
-                "*Claude · incorporating all rounds*",
+                _synthesis_byline(config),
                 "",
                 self._strip_headings(synthesis_text),
                 "",
@@ -215,7 +232,7 @@ class Exporter:
         if synthesis_text:
             lines += [
                 "## Synthesis",
-                "*Claude · incorporating Claude, Gemini, and GPT*",
+                _synthesis_byline(config),
                 "",
                 self._strip_headings(synthesis_text),
                 "",
