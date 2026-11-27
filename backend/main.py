@@ -108,9 +108,30 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+_VERSION_LOG_PACKAGES = (
+    "fastapi", "starlette", "uvicorn", "websockets",
+    "anthropic", "openai", "google-genai",
+)
+
+
+def _dependency_versions_line() -> str:
+    """One line naming the running Python and key package versions."""
+    import platform
+    from importlib.metadata import PackageNotFoundError, version
+
+    parts = [f"Python {platform.python_version()}"]
+    for name in _VERSION_LOG_PACKAGES:
+        try:
+            parts.append(f"{name} {version(name)}")
+        except PackageNotFoundError:
+            parts.append(f"{name} missing")
+    return "[STARTUP] " + " · ".join(parts)
+
+
 @app.on_event("startup")
 async def startup_event():
-    """Log the resolved role → model table and any registry problems. Never crashes."""
+    """Log running versions, the role → model table and any registry problems. Never crashes."""
+    print(_dependency_versions_line(), flush=True)
     print(RESOLUTION.format_table(), flush=True)
     for message in validate_model_config():
         print(f"⚠️  {message}", flush=True)
