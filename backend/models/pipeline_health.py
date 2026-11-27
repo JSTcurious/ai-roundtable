@@ -21,7 +21,7 @@ class PipelineHealth:
     factcheck_model:     str  = "unknown"
     factcheck_degraded:  bool = False
     synthesis_model:     str  = "unknown"
-    synthesis_routed:    str  = "analytical"  # analytical | factual | *_fallback
+    synthesis_routed:    str  = "primary"  # primary | fallback
 
     def summary(self) -> str:
         """One-line summary for logging."""
@@ -54,11 +54,6 @@ class PipelineHealth:
                 lines.append(f"ℹ️ {lab.capitalize()} used fallback model")
         if self.factcheck_degraded:
             lines.append(f"⚠️ Perplexity unavailable — used {self.factcheck_model}")
-        if "fallback" in self.synthesis_routed:
+        if self.synthesis_routed == "fallback":
             lines.append("⚠️ Synthesis used fallback model")
-        elif self.synthesis_routed == "factual":
-            lines.append(
-                "ℹ️ Synthesis routed to factual model — "
-                "Perplexity data contradicted round-1 responses"
-            )
         return lines

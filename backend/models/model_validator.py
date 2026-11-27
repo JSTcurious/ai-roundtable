@@ -125,7 +125,7 @@ def validate_model_config() -> list:
         RESEARCH_CLAUDE_SMART_EXECUTOR, RESEARCH_CLAUDE_SMART_ADVISOR,
         RESEARCH_CLAUDE_DEEP, RESEARCH_CLAUDE_FALLBACK,
         FACTCHECK_PRIMARY, FACTCHECK_FALLBACK1, FACTCHECK_FALLBACK2,
-        SYNTHESIS_ANALYTICAL, SYNTHESIS_FACTUAL,
+        SYNTHESIS_ANALYTICAL,
         INTAKE_PRIMARY, INTAKE_FALLBACK2,
     )
 
@@ -149,7 +149,6 @@ def validate_model_config() -> list:
         "factcheck_primary":      FACTCHECK_PRIMARY,
         "factcheck_fallback2":    FACTCHECK_FALLBACK2,
         "synthesis_analytical":   SYNTHESIS_ANALYTICAL,
-        "synthesis_factual":      SYNTHESIS_FACTUAL,
         "intake_primary":         INTAKE_PRIMARY,
         "intake_fallback2":       INTAKE_FALLBACK2,
     }

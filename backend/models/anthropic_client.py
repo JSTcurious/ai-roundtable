@@ -36,6 +36,7 @@ from functools import partial
 from anthropic import Anthropic
 
 from backend.models.model_config import get_advisor_model, get_executor_model
+from backend.router import build_advisor_messages
 
 logger = logging.getLogger(__name__)
 
@@ -54,14 +55,6 @@ MODELS = {
 }
 
 _ADVISOR_MODEL = get_advisor_model("smart", "claude")
-
-_ADVISOR_PROMPT = (
-    "Review this response and produce an improved final version.\n\n"
-    "Original request: {request}\n"
-    "Response to review: {response}\n\n"
-    "Identify gaps, weak reasoning, missing considerations. "
-    "Output only the improved response — no preamble, no explanation."
-)
 
 
 def call_claude(
@@ -104,7 +97,8 @@ def call_claude_smart(messages: list, system: str = None) -> dict:
     Two-call executor + advisor pattern for Smart tier.
 
     1. The smart executor produces an initial response.
-    2. The smart advisor reviews it and returns an improved version.
+    2. The smart advisor reviews it and returns an improved version. The
+       advisor gets the same system prompt and conversation as the executor.
 
     Args:
         messages: list of {"role": str, "content": str} dicts
@@ -118,23 +112,13 @@ def call_claude_smart(messages: list, system: str = None) -> dict:
             "advisor_tokens":  int,
         }
     """
-    client = _get_client()
-    kwargs = dict(model=MODELS["smart"], max_tokens=4096, messages=messages)
-    if system:
-        kwargs["system"] = system
-    exec_resp = client.messages.create(**kwargs)
+    exec_resp = call_claude(messages=messages, system=system, model=MODELS["smart"])
     exec_text = exec_resp.content[0].text
 
-    last_user = next(
-        (m["content"] for m in reversed(messages) if m["role"] == "user"), ""
-    )
-    adv_resp = client.messages.create(
+    adv_resp = call_claude(
+        messages=build_advisor_messages(messages, exec_text),
+        system=system,
         model=_ADVISOR_MODEL,
-        max_tokens=4096,
-        messages=[{
-            "role": "user",
-            "content": _ADVISOR_PROMPT.format(request=last_user, response=exec_text),
-        }],
     )
     adv_text = adv_resp.content[0].text
 

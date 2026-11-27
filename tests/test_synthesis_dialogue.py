@@ -218,3 +218,196 @@ class TestBuildSynthesisSystem:
         from backend.router import SYNTHESIS_SYSTEM_PROMPT
         assert "Closing Questions" in SYNTHESIS_SYSTEM_PROMPT
         assert "?" in SYNTHESIS_SYSTEM_PROMPT
+
+
+# ── Synthesis receives the panel and the brief ───────────────────────────────
+
+class TestSynthesisInputs:
+    def test_build_synthesis_system_includes_wrapped_round1(self):
+        from backend.router import build_synthesis_system
+        prompt = build_synthesis_system(
+            round1_responses={"gemini": "GEMINI_TEXT", "grok": "GROK_TEXT"}
+        )
+        assert '<research_response source="Gemini">' in prompt
+        assert '<research_response source="Grok">' in prompt
+        assert "GEMINI_TEXT" in prompt and "GROK_TEXT" in prompt
+
+    def test_refinement_gets_brief_and_full_wrapped_research(self):
+        import asyncio
+        from backend import router
+
+        long_text = "x" * 5000 + "END_MARKER"
+        fake = MagicMock()
+        fake.content = [MagicMock(text="Revised.")]
+        with patch("backend.models.anthropic_client.call_claude", return_value=fake) as mock_call:
+            asyncio.run(router.call_synthesis_refinement(
+                original_synthesis="Draft.",
+                dialogue_history=[
+                    {"role": "assistant", "content": "Draft."},
+                    {"role": "user", "content": "push"},
+                ],
+                user_message="push",
+                research_context={"gpt": long_text},
+                optimized_prompt="THE BRIEF",
+            ))
+        kwargs = mock_call.call_args.kwargs
+        assert kwargs["messages"][0] == {"role": "user", "content": "THE BRIEF"}
+        assert '<research_response source="Gpt">' in kwargs["system"]
+        assert "END_MARKER" in kwargs["system"]
+
+
+class TestSessionSynthesisWiring:
+    """Drive /ws/session with mocked models and inspect what synthesis receives."""
+
+    BRIEF = "Career track and immigration track. TRACK PARITY REQUIRED: 2 tracks."
+
+    def _run_session(self, refine: bool = False, audit_provider: str = "primary",
+                     audit_text: str = "AUDIT"):
+        from fastapi.testclient import TestClient
+        from backend import main
+
+        def r1(text):
+            return AsyncMock(return_value=(text, "primary"))
+
+        synth = AsyncMock(return_value="THE VERDICT\nbody\n\n? Does this fit?")
+        refinement = AsyncMock(return_value={"content": "Revised", "closing_questions": []})
+        critique = AsyncMock(return_value="- critique")
+        self.critique = critique
+        with patch.object(main, "call_research_gemini_async", r1("GEMINI_R1")), \
+             patch.object(main, "call_research_gpt_async", r1("GPT_R1")), \
+             patch.object(main, "call_research_grok_async", r1("GROK_R1")), \
+             patch.object(main, "call_research_claude_async", r1("CLAUDE_R1")), \
+             patch.object(main, "perplexity_research", MagicMock(return_value="pre")), \
+             patch.object(main, "audit_with_fallback", MagicMock(return_value=(audit_text, audit_provider, []))), \
+             patch.object(main, "call_self_critique", critique), \
+             patch.object(main, "call_synthesis_async", synth), \
+             patch.object(main, "call_synthesis_refinement", refinement):
+            client = TestClient(main.app)
+            with client.websocket_connect("/ws/session") as ws:
+                ws.send_json({
+                    "prompt": "raw user prompt",
+                    "session_config": {"tier": "smart", "optimized_prompt": self.BRIEF},
+                    "history": [],
+                })
+                received = []
+
+                def until(msg_type):
+                    while True:
+                        received.append(ws.receive_json())
+                        if received[-1]["type"] == msg_type:
+                            return
+
+                until("prompt_review")
+                ws.send_json({"type": "prompt_confirmed"})
+                until("synthesis_draft")
+                if refine:
+                    ws.send_json({"type": "user_dialogue_response", "content": "push back"})
+                    until("synthesis_draft")
+                ws.send_json({"type": "finalize_synthesis"})
+                until("session_complete")
+        self.received = received
+        return synth, refinement
+
+    def test_synthesis_gets_brief_not_raw_prompt(self):
+        synth, _ = self._run_session()
+        _model, messages, _system, _tier = synth.call_args.args
+        assert "TRACK PARITY REQUIRED" in messages[0]["content"]
+        assert "raw user prompt" not in messages[0]["content"]
+
+    def test_synthesis_system_contains_all_four_panel_responses(self):
+        synth, _ = self._run_session()
+        system = synth.call_args.args[2]
+        for source, text in [("Gemini", "GEMINI_R1"), ("Gpt", "GPT_R1"),
+                             ("Grok", "GROK_R1"), ("Claude", "CLAUDE_R1")]:
+            assert f'<research_response source="{source}">' in system
+            assert text in system
+
+    def test_refinement_gets_brief(self):
+        _, refinement = self._run_session(refine=True)
+        assert "TRACK PARITY REQUIRED" in refinement.call_args.kwargs["optimized_prompt"]
+
+    def test_synthesis_uses_primary_model_even_when_audit_corrects_panel(self):
+        # Vocabulary that the removed keyword router sent to GPT.
+        from backend.models.model_config import SYNTHESIS_ANALYTICAL
+        synth, _ = self._run_session(
+            audit_text="GPT's pricing is outdated and incorrect; v5 was released as of 2026."
+        )
+        assert synth.call_args.args[0] == SYNTHESIS_ANALYTICAL
+
+    def test_self_critique_gets_brief(self):
+        self._run_session()
+        assert "TRACK PARITY REQUIRED" in self.critique.call_args.kwargs["optimized_prompt"]
+
+    @pytest.mark.parametrize("provider,expected_avail", [
+        ("primary", "primary"), ("fallback1", "fallback"), ("emergency", "unavailable"),
+    ])
+    def test_factcheck_payload_reports_configured_model(self, provider, expected_avail):
+        from backend.models import model_config as mc
+        self._run_session(audit_provider=provider)
+        payload = next(m for m in self.received if m["type"] == "perplexity_complete")
+        expected_model = {
+            "primary": mc.FACTCHECK_PRIMARY,
+            "fallback1": mc.FACTCHECK_FALLBACK1,
+            "emergency": "unavailable",
+        }[provider]
+        assert payload["factcheck_model_used"] == expected_model
+        assert payload["factcheck_availability"] == expected_avail
+
+
+# ── Advisor sees the executor's full context ─────────────────────────────────
+
+def _fake_response(text):
+    r = MagicMock()
+    r.content = [MagicMock(text=text)]
+    r.choices = [MagicMock(message=MagicMock(content=text))]
+    r.text = text
+    return r
+
+
+class TestAdvisorContext:
+    @pytest.mark.parametrize("module,fn,smart", [
+        ("backend.models.anthropic_client", "call_claude", "call_claude_smart"),
+        ("backend.models.openai_client",    "call_gpt",    "call_gpt_smart"),
+        ("backend.models.grok_client",      "call_grok",   "call_grok_smart"),
+        ("backend.models.google_client",    "call_gemini", "call_gemini_smart"),
+    ])
+    def test_advisor_gets_system_prompt_and_full_conversation(self, module, fn, smart):
+        import importlib
+        from backend.router import ADVISOR_REVIEW_PROMPT
+
+        client = importlib.import_module(module)
+        messages = [
+            {"role": "user", "content": "earlier turn"},
+            {"role": "assistant", "content": "earlier reply"},
+            {"role": "user", "content": "THE BRIEF"},
+        ]
+        responses = [_fake_response("DRAFT"), _fake_response("FINAL")]
+        with patch(f"{module}.{fn}", side_effect=responses) as mocked:
+            result = getattr(client, smart)(messages, system="ROLE AND FORMAT RULES")
+
+        assert result["advisor_text"] == "FINAL"
+        advisor_call = mocked.call_args_list[1].kwargs
+        assert advisor_call["system"] == "ROLE AND FORMAT RULES"
+        assert advisor_call["model"] == client._ADVISOR_MODEL
+        assert advisor_call["messages"] == messages + [
+            {"role": "assistant", "content": "DRAFT"},
+            {"role": "user", "content": ADVISOR_REVIEW_PROMPT},
+        ]
+
+
+class TestSelfCritiqueContext:
+    def test_brief_reaches_the_critique_prompt(self):
+        import asyncio
+        from backend import router
+
+        fake = MagicMock()
+        fake.content = [MagicMock(text="UNSUPPORTED CLAIMS\nNone.")]
+        with patch("backend.models.anthropic_client.call_claude", return_value=fake) as mock_call:
+            asyncio.run(router.call_self_critique(
+                round1_responses={"gpt": "answer"},
+                perplexity_findings="audit",
+                optimized_prompt="TRACK PARITY REQUIRED: two tracks",
+            ))
+        content = mock_call.call_args.kwargs["messages"][0]["content"]
+        assert "TRACK PARITY REQUIRED: two tracks" in content
+        assert '<research_response source="Gpt">' in content

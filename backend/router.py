@@ -29,10 +29,8 @@ from backend.models.model_config import (
     get_fallback_model,
     get_all_labs,
     SYNTHESIS_ANALYTICAL,
-    SYNTHESIS_FACTUAL,
     SYNTHESIS_FALLBACK,
 )
-from backend.models.perplexity_client import MODELS as PERPLEXITY_MODELS
 
 
 # ---------------------------------------------------------------------------
@@ -349,43 +347,31 @@ def wrap_model_response(model_name: str, response: str) -> str:
     )
 
 
+ADVISOR_REVIEW_PROMPT = (
+    "The previous assistant message is a draft response to this request. "
+    "Review it as a demanding editor against every instruction in the system "
+    "prompt and the request itself: strengthen weak reasoning, remove or qualify "
+    "unsupported claims, fill gaps and missing considerations, and make sure it "
+    "follows the required role, structure, and formatting exactly. Then output "
+    "the improved final version in full. Output only the final response — no "
+    "preamble and no commentary about what you changed."
+)
+
+
+def build_advisor_messages(messages: list, draft: str) -> list:
+    """Executor's conversation + its draft + the review instruction, for the advisor call."""
+    return list(messages) + [
+        {"role": "assistant", "content": draft},
+        {"role": "user", "content": ADVISOR_REVIEW_PROMPT},
+    ]
+
+
 def _format_round1_responses(responses: dict) -> str:
     """Format round-1 model responses as a labeled block for the synthesis task."""
     lines = []
     for model, text in responses.items():
         lines.append(wrap_model_response(model.capitalize(), text or "(not available)"))
     return "\n\n".join(lines) if lines else "(no round-1 responses available)"
-
-
-FACTUAL_CONTRADICTION_SIGNALS = [
-    "retired", "deprecated", "replaced by", "incorrect", "outdated",
-    "as of 2026", "as of april 2026", "current pricing", "launched",
-    "released", "no longer available", "wrong", "inaccurate",
-    "this is false", "this is incorrect", "has been superseded",
-    "contradicts", "disagrees", "not accurate", "factually wrong",
-]
-
-
-def perplexity_contradicts_round1(audit_text: str) -> bool:
-    """
-    Return True when Perplexity audit signals it is contradicting
-    round-1 model responses on verifiable current facts.
-
-    When True: route synthesis to SYNTHESIS_FACTUAL (GPT-5.4)
-    When False: route to SYNTHESIS_ANALYTICAL (Claude Opus 4.7)
-    """
-    audit_lower = audit_text.lower()
-    return any(signal in audit_lower for signal in FACTUAL_CONTRADICTION_SIGNALS)
-
-
-def select_synthesis_model(audit_text: str) -> tuple:
-    """
-    Route synthesis to appropriate model. Returns (model_id, route_name).
-    route_name is "analytical" or "factual" — used in PipelineHealth.
-    """
-    if perplexity_contradicts_round1(audit_text):
-        return SYNTHESIS_FACTUAL, "factual"
-    return SYNTHESIS_ANALYTICAL, "analytical"
 
 
 def get_tier_config(tier: str) -> dict:
@@ -841,6 +827,7 @@ async def call_synthesis_refinement(
     research_context: dict = None,
     audit_context: str = "",
     citations: list = None,
+    optimized_prompt: str = "",
 ) -> dict:
     """
     Call Claude Opus to refine the current synthesis based on user dialogue.
@@ -852,6 +839,7 @@ async def call_synthesis_refinement(
         research_context:   dict of round-1 model responses, for context
         audit_context:      Perplexity audit text
         citations:          ordered source URLs for inline [n] markers
+        optimized_prompt:   the intake brief the synthesis answered
 
     Returns:
         {"content": str, "closing_questions": list[str]}
@@ -861,12 +849,7 @@ async def call_synthesis_refinement(
 
     # Assemble the system prompt. The original synthesis system gives the model
     # full research/audit context; the refinement block layers the dialogue rules.
-    research_context = research_context or {}
-    round1_block = "\n\n".join(
-        f"{model.capitalize()}: {(text or '').strip()[:2000]}"
-        for model, text in research_context.items()
-        if (text or "").strip()
-    ) or "(no research context available)"
+    round1_block = _format_round1_responses(research_context or {})
 
     citation_lines = ""
     if citations:
@@ -887,6 +870,8 @@ async def call_synthesis_refinement(
     # dialogue_history already contains the assistant synthesis + user push-back,
     # but we ensure the original synthesis is present as grounding.
     messages = []
+    if optimized_prompt:
+        messages.append({"role": "user", "content": optimized_prompt})
     if not dialogue_history or dialogue_history[0].get("role") != "assistant":
         messages.append({"role": "assistant", "content": original_synthesis})
     messages.extend(dialogue_history)
@@ -912,7 +897,7 @@ async def call_synthesis_refinement(
 async def call_self_critique(
     round1_responses: dict,
     perplexity_findings: str,
-    contradiction_flag: bool = False,
+    optimized_prompt: str = "",
 ) -> str:
     """
     Run a pre-synthesis audit against the round-1 responses and Perplexity data.
@@ -923,25 +908,19 @@ async def call_self_critique(
     Args:
         round1_responses:    dict of {model_name: response_text}
         perplexity_findings: Perplexity live research / audit text
-        contradiction_flag:  True when perplexity_contradicts_round1() fired —
-                             directs the auditor to prioritise conflict detection
+        optimized_prompt:    the intake brief — the track-collapse and gap
+                             checks are judged against it
     """
     import asyncio as _asyncio
     from backend.models.anthropic_client import call_claude
 
-    flag_note = (
-        "\n\nCONTRADICTION FLAG ACTIVE: Perplexity's live data is known to "
-        "contradict one or more round-1 model claims on verifiable facts. "
-        "Prioritise PERPLEXITY CONFLICTS in your audit.\n"
-        if contradiction_flag else ""
-    )
-
     user_content = (
+        f"## The User's Request\n\n"
+        f"{optimized_prompt or '(not available)'}\n\n"
         f"## Round-1 Model Responses\n\n"
         f"{_format_round1_responses(round1_responses)}\n\n"
         f"## Perplexity Live Research\n\n"
         f"{perplexity_findings or '(not available)'}"
-        f"{flag_note}"
     )
 
     try:
@@ -960,6 +939,7 @@ def build_synthesis_system(
     citations: list = None,
     audit_text: str = None,
     critique_notes: str = None,
+    round1_responses: dict = None,
 ) -> str:
     """
     Assemble the synthesis system prompt for the initial synthesis draft.
@@ -981,6 +961,8 @@ def build_synthesis_system(
         critique_notes: output from call_self_critique(). When provided,
             injected as a pre-synthesis quality audit so Claude knows
             which claims to scrutinise before writing its verdict.
+        round1_responses: {model_name: response_text} for the four panel
+            models. Each is wrapped with wrap_model_response().
 
     Returns:
         Complete synthesis system prompt string.
@@ -995,6 +977,14 @@ def build_synthesis_system(
             "The following issues were flagged. Address each one explicitly in your "
             "synthesis — do not ignore flagged claims or gaps.\n\n"
             f"{critique_notes.strip()}\n"
+        )
+
+    # ── Round-1 panel responses ───────────────────────────────────────────────
+    research_section = ""
+    if round1_responses:
+        research_section = (
+            "\n## Round-1 panel responses\n\n"
+            f"{_format_round1_responses(round1_responses)}\n"
         )
 
     # ── Perplexity audit section ──────────────────────────────────────────────
@@ -1026,6 +1016,7 @@ def build_synthesis_system(
     return (
         SYNTHESIS_SYSTEM_PROMPT
         + critique_section
+        + research_section
         + perplexity_section
         + citation_section
     )

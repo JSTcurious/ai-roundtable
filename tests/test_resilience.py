@@ -5,7 +5,6 @@ Tests for the Task B resilience layer.
 
 Coverage:
     - Intake fallback chain (primary → fallback1 → fallback2 → passthrough)
-    - Synthesis router: FACTUAL_CONTRADICTION_SIGNALS detection
     - Research availability status tuples
     - Factcheck fallback chain (audit_with_fallback)
     - PipelineHealth: annotations for healthy and degraded sessions
@@ -14,70 +13,6 @@ Coverage:
 
 import pytest
 from unittest.mock import patch, MagicMock
-
-
-# ── Synthesis router ──────────────────────────────────────────────────────────
-
-class TestSynthesisRouter:
-    """select_synthesis_model() routes based on Perplexity contradiction signals."""
-
-    def _route(self, audit_text: str):
-        from backend.router import select_synthesis_model
-        return select_synthesis_model(audit_text)
-
-    def test_clean_audit_routes_analytical(self):
-        model_id, route = self._route("All models agreed on the key points.")
-        assert route == "analytical"
-
-    def test_contradicts_signal_routes_factual(self):
-        model_id, route = self._route(
-            "Perplexity contradicts the round-1 responses on pricing."
-        )
-        assert route == "factual"
-
-    def test_incorrect_signal_routes_factual(self):
-        model_id, route = self._route(
-            "GPT's claim is incorrect according to current data."
-        )
-        assert route == "factual"
-
-    def test_outdated_signal_routes_factual(self):
-        model_id, route = self._route(
-            "This information appears to be outdated — the API changed in 2024."
-        )
-        assert route == "factual"
-
-    def test_factually_wrong_routes_factual(self):
-        model_id, route = self._route(
-            "The statistic cited is factually wrong."
-        )
-        assert route == "factual"
-
-    def test_empty_audit_routes_analytical(self):
-        model_id, route = self._route("")
-        assert route == "analytical"
-
-    def test_analytical_route_returns_model_id(self):
-        from backend.models.model_config import SYNTHESIS_ANALYTICAL
-        model_id, route = self._route("Models agreed across the board.")
-        assert model_id == SYNTHESIS_ANALYTICAL
-
-    def test_factual_route_returns_model_id(self):
-        from backend.models.model_config import SYNTHESIS_FACTUAL
-        model_id, route = self._route("This contradicts current data.")
-        assert model_id == SYNTHESIS_FACTUAL
-
-    def test_disagrees_signal_routes_factual(self):
-        model_id, route = self._route(
-            "Perplexity disagrees with Gemini's version numbers."
-        )
-        assert route == "factual"
-
-    def test_not_accurate_signal_routes_factual(self):
-        model_id, route = self._route(
-            "The claim is not accurate based on live sources."
-        )
-        assert route == "factual"
 
 
 # ── PipelineHealth ────────────────────────────────────────────────────────────
@@ -98,7 +33,7 @@ class TestPipelineHealth:
             research_models={"gemini": "primary", "gpt": "primary",
                              "grok": "primary", "claude": "primary"},
             factcheck_degraded=False,
-            synthesis_routed="analytical",
+            synthesis_routed="primary",
         )
         assert h.to_annotation() == []
 
@@ -126,22 +61,16 @@ class TestPipelineHealth:
                    for a in annotations)
 
     def test_synthesis_fallback_appears_in_annotations(self):
-        h = self._make(synthesis_routed="analytical_fallback")
+        h = self._make(synthesis_routed="fallback")
         annotations = h.to_annotation()
         assert any("synthesis" in a.lower() or "fallback" in a.lower()
-                   for a in annotations)
-
-    def test_synthesis_factual_route_appears_in_annotations(self):
-        h = self._make(synthesis_routed="factual")
-        annotations = h.to_annotation()
-        assert any("factual" in a.lower() or "perplexity" in a.lower()
                    for a in annotations)
 
     def test_summary_healthy(self):
         h = self._make(
             research_models={"gemini": "primary", "gpt": "primary",
                              "grok": "primary", "claude": "primary"},
-            synthesis_routed="analytical",
+            synthesis_routed="primary",
         )
         assert "healthy" in h.summary().lower()
 

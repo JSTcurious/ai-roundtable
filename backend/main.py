@@ -52,8 +52,6 @@ from backend.router import (
     REFINEMENT_MODEL,
     call_self_critique,
     parse_closing_questions,
-    select_synthesis_model,
-    perplexity_contradicts_round1,
     USE_CASE_LIBRARY,
     get_use_case,
 )
@@ -80,7 +78,13 @@ from backend.models.perplexity_client import (
     audit_with_fallback,
 )
 from backend.models.pipeline_health import PipelineHealth
-from backend.models.model_config import SYNTHESIS_FALLBACK
+from backend.models.model_config import (
+    FACTCHECK_FALLBACK1,
+    FACTCHECK_FALLBACK2,
+    FACTCHECK_PRIMARY,
+    SYNTHESIS_ANALYTICAL,
+    SYNTHESIS_FALLBACK,
+)
 from backend.exporter import Exporter
 from backend.models.model_validator import validate_model_config
 
@@ -450,8 +454,8 @@ async def session_run(req: SessionRunRequest):
     health.factcheck_degraded = (factcheck_provider != "primary")
     transcript.add_model_message("Perplexity", audit_text, round="audit")
 
-    # ── Synthesis: route to analytical or factual model based on audit ────────
-    synthesis_model_id, synthesis_route = select_synthesis_model(audit_text)
+    # ── Synthesis ────────────────────────────────────────────────────────────
+    synthesis_model_id, synthesis_route = SYNTHESIS_ANALYTICAL, "primary"
     synthesis_system = build_synthesis_prompt(
         output_type=output_type,
         perplexity_findings=audit_text,
@@ -477,11 +481,11 @@ async def session_run(req: SessionRunRequest):
                 SYNTHESIS_FALLBACK, synthesis_messages, synthesis_system, tier
             )
             health.synthesis_model = SYNTHESIS_FALLBACK
-            health.synthesis_routed = f"{synthesis_route}_fallback"
+            health.synthesis_routed = "fallback"
         except Exception as exc2:
             synthesis_text = f"[Synthesis unavailable: {exc2}]"
             health.synthesis_model = "emergency"
-            health.synthesis_routed = f"{synthesis_route}_fallback"
+            health.synthesis_routed = "fallback"
 
     transcript.add_model_message("Claude", synthesis_text, round="synthesis")
     print(f"[SESSION] {health.summary()}", flush=True)
@@ -651,53 +655,6 @@ def _grok_token_iter(messages, tier, system):
         delta = chunk.choices[0].delta.content
         if delta:
             yield delta
-
-
-# ── Smart tier advisor helpers ────────────────────────────────────────────────
-#
-# These run AFTER the executor has already streamed its tokens to the frontend.
-# Each helper calls the advisor model (pro/opus/gpt-5) with the executor's output
-# and returns the improved final text.  Called via asyncio.to_thread in the WS handler.
-
-_ADVISOR_PROMPT = (
-    "Review this response and produce an improved final version.\n\n"
-    "Original request: {request}\n"
-    "Response to review: {response}\n\n"
-    "Identify gaps, weak reasoning, missing considerations. "
-    "Output only the improved response — no preamble, no explanation."
-)
-
-
-def _gemini_advisor(executor_text: str, request: str) -> str:
-    resp = call_gemini(
-        messages=[{"role": "user", "content": _ADVISOR_PROMPT.format(request=request, response=executor_text)}],
-        tier="deep",
-    )
-    return resp.text
-
-
-def _gpt_advisor(executor_text: str, request: str) -> str:
-    resp = call_gpt(
-        messages=[{"role": "user", "content": _ADVISOR_PROMPT.format(request=request, response=executor_text)}],
-        tier="deep",
-    )
-    return resp.choices[0].message.content
-
-
-def _grok_advisor(executor_text: str, request: str) -> str:
-    resp = call_grok(
-        messages=[{"role": "user", "content": _ADVISOR_PROMPT.format(request=request, response=executor_text)}],
-        tier="deep",
-    )
-    return resp.choices[0].message.content
-
-
-def _claude_advisor(executor_text: str, request: str) -> str:
-    resp = call_claude(
-        messages=[{"role": "user", "content": _ADVISOR_PROMPT.format(request=request, response=executor_text)}],
-        tier="deep",
-    )
-    return resp.content[0].text
 
 
 # ── Retry helpers ─────────────────────────────────────────────────────────────
@@ -1175,12 +1132,12 @@ async def session_websocket(websocket: WebSocket):
 
         # Determine factcheck display info for frontend transparency
         _factcheck_display = {
-            "primary":   ("sonar-pro",  "primary"),
-            "fallback1": ("sonar",      "fallback"),
-            "fallback2": ("gpt-5.4",    "fallback2"),
+            "primary":   (FACTCHECK_PRIMARY,   "primary"),
+            "fallback1": (FACTCHECK_FALLBACK1, "fallback"),
+            "fallback2": (FACTCHECK_FALLBACK2, "fallback2"),
         }
         _fc_model, _fc_avail = _factcheck_display.get(
-            factcheck_provider, ("sonar-pro", "primary")
+            factcheck_provider, ("unavailable", "unavailable")
         )
         await websocket.send_json({
             "type": "perplexity_complete",
@@ -1204,7 +1161,7 @@ async def session_websocket(websocket: WebSocket):
             critique_notes = await call_self_critique(
                 round1_responses=round1_for_critique,
                 perplexity_findings=audit_text,
-                contradiction_flag=perplexity_contradicts_round1(audit_text),
+                optimized_prompt=optimized_prompt,
             )
         except Exception as exc:
             print(f"[self-critique] failed ({exc}) — continuing without", flush=True)
@@ -1212,11 +1169,20 @@ async def session_websocket(websocket: WebSocket):
 
         # ── Synthesis draft — fires automatically after fact-check ────────────
         # No user gate. The user refines via the dialogue loop below.
-        synthesis_model_id, synthesis_route = select_synthesis_model(audit_text)
+        synthesis_model_id, synthesis_route = SYNTHESIS_ANALYTICAL, "primary"
+        research_context = {
+            "gemini": gemini_text,
+            "gpt":    gpt_text,
+            "grok":   grok_text,
+            "claude": claude_r1_text,
+        }
         synthesis_system = build_synthesis_system(
-            citations=citations, audit_text=audit_text, critique_notes=critique_notes
+            citations=citations,
+            audit_text=audit_text,
+            critique_notes=critique_notes,
+            round1_responses=research_context,
         )
-        synthesis_messages = [{"role": "user", "content": prompt}]
+        synthesis_messages = [{"role": "user", "content": optimized_prompt}]
 
         await websocket.send_json({"type": "synthesis_thinking"})
         try:
@@ -1232,22 +1198,16 @@ async def session_websocket(websocket: WebSocket):
                     SYNTHESIS_FALLBACK, synthesis_messages, synthesis_system, tier
                 )
                 health.synthesis_model = SYNTHESIS_FALLBACK
-                health.synthesis_routed = f"{synthesis_route}_fallback"
+                health.synthesis_routed = "fallback"
             except Exception as exc2:
                 raw_synthesis = f"[Synthesis unavailable: {exc2}]"
                 health.synthesis_model = "emergency"
-                health.synthesis_routed = f"{synthesis_route}_fallback"
+                health.synthesis_routed = "fallback"
 
         current_synthesis, closing_questions = parse_closing_questions(raw_synthesis)
         current_synthesis_model = health.synthesis_model or synthesis_model_id
         revision_count = 0
         dialogue_history = [{"role": "assistant", "content": current_synthesis}]
-        research_context = {
-            "gemini": gemini_text,
-            "gpt":    gpt_text,
-            "grok":   grok_text,
-            "claude": claude_r1_text,
-        }
 
         await websocket.send_json({
             "type": "synthesis_draft",
@@ -1292,6 +1252,7 @@ async def session_websocket(websocket: WebSocket):
                         research_context=research_context,
                         audit_context=audit_text,
                         citations=citations,
+                        optimized_prompt=optimized_prompt,
                     )
                 except Exception as exc:
                     refined = {
