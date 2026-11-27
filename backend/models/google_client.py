@@ -6,10 +6,10 @@ Gemini client for ai-roundtable v2 — Google direct API (google-genai SDK).
 Gemini's role in the roundtable:
     - Round 1: deep reasoning, challenging assumptions
 
-Tiers:
-    quick   — gemini-2.5-flash
-    smart   — executor: gemini-2.5-flash → advisor: gemini-2.5-pro
-    deep    — gemini-2.5-pro
+Tiers (model IDs come from model_config.py):
+    quick   — smart executor
+    smart   — executor: RESEARCH_GEMINI_SMART_EXECUTOR → advisor: RESEARCH_GEMINI_SMART_ADVISOR
+    deep    — RESEARCH_GEMINI_DEEP
 
 Functions:
     call_gemini(messages, tier, system, stream)
@@ -37,6 +37,7 @@ from google import genai
 from google.genai import types
 
 from backend.models.intake_decision import IntakeDecision
+from backend.models.model_config import get_advisor_model, get_executor_model
 
 logger = logging.getLogger(__name__)
 
@@ -49,10 +50,12 @@ def _get_client() -> genai.Client:
     return _client
 
 MODELS = {
-    "quick": "gemini-2.5-flash",
-    "smart": "gemini-2.5-flash",   # executor model for smart tier
-    "deep":  "gemini-2.5-pro",
+    "quick": get_executor_model("smart", "gemini"),
+    "smart": get_executor_model("smart", "gemini"),
+    "deep":  get_advisor_model("deep", "gemini"),
 }
+
+_ADVISOR_MODEL = get_advisor_model("smart", "gemini")
 
 # Intake uses a separate model constant so it can be pinned or overridden independently
 # of the round-1 research models. Reuses GOOGLE_API_KEY — no new credentials needed.
@@ -191,6 +194,7 @@ def call_gemini(
     tier: str = "quick",
     system: str = None,
     stream: bool = False,
+    model: str = None,
 ):
     """
     Call Gemini with the given messages and tier.
@@ -201,12 +205,13 @@ def call_gemini(
         tier:     "quick" | "deep"
         system:   optional system instruction string
         stream:   if True, uses generate_content_stream
+        model:    explicit model ID; overrides the tier lookup
 
     Returns:
         Non-streaming: google.genai.types.GenerateContentResponse
         Streaming:     generator of GenerateContentResponse chunks
     """
-    model_name = MODELS.get(tier, MODELS["quick"])
+    model_name = model or MODELS.get(tier, MODELS["quick"])
 
     # Normalise roles: Gemini uses "user" / "model"
     contents = []
@@ -245,8 +250,8 @@ def call_gemini_smart(messages: list, system: str = None) -> dict:
     """
     Two-call executor + advisor pattern for Smart tier.
 
-    1. gemini-2.5-flash (executor) produces an initial response.
-    2. gemini-2.5-pro (advisor) reviews it and returns an improved version.
+    1. The smart executor produces an initial response.
+    2. The smart advisor reviews it and returns an improved version.
 
     Args:
         messages: list of {"role": str, "content": str} dicts
@@ -268,7 +273,7 @@ def call_gemini_smart(messages: list, system: str = None) -> dict:
     )
     adv_resp = call_gemini(
         messages=[{"role": "user", "content": _ADVISOR_PROMPT.format(request=last_user, response=exec_text)}],
-        tier="deep",  # gemini-2.5-pro
+        model=_ADVISOR_MODEL,
     )
     adv_text = adv_resp.text
 

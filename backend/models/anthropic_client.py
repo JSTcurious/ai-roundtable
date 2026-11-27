@@ -7,10 +7,10 @@ Claude's role in the roundtable:
     - Orchestrator: conducts intake, synthesizes final deliverable
     - Synthesis: incorporates all model responses + Perplexity audit
 
-Tiers:
-    quick   — claude-sonnet-4-5
-    smart   — executor: claude-sonnet-4-5 → advisor: claude-opus-4-5
-    deep    — claude-opus-4-5
+Tiers (model IDs come from model_config.py):
+    quick   — smart executor
+    smart   — executor: RESEARCH_CLAUDE_SMART_EXECUTOR → advisor: RESEARCH_CLAUDE_SMART_ADVISOR
+    deep    — RESEARCH_CLAUDE_DEEP
 
 Functions:
     call_claude(messages, tier, system, stream)
@@ -35,6 +35,8 @@ from functools import partial
 
 from anthropic import Anthropic
 
+from backend.models.model_config import get_advisor_model, get_executor_model
+
 logger = logging.getLogger(__name__)
 
 _client = None
@@ -46,12 +48,12 @@ def _get_client() -> Anthropic:
     return _client
 
 MODELS = {
-    "quick": "claude-sonnet-4-5",
-    "smart": "claude-sonnet-4-5",   # executor model for smart tier
-    "deep":  "claude-opus-4-5",
+    "quick": get_executor_model("smart", "claude"),
+    "smart": get_executor_model("smart", "claude"),
+    "deep":  get_advisor_model("deep", "claude"),
 }
 
-_ADVISOR_MODEL = "claude-opus-4-5"
+_ADVISOR_MODEL = get_advisor_model("smart", "claude")
 
 _ADVISOR_PROMPT = (
     "Review this response and produce an improved final version.\n\n"
@@ -67,6 +69,7 @@ def call_claude(
     tier: str = "quick",
     system: str = None,
     stream: bool = False,
+    model: str = None,
 ):
     """
     Call Claude with the given messages and tier.
@@ -76,12 +79,13 @@ def call_claude(
         tier:     "quick" | "deep"
         system:   optional system prompt string
         stream:   if True, returns a streaming context manager
+        model:    explicit model ID; overrides the tier lookup
 
     Returns:
         Non-streaming: anthropic.types.Message
         Streaming:     anthropic.Stream (use as context manager)
     """
-    model = MODELS.get(tier, MODELS["quick"])
+    model = model or MODELS.get(tier, MODELS["quick"])
     kwargs = dict(
         model=model,
         max_tokens=4096,
@@ -99,8 +103,8 @@ def call_claude_smart(messages: list, system: str = None) -> dict:
     """
     Two-call executor + advisor pattern for Smart tier.
 
-    1. claude-sonnet-4-5 (executor) produces an initial response.
-    2. claude-opus-4-5 (advisor) reviews it and returns an improved version.
+    1. The smart executor produces an initial response.
+    2. The smart advisor reviews it and returns an improved version.
 
     Args:
         messages: list of {"role": str, "content": str} dicts

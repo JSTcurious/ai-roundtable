@@ -70,11 +70,11 @@ RESEARCH_GPT_FALLBACK = os.getenv(
 
 # ── Research — Grok (xAI) ────────────────────────────────────────────────────
 # Grok participates in both Smart and Deep.
-# Smart executor: Grok 4.1 Fast reasoning ($0.20/M, 2M context)
-# Deep: Grok 4.20 reasoning ($2.00/M)
+# grok-4.1-fast-* IDs were retired by xAI (404). Fallback is a different model
+# line so a 4.20 outage doesn't also take out the fallback.
 
 RESEARCH_GROK_SMART_EXECUTOR = os.getenv(
-    "RESEARCH_GROK_SMART_EXECUTOR", "grok-4.1-fast-reasoning"
+    "RESEARCH_GROK_SMART_EXECUTOR", "grok-4.20-0309-non-reasoning"
 )
 RESEARCH_GROK_SMART_ADVISOR = os.getenv(
     "RESEARCH_GROK_SMART_ADVISOR", "grok-4.20-0309-reasoning"
@@ -83,7 +83,7 @@ RESEARCH_GROK_DEEP = os.getenv(
     "RESEARCH_GROK_DEEP", "grok-4.20-0309-reasoning"
 )
 RESEARCH_GROK_FALLBACK = os.getenv(
-    "RESEARCH_GROK_FALLBACK", "grok-4.1-fast-non-reasoning"
+    "RESEARCH_GROK_FALLBACK", "grok-4.3"
 )
 
 # ── Research — Claude (Anthropic) ────────────────────────────────────────────

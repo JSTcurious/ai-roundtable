@@ -6,10 +6,10 @@ Grok client for ai-roundtable v2 — xAI direct API (OpenAI-compatible).
 Grok's role in the roundtable:
     - Round 1: creative synthesis, lateral thinking, contrarian perspective
 
-Tiers:
-    quick   — grok-3-mini
-    smart   — executor: grok-3-mini → advisor: grok-3
-    deep    — grok-3
+Tiers (model IDs come from model_config.py):
+    quick   — smart executor
+    smart   — executor: RESEARCH_GROK_SMART_EXECUTOR → advisor: RESEARCH_GROK_SMART_ADVISOR
+    deep    — RESEARCH_GROK_DEEP
 
 Functions:
     call_grok(messages, tier, system, stream)
@@ -32,6 +32,8 @@ load_dotenv(Path(__file__).parent.parent / ".env", override=True)
 
 from openai import OpenAI
 
+from backend.models.model_config import get_advisor_model, get_executor_model, get_fallback_model
+
 _client = None
 
 
@@ -46,12 +48,12 @@ def _get_client() -> OpenAI:
 
 
 MODELS = {
-    "quick": "grok-3-mini",
-    "smart": "grok-3-mini",   # executor model for smart tier
-    "deep":  "grok-3",
+    "quick": get_executor_model("smart", "grok"),
+    "smart": get_executor_model("smart", "grok"),
+    "deep":  get_advisor_model("deep", "grok"),
 }
 
-_ADVISOR_MODEL = "grok-3"
+_ADVISOR_MODEL = get_advisor_model("smart", "grok")
 
 _ADVISOR_PROMPT = (
     "Review this response and produce an improved final version.\n\n"
@@ -67,6 +69,7 @@ def call_grok(
     tier: str = "quick",
     system: str = None,
     stream: bool = False,
+    model: str = None,
 ):
     """
     Call Grok with the given messages and tier.
@@ -76,12 +79,13 @@ def call_grok(
         tier:     "quick" | "smart" | "deep"
         system:   optional system prompt string — prepended as a system message
         stream:   if True, returns a streaming response
+        model:    explicit model ID; overrides the tier lookup
 
     Returns:
         Non-streaming: openai.types.chat.ChatCompletion
         Streaming:     generator of ChatCompletionChunk objects
     """
-    model = MODELS.get(tier, MODELS["quick"])
+    model = model or MODELS.get(tier, MODELS["quick"])
 
     full_messages = []
     if system:
@@ -100,8 +104,8 @@ def call_grok_smart(messages: list, system: str = None) -> dict:
     """
     Two-call executor + advisor pattern for Smart tier.
 
-    1. grok-3-mini (executor) produces an initial response.
-    2. grok-3 (advisor) reviews it and returns an improved version.
+    1. The smart executor produces an initial response.
+    2. The smart advisor reviews it and returns an improved version.
 
     Returns:
         {
@@ -172,7 +176,8 @@ async def call_research_grok_async(
     except Exception:
         try:
             result = await loop.run_in_executor(
-                None, partial(call_grok, messages=history, tier="smart", system=system)
+                None,
+                partial(call_grok, messages=history, system=system, model=get_fallback_model("grok")),
             )
             return result.choices[0].message.content, "fallback"
         except Exception:

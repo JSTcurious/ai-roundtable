@@ -153,8 +153,10 @@ stale UI.
 ## Known issues and notes
 - Gemini 503s intermittently (upstream capacity on preview models)
 - Grok API key confirmed loading correctly (PR #35)
-- Grok stale model ID warnings on startup are cosmetic —
-  model aliases resolve correctly at runtime
+- Stale model ID warnings from model_validator.py on startup are real —
+  the IDs 404 at runtime. Fix them in model_config.py; don't ignore them
+- Provider clients must read model IDs from model_config.py — never add
+  a local MODELS dict (tests/test_model_config.py enforces this)
 - Intake max 7 questions not yet enforced (v2 spec in docs/)
 - Intake v2 architecture spec: docs/INTAKE_V2_SPEC.md
 - Intake v2 PM addendum: docs/INTAKE_V2_PM_ADDENDUM.md

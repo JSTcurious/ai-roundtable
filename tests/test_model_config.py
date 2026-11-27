@@ -349,3 +349,51 @@ class TestModelInfoEndpoint:
                 f"{lab}: expected deep model {deep_model!r} to equal "
                 f"smart advisor {smart_advisor!r}"
             )
+
+
+# ── Client modules read from model_config ────────────────────────────────────
+
+_CLIENT_MODULES = {
+    "claude": "backend.models.anthropic_client",
+    "gpt":    "backend.models.openai_client",
+    "gemini": "backend.models.google_client",
+    "grok":   "backend.models.grok_client",
+}
+
+
+class TestClientsUseModelConfig:
+    """Every provider client must resolve model IDs from model_config.py."""
+
+    @pytest.mark.parametrize("lab", list(_CLIENT_MODULES))
+    def test_client_tier_models_match_config(self, lab):
+        client = importlib.import_module(_CLIENT_MODULES[lab])
+        assert client.MODELS["smart"] == get_executor_model("smart", lab)
+        assert client.MODELS["deep"] == get_advisor_model("deep", lab)
+
+    @pytest.mark.parametrize("lab", list(_CLIENT_MODULES))
+    def test_client_advisor_matches_config(self, lab):
+        client = importlib.import_module(_CLIENT_MODULES[lab])
+        assert client._ADVISOR_MODEL == get_advisor_model("smart", lab)
+
+    def test_perplexity_models_match_config(self):
+        from backend.models import perplexity_client
+        from backend.models.model_config import FACTCHECK_PRIMARY, FACTCHECK_FALLBACK1
+        assert perplexity_client.MODELS["smart"] == FACTCHECK_PRIMARY
+        assert perplexity_client.MODELS["deep"] == FACTCHECK_PRIMARY
+        assert perplexity_client.MODELS["quick"] == FACTCHECK_FALLBACK1
+
+    @pytest.mark.parametrize("prefix,client_path,fn_name", [
+        ("claude-opus-test", "backend.main.call_claude", "claude"),
+        ("gpt-test",         "backend.main.call_gpt",    "gpt"),
+    ])
+    def test_synthesis_passes_configured_model_id(self, prefix, client_path, fn_name):
+        import asyncio
+        from unittest.mock import MagicMock, patch
+        from backend.main import call_synthesis_async
+
+        fake = MagicMock()
+        fake.content = [MagicMock(text="ok")]
+        fake.choices = [MagicMock(message=MagicMock(content="ok"))]
+        with patch(client_path, return_value=fake) as mocked:
+            asyncio.run(call_synthesis_async(prefix, [{"role": "user", "content": "x"}], "sys", "deep"))
+        assert mocked.call_args.kwargs["model"] == prefix
