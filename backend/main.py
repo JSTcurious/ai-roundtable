@@ -60,6 +60,7 @@ from backend.models.anthropic_client import (
     call_claude_smart,
     call_claude_smart_async,
     call_research_claude_async,
+    stream_claude_text,
 )
 from backend.models.google_client import (
     call_gemini,
@@ -750,26 +751,31 @@ async def call_synthesis_async(
     messages: list,
     system: str,
     tier: str,
+    on_token=None,
 ) -> str:
     """
     Dispatch synthesis to the correct provider based on model ID prefix.
 
-    claude/* → Anthropic (smart: executor+advisor; deep: single opus call)
+    claude/* → Anthropic: one call to `model` on every tier
+               (docs/LATENCY_SPEC.md L1). Streamed when on_token is given —
+               each text chunk is awaited through it.
     gpt/*    → OpenAI
     qwen/*   → OpenRouter
+    Only Claude streams; the other routes ignore on_token.
     """
     if model.startswith("claude"):
-        if tier == "smart":
-            result = await _call_with_retry_async(
-                lambda: call_claude_smart_async(messages, system),
-                "Claude-synthesis-smart",
+        if on_token is not None:
+            return await _call_with_retry_async(
+                lambda: stream_claude_text(messages, system, model, on_token),
+                "Claude-synthesis",
             )
-            return result["advisor_text"]
-        else:
-            result = await asyncio.to_thread(
+        result = await _call_with_retry_async(
+            lambda: asyncio.to_thread(
                 call_claude, messages=messages, system=system, model=model
-            )
-            return result.content[0].text
+            ),
+            "Claude-synthesis",
+        )
+        return result.content[0].text
     elif model.startswith("gpt"):
         result = await asyncio.to_thread(
             call_gpt, messages=messages, system=system, model=model
@@ -796,7 +802,9 @@ async def _call_with_retry_async(coro_factory, sender: str):
             coro = coro_factory()
             return await coro
         except Exception as e:
-            if not _is_retryable(e):
+            # A stream that already sent text must not restart: the client
+            # would see the text twice.
+            if not _is_retryable(e) or getattr(e, "tokens_sent", False):
                 raise
             last_exc = e
     raise last_exc
@@ -851,6 +859,36 @@ async def _stream_model(
 
 
 CLIENT_DISCONNECTED = {"type": "client_disconnected"}
+
+
+class ClientGone(Exception):
+    """A send to the client failed mid-stream: the session should just end."""
+
+
+class _SynthesisStream:
+    """
+    on_token callback for a streamed synthesis or refinement call.
+
+    Sends each chunk as {"type": "synthesis_token"}, logs
+    [TIMING] <stage>.first_token, and remembers whether anything was sent so
+    the caller knows to send synthesis_reset if the call then fails.
+    """
+
+    def __init__(self, websocket: WebSocket, timer: StageTimer, stage: str):
+        self._websocket = websocket
+        self._timer = timer
+        self._stage = stage
+        self._t0 = time.perf_counter()
+        self.sent = False
+
+    async def __call__(self, chunk: str) -> None:
+        if not self.sent:
+            self.sent = True
+            self._timer.record(f"{self._stage}.first_token", time.perf_counter() - self._t0)
+        try:
+            await self._websocket.send_json({"type": "synthesis_token", "token": chunk})
+        except Exception as exc:
+            raise ClientGone() from exc
 
 
 async def _drain_client_messages(
@@ -1224,15 +1262,21 @@ async def session_websocket(websocket: WebSocket):
         synthesis_messages = [{"role": "user", "content": optimized_prompt}]
 
         await websocket.send_json({"type": "synthesis_thinking"})
+        synthesis_stream = _SynthesisStream(websocket, timer, "synthesis")
         try:
             async with timer.stage("synthesis"):
                 raw_synthesis = await call_synthesis_async(
-                    synthesis_model_id, synthesis_messages, synthesis_system, tier
+                    synthesis_model_id, synthesis_messages, synthesis_system, tier,
+                    on_token=synthesis_stream,
                 )
             health.synthesis_model = synthesis_model_id
             health.synthesis_routed = synthesis_route
+        except ClientGone:
+            raise
         except Exception as exc:
             print(f"[synthesis] primary failed ({exc}) — using fallback", flush=True)
+            if synthesis_stream.sent:
+                await websocket.send_json({"type": "synthesis_reset"})
             try:
                 async with timer.stage("synthesis.fallback"):
                     raw_synthesis = await call_synthesis_async(
@@ -1289,23 +1333,31 @@ async def session_websocket(websocket: WebSocket):
                 dialogue_history.append({"role": "user", "content": user_text})
 
                 await websocket.send_json({"type": "synthesis_thinking"})
+                refinement_stage = f"refinement.{revision_count + 1}"
+                refinement_stream = _SynthesisStream(websocket, timer, refinement_stage)
                 try:
-                    async with timer.stage(f"refinement.{revision_count + 1}"):
+                    async with timer.stage(refinement_stage):
                         refined = await call_synthesis_refinement(
-                          original_synthesis=current_synthesis,
-                          dialogue_history=dialogue_history,
-                          user_message=user_text,
-                          research_context=research_context,
-                          audit_context=audit_text,
-                          citations=citations,
-                          optimized_prompt=optimized_prompt,
-                          unavailable_models=unavailable_models,
-                    )
+                            original_synthesis=current_synthesis,
+                            dialogue_history=dialogue_history,
+                            user_message=user_text,
+                            research_context=research_context,
+                            audit_context=audit_text,
+                            citations=citations,
+                            optimized_prompt=optimized_prompt,
+                            unavailable_models=unavailable_models,
+                            on_token=refinement_stream,
+                        )
+                except ClientGone:
+                    raise
                 except Exception as exc:
                     refined = {
                         "content": f"[Refinement unavailable: {exc}]",
                         "closing_questions": [],
+                        "error": True,
                     }
+                if refined.get("error") and refinement_stream.sent:
+                    await websocket.send_json({"type": "synthesis_reset"})
 
                 current_synthesis = refined["content"]
                 closing_questions = refined["closing_questions"]
@@ -1336,6 +1388,8 @@ async def session_websocket(websocket: WebSocket):
         })
         await websocket.send_json({"type": "session_complete"})
 
+    except ClientGone:
+        print(f"[SESSION] client disconnected during synthesis stream — {health.summary()}", flush=True)
     except Exception as e:
         await websocket.send_json({"type": "error", "message": str(e)})
     finally:

@@ -2,8 +2,8 @@
 tests/test_ws_close_paths.py — DEPENDENCY_PINNING_SPEC AC3.
 
 Runs the real app on a real uvicorn server (in this process, background
-thread, free port) and drives /ws/session through the six ways a session
-ends. Any server-side traceback or ERROR log fails the test.
+thread, free port) and drives /ws/session through the ways a session ends
+(path 7 is LATENCY_SPEC AC10: the client leaves mid synthesis stream). Any server-side traceback or ERROR log fails the test.
 
 Why a real server: starlette's TestClient never exercises uvicorn's WebSocket
 protocol implementation, which is where close/disconnect semantics changed
@@ -213,3 +213,36 @@ def test_close_path_6_server_shuts_down_with_session_open(live_server):
             await asyncio.wait_for(ws.wait_closed(), TIMEOUT)
     _run(scenario())
     _assert_no_server_errors(live_server)
+
+
+@pytest.mark.parametrize("how", ["close", "abort"])
+def test_close_path_7_client_leaves_during_synthesis_stream(live_server, how):
+    # LATENCY_SPEC AC10: the handler must stop streaming and exit quietly,
+    # without falling back to another synthesis model.
+    from backend import main
+
+    calls = []
+
+    async def streaming_synthesis(model, messages, system, tier, on_token=None):
+        calls.append(model)
+        for i in range(500):
+            await on_token(f"chunk{i} ")
+            await asyncio.sleep(0.005)
+        return "never finished"
+
+    async def scenario():
+        ws = await connect(live_server.url)
+        await ws.send(json.dumps(HANDSHAKE))
+        await _recv_until(ws, "prompt_review")
+        await ws.send(json.dumps({"type": "prompt_confirmed"}))
+        await _recv_until(ws, "synthesis_token")
+        if how == "close":
+            await ws.close()
+        else:
+            ws.transport.abort()
+        await asyncio.sleep(0.3)
+
+    with patch.object(main, "call_synthesis_async", streaming_synthesis):
+        _run(scenario())
+        _assert_no_server_errors(live_server)
+    assert calls == [main.SYNTHESIS_ANALYTICAL]

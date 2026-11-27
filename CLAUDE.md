@@ -16,7 +16,7 @@ quality ceiling, not cost floor.
 | Intake | Claude Sonnet (primary) | GPT-4o-mini fallback, Qwen fallback |
 | Research | Sonnet executor + Opus advisor | Smart tier |
 | Fact-check | Perplexity Sonar Pro | Always deep |
-| Synthesis | Claude (SYNTHESIS_ANALYTICAL) | Single route, Qwen fallback; GPT route removed (ADR 002 addendum) |
+| Synthesis | Claude (SYNTHESIS_ANALYTICAL) | One streamed call on every tier (LATENCY_SPEC L1), Qwen fallback; GPT route removed (ADR 002 addendum) |
 | Chips/Direction | Claude Sonnet | Fast tier |
 
 ## Pipeline flow
@@ -129,7 +129,7 @@ CI (.github/workflows/tests.yml) runs on every PR and push to main: clean
   pinned install, lockfile-in-sync check, full suite. No secrets needed
 tests/test_ws_close_paths.py runs the app on a real uvicorn server and fails
   on any server traceback when a WebSocket session ends (six close paths)
-348 tests passing as of November 2026
+358 tests passing as of November 2026
 
 ## Environment
 - Python 3.13 (pinned via .python-version)
@@ -195,7 +195,8 @@ stale UI.
   the role → model table; ⚠️ lines after it are real (retiring,
   missing or unresolved models). Fix them in model_registry.json
 - Each session logs a [TIMING] line per stage (research.<model>, research,
-  research.emit, factcheck, self_critique, synthesis, refinement.N) and a
+  research.emit, factcheck, self_critique, synthesis, refinement.N, plus
+  synthesis.first_token / refinement.N.first_token) and a
   [TIMING] first_draft total=… summary. Timing starts after prompt review,
   so user wait is excluded (backend/stage_timing.py)
 - python -m tools.check_models reports against live provider lists;
@@ -207,6 +208,9 @@ stale UI.
 - Provider clients must read model IDs from model_config.py — never add
   a local MODELS dict (tests/test_model_config.py enforces this)
 - Intake max 7 questions not yet enforced (v2 spec in docs/)
+- Synthesis and refinement stream to the client as synthesis_token frames,
+  then a synthesis_draft with the cleaned text; synthesis_reset clears a
+  stream that failed mid-way. Latency plan: docs/LATENCY_SPEC.md
 - Intake v2 architecture spec: docs/INTAKE_V2_SPEC.md
 - Intake v2 PM addendum: docs/INTAKE_V2_PM_ADDENDUM.md
 

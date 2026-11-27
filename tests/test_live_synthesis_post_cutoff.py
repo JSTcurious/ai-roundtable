@@ -19,7 +19,9 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def test_synthesis_accepts_post_cutoff_perplexity_data():
+@pytest.mark.parametrize("streamed", [True, False], ids=["streamed", "single-call"])
+def test_synthesis_accepts_post_cutoff_perplexity_data(streamed):
+    # streamed = the live session path (LATENCY_SPEC L1); single-call = REST path.
     from backend.main import call_synthesis_async
     from backend.models.model_config import SYNTHESIS_ANALYTICAL
     from backend.router import build_synthesis_system
@@ -31,13 +33,23 @@ def test_synthesis_accepts_post_cutoff_perplexity_data():
         round1_responses={k.lower(): v for k, v in TEST1_ROUND1.items()},
         audit_text=TEST1_PERPLEXITY,
     )
+    chunks = []
+
+    async def on_token(chunk):
+        chunks.append(chunk)
+
     text = asyncio.run(call_synthesis_async(
         SYNTHESIS_ANALYTICAL,
         [{"role": "user", "content": TEST1_USER_PROMPT}],
         system,
         "smart",
+        on_token=on_token if streamed else None,
     ))
     low = text.lower()
+
+    if streamed:
+        assert len(chunks) > 1, "synthesis did not stream"
+        assert "".join(chunks) == text
 
     assert "$5" in text and "25" in text, "Opus 4.7 $5/$25 pricing missing"
     assert "retire" in low or "deprecat" in low, "Claude 3 Opus retirement missing"
