@@ -6,7 +6,6 @@ FastAPI application — REST endpoints + WebSocket for ai-roundtable v2.
 Endpoints:
     POST /api/intake/start      — start a new intake conversation
     POST /api/intake/respond    — send a message to the intake conductor
-    POST /api/session/run       — run a full roundtable session, return all responses
     POST /api/export/markdown   — generate markdown export
     POST /api/export/drive      — deferred to v2.1
 
@@ -161,12 +160,6 @@ class IntakeStartRequest(BaseModel):
 class IntakeRespondRequest(BaseModel):
     session_id: str
     answer: str
-
-
-class SessionRunRequest(BaseModel):
-    prompt: str
-    session_config: dict
-    history: list = []  # list of {"role", "sender", "content", ...} dicts
 
 
 class ExportRequest(BaseModel):
@@ -363,178 +356,6 @@ def _enrich_prompt(base_prompt: str, config: dict, include_facts: bool = True) -
             config.get("stated_facts"), config.get("original_prompt", ""), prompt
         )
     return prompt
-
-
-# ── Core session loop ─────────────────────────────────────────────────────────
-
-@app.post("/api/session/run")
-async def session_run(req: SessionRunRequest):
-    """
-    Run a full roundtable session and return all responses.
-
-    Accepts the user's prompt, the session_config from intake, and any
-    prior transcript history (empty list for the first turn).
-
-    Gemini, GPT, and Perplexity Phase 1 pre-research run in parallel; transcript
-    records Gemini then GPT. Perplexity Phase 2 audits Gemini + GPT. Claude
-    synthesises only (no Round 1 Claude response).
-
-    Returns:
-        {
-            "round1":    {"gemini": str, "gpt": str},
-            "research":  str,   # Perplexity Phase 1 pre-research
-            "audit":     str,   # Perplexity Phase 2 audit
-            "synthesis": str
-        }
-
-    Gemini, GPT, and Perplexity pre-research run in parallel.
-    Claude does NOT participate in Round 1 — synthesises only.
-    Each skipped provider is noted; session continues regardless.
-    Raises 400 if tier is invalid.
-    """
-    config = req.session_config
-    tier = config.get("tier", "smart"); print(f"[SESSION] tier={tier} models={RESOLUTION.fingerprint()}", flush=True)
-    output_type = config.get("output_type", "report")
-    optimized_prompt = _enrich_prompt(config.get("optimized_prompt", req.prompt), config)
-    health = PipelineHealth()
-
-    # Tier must be "smart" or "deep" — anything else defaults to smart
-    if tier not in ("smart", "deep"):
-        tier = "smart"
-
-    transcript = Transcript()
-    transcript.session_config = config
-    for msg in req.history:
-        if msg.get("role") == "user":
-            transcript.add_user_message(msg["content"])
-        elif msg.get("role") == "assistant":
-            transcript.add_model_message(
-                sender=msg.get("sender", "Unknown"),
-                content=msg["content"],
-                round=msg.get("round", "round1"),
-            )
-    # Use the enriched prompt (includes background_context) as the research message
-    # so all four panel models have the user's background as part of their context.
-    transcript.add_user_message(optimized_prompt)
-
-    gemini_history = transcript.get_history_for_model("gemini")
-    gpt_history    = transcript.get_history_for_model("gpt")
-    grok_history   = transcript.get_history_for_model("grok")
-    claude_history = transcript.get_history_for_model("claude")
-    gemini_system  = get_round1_system_prompt("gemini")
-    gpt_system     = get_round1_system_prompt("gpt")
-    grok_system    = get_round1_system_prompt("grok")
-    claude_system  = get_round1_system_prompt("claude")
-
-    # ── Parallel: Gemini + GPT + Grok + Claude + Perplexity pre-research ─────
-    async def _research_task() -> str:
-        try:
-            return await asyncio.to_thread(
-                _call_with_retry,
-                lambda: perplexity_research(optimized_prompt, tier=tier),
-                "Perplexity-research",
-            )
-        except Exception as exc:
-            return f"[Perplexity pre-research unavailable: {exc}]"
-
-    results = await asyncio.gather(
-        call_research_gemini_async(gemini_history, gemini_system, tier),
-        call_research_gpt_async(gpt_history, gpt_system, tier),
-        call_research_grok_async(grok_history, grok_system, tier),
-        call_research_claude_async(claude_history, claude_system, tier),
-        _research_task(),
-        return_exceptions=True,
-    )
-
-    def _unpack(result, lab: str) -> tuple:
-        if isinstance(result, Exception):
-            return f"[{lab.capitalize()} unavailable — {result}]", "unavailable"
-        if isinstance(result, tuple):
-            return result
-        return str(result), "primary"
-
-    gemini_text,    gemini_avail    = _unpack(results[0], "gemini")
-    gpt_text,       gpt_avail       = _unpack(results[1], "gpt")
-    grok_text,      grok_avail      = _unpack(results[2], "grok")
-    claude_r1_text, claude_avail    = _unpack(results[3], "claude")
-    perplexity_pre = results[4] if isinstance(results[4], str) else ""
-
-    health.research_models = {
-        "gemini": gemini_avail,
-        "gpt":    gpt_avail,
-        "grok":   grok_avail,
-        "claude": claude_avail,
-    }
-
-    transcript.add_model_message("Gemini", gemini_text,    round="round1")
-    transcript.add_model_message("GPT",    gpt_text,       round="round1")
-    transcript.add_model_message("Grok",   grok_text,      round="round1")
-    transcript.add_model_message("Claude", claude_r1_text, round="round1")
-
-    # ── Perplexity audit (Phase 2) with fallback ──────────────────────────────
-    try:
-        audit_text, factcheck_provider, _ = await asyncio.to_thread(
-            audit_with_fallback,
-            {"gemini": gemini_text, "gpt": gpt_text,
-             "grok": grok_text, "claude": claude_r1_text},
-            perplexity_pre,
-            tier,
-        )
-    except Exception as exc:
-        audit_text = f"[Perplexity audit unavailable: {exc}]"
-        factcheck_provider = "emergency"
-    health.factcheck_model = factcheck_provider
-    health.factcheck_degraded = (factcheck_provider != "primary")
-    transcript.add_model_message("Perplexity", audit_text, round="audit")
-
-    # ── Synthesis ────────────────────────────────────────────────────────────
-    synthesis_model_id, synthesis_route = SYNTHESIS_ANALYTICAL, "primary"
-    synthesis_system = build_synthesis_prompt(
-        output_type=output_type,
-        perplexity_findings=audit_text,
-        round1_responses={
-            "gemini": gemini_text,
-            "gpt":    gpt_text,
-            "grok":   grok_text,
-            "claude": claude_r1_text,
-        },
-        optimized_prompt=optimized_prompt,
-    )
-    synthesis_messages = [{"role": "user", "content": req.prompt}]
-    try:
-        synthesis_text = await call_synthesis_async(
-            synthesis_model_id, synthesis_messages, synthesis_system, tier
-        )
-        health.synthesis_model = synthesis_model_id
-        health.synthesis_routed = synthesis_route
-    except Exception as exc:
-        print(f"[synthesis] primary failed ({exc}) — using fallback", flush=True)
-        try:
-            synthesis_text = await call_synthesis_async(
-                SYNTHESIS_FALLBACK, synthesis_messages, synthesis_system, tier
-            )
-            health.synthesis_model = SYNTHESIS_FALLBACK
-            health.synthesis_routed = "fallback"
-        except Exception as exc2:
-            synthesis_text = f"[Synthesis unavailable: {exc2}]"
-            health.synthesis_model = "emergency"
-            health.synthesis_routed = "fallback"
-
-    transcript.add_model_message("Claude", synthesis_text, round="synthesis")
-    print(f"[SESSION] {health.summary()}", flush=True)
-
-    return {
-        "round1": {
-            "gemini": gemini_text,
-            "gpt":    gpt_text,
-            "grok":   grok_text,
-            "claude": claude_r1_text,
-        },
-        "audit":             audit_text,
-        "synthesis":         synthesis_text,
-        "pipeline_health":   health.summary(),
-        "annotations":       health.to_annotation(),
-    }
 
 
 # ── Export endpoints ──────────────────────────────────────────────────────────
