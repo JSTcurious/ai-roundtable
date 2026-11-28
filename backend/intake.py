@@ -348,7 +348,7 @@ def _decision_to_config(decision: IntakeDecision) -> dict:
 
 class IntakeSession:
     """
-    Manages a single Gemini Flash intake session.
+    Manages a single multi-turn intake session (Claude Sonnet primary, with fallbacks).
 
     At most two turns:
       Turn 0 — analyze(prompt):   Gemini decides whether to clarify or proceed.
