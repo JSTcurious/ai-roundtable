@@ -233,10 +233,32 @@ Sonnet-then-Opus path:
   matters in real sessions, the next step is a 500-word cap (untested), then
   re-measure.
 
-### Not yet done
+### Production check (AC7), 2026-11-28, PR 66 live
 
-- **AC7:** one production session after deploy, to read the real `[TIMING]`,
-  `[PANEL]` and `[SEATS]` lines and the first-draft total. Record it here.
-- Claude's speed varies a lot between calls (one earlier Opus pass took 162s
-  for 2,100 tokens). Caps make such spikes shorter but cannot remove them, so
-  one slow production session does not by itself mean the fix failed.
+One session (the same cloud-migration prompt as the 205s run):
+
+| Stage | Phase 2a session | After this change | Target |
+|---|---|---|---|
+| Panel router | 17.6s | **9.5s** | ≤ 10s ✅ |
+| Research (slowest seat = Claude) | 106.5s | **56.9s** | ≈ 55–60s ✅ |
+| ↳ GPT / Gemini / Grok | 33.5 / 47.4 / 23.6s | 21.6 / 28.8 / 41.1s | – |
+| Seat parse | 2.4s (a repair) | **0.0s** (no repair) | – |
+| Fact-check | 7.8s | 9.2s | – |
+| Self-critique | 22.9s | 23.8s | – |
+| Synthesis | 48.2s | 43.0s | – |
+| **First draft total** | **205.4s** | **142.4s** | ≤ 150s ✅ |
+
+`[SEATS] gpt=json:4353ch gemini=json:3603ch grok=json:3067ch claude=json:5009ch`:
+all four seats answered valid JSON first time, so no repair call was needed.
+The router's roles for this run: Migration Execution & Feasibility Lead,
+Strategic Ecosystem & Capability Analyst, Commercial & Cost Risk Analyst,
+Compliance & Contractual Risk Officer. Pipeline healthy, no errors. The router
+took 9.5s in production against 7.5s locally; the run is one sample.
+
+What is left above LATENCY_SPEC's 110s: the Claude seat still sets the research
+time (56.9s), then self-critique (23.8s) and synthesis (43.0s) run one after
+the other. Those are the next levers if 110s is wanted (a separate spec).
+
+Not yet exercised live on this code: a dialogue turn (no push-back was sent, so
+refinement did not run), and Claude's occasional slow calls (one Opus pass took
+162s in an earlier local run) could still produce a slow session.
