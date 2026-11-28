@@ -265,7 +265,7 @@ async def intake_start(req: IntakeStartRequest):
     """
     Start a new intake session and immediately analyze the user's prompt.
 
-    Gemini Flash classifies the prompt, assigns a tier, and either:
+    Claude Sonnet (with fallbacks) analyses the prompt and either:
     - returns a clarifying question (status: "clarifying"), or
     - returns a complete session config (status: "complete")
 

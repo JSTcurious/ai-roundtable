@@ -4,9 +4,11 @@ backend/transcript.py
 Shared conversation history for a roundtable session.
 
 The transcript is the product. Every model receives the complete
-verbatim history on every call. Sequential Round 1 means each
-model has heard what came before it — this compounding effect
-is the core product differentiator. Never call models in parallel.
+verbatim history on every call. In Round 1 the four research models
+(Claude, GPT, Gemini, Grok) run in parallel and independently, each
+reading the same history, so they do not hear each other until
+synthesis. Independent responses are what let the synthesis see real
+disagreement, so do not feed one model's answer to another in Round 1.
 
 Classes:
     Transcript  — append-only conversation log with per-model history views
@@ -24,7 +26,7 @@ class Transcript:
         "assistant" — any model response (labeled by sender)
 
     Round labels:
-        "round1"    — initial responses from Claude, Gemini, GPT
+        "round1"    — initial responses from Claude, Gemini, GPT, Grok
         "audit"     — Perplexity fact-check findings (deferred to v2.1)
         "critique"  — deep mode cross-critique round (deferred to v2.1)
         "synthesis" — Claude final synthesis

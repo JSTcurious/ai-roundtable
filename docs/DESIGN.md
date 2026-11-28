@@ -284,18 +284,17 @@ counted. Latency work is tracked in `docs/LATENCY_SPEC.md`.
 
 ## 14. Known mismatches
 
-Comments that no longer match the code, which this document does not
-follow:
+The code and its comments agree except for one item that needs a decision,
+not a comment fix:
 
-- The `backend/transcript.py` docstring says Round 1 is sequential and that
-  models must never run in parallel. The code runs the four labs in parallel,
-  independently.
-- The `backend/synthesizer.py` header describes three Round-1 models. The
-  panel has four.
-- The `/api/intake/start` docstring says Gemini Flash runs intake. It is
-  Claude Sonnet, with fallbacks.
 - `POST /api/session/run` (REST, no review gate) still exists beside the
-  WebSocket path. The product flow uses the WebSocket path.
+  WebSocket path. The product flow uses the WebSocket path. Its docstring also
+  says Claude does not take part in Round 1, but the code runs all four labs.
+  Because it skips the review, it never shows the user the facts list.
+
+(Earlier stale comments in `transcript.py`, `synthesizer.py`, `intake.py` and
+the `/api/intake/start` docstring were corrected after this document was
+first written.)
 
 ## 15. Where to read more
 

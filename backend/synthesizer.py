@@ -3,7 +3,7 @@ backend/synthesizer.py
 
 Claude synthesis prompt builder for ai-roundtable v2.
 
-After Round 1 (Claude, Gemini, GPT) and the Perplexity audit,
+After Round 1 (Claude, Gemini, GPT, Grok) and the Perplexity audit,
 Claude synthesizes all inputs into a final deliverable that
 matches the output_type declared during intake.
 
@@ -31,7 +31,7 @@ def build_synthesis_messages(transcript: Transcript, session_config: dict) -> li
 
     Includes:
         - Full conversation history
-        - Round 1 responses from Claude, Gemini, GPT
+        - Round 1 responses from Claude, Gemini, GPT, Grok
         - Perplexity audit findings
         - Output type from session_config to shape the synthesis structure
 
@@ -47,7 +47,7 @@ def build_synthesis_messages(transcript: Transcript, session_config: dict) -> li
 def extract_disagreements(round1_responses: dict) -> list[str]:
     """
     Identify and return explicit points of disagreement across
-    Claude, Gemini, and GPT Round 1 responses.
+    Claude, Gemini, GPT, and Grok Round 1 responses.
 
     Used to populate the "Where Models Disagreed" section
     of the synthesis and the markdown export.
