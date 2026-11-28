@@ -345,5 +345,8 @@ from §4–§6:
     new-prompt runs and 0/11 old-prompt runs (streamed and single-call).
   - Conclusion so far: no regression shown, but the two failures are not
     explained. The test now prints the surrounding text on failure.
-  - Live runs stopped when the Anthropic account ran out of credit. Run the
-    post-cutoff check again before merging.
+  - Live runs stopped when the Anthropic account ran out of credit. After the
+    key's account was funded, `test_live_injection.py` and
+    `test_live_synthesis_post_cutoff.py` passed 4/4, and the post-cutoff file
+    then passed 3 more runs in a row (2/2 each), so the earlier streamed
+    failures did not reproduce.
