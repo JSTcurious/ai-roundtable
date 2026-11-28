@@ -35,7 +35,26 @@ from openai import OpenAI
 from backend.models.model_config import get_advisor_model, get_executor_model, get_fallback_model
 from backend.router import build_advisor_messages
 
+# ── Data retention (docs/PRIVACY_SECURITY_SPEC.md §4.2) ──────────────────────
+# xAI has no per-request retention parameter: Zero Data Retention is a team
+# setting in the xAI Console and then applies to every key of that team.
+# Every response reports the state in the x-zero-data-retention header;
+# call_grok reads it and prints one [PRIVACY] ⚠️ line per process when it is
+# not "true", so a team without ZDR shows up in the Railway log.
 _client = None
+_zdr_warned = False
+
+
+def _check_zdr_header(headers) -> None:
+    global _zdr_warned
+    value = (headers.get("x-zero-data-retention") or "").strip().lower()
+    if value != "true" and not _zdr_warned:
+        _zdr_warned = True
+        print(
+            f"[PRIVACY] ⚠️  xAI x-zero-data-retention={value or 'absent'} — "
+            "enable Zero Data Retention for the team in the xAI Console",
+            flush=True,
+        )
 
 
 def _get_client() -> OpenAI:
@@ -85,12 +104,14 @@ def call_grok(
         full_messages.append({"role": "system", "content": system})
     full_messages.extend(messages)
 
-    return _get_client().chat.completions.create(
+    raw = _get_client().chat.completions.with_raw_response.create(
         model=model,
         max_completion_tokens=4096,
         messages=full_messages,
         stream=stream,
     )
+    _check_zdr_header(raw.headers)
+    return raw.parse()
 
 
 def call_grok_smart(messages: list, system: str = None) -> dict:

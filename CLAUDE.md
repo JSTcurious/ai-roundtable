@@ -56,6 +56,9 @@ fact-check. User engages with the draft, not a blank textarea.
 - backend/models/registry.py — resolves each role to a model at startup
 - backend/models/model_config.py — resolved constants used by call sites
 - backend/models/intake_decision.py — IntakeDecision Pydantic schema
+- backend/privacy_guard.py — PII tokenizer, PrivacyVault/VAULTS, rehydrate,
+  StreamRehydrator (spec: docs/PRIVACY_SECURITY_SPEC.md); word lists in
+  backend/privacy_allowlist.json
 - frontend/src/components/LandingPage.jsx — landing page; panel member descriptions
   must stay aligned with cognitive roles in ROUND1_SYSTEM_PROMPTS (router.py)
 - frontend/src/components/IntakeFlow.jsx — intake UI, multi-turn handling
@@ -103,6 +106,27 @@ Synthesis output format — four required sections:
   WHERE THE PANEL DISAGREED
   ONE NEXT ACTION
 
+### Privacy & injection safety
+Spec: docs/PRIVACY_SECURITY_SPEC.md
+- Models only ever see placeholders ([PERSON_1], [ORG_1], [AMOUNT_1 ≈ $440K],
+  [ID_1] …). Intake endpoints sanitize input and re-hydrate output; the
+  session WebSocket is wrapped in _PrivacySocket (main.py), which tokenizes
+  every inbound frame and re-hydrates every outbound one, streams included
+- The token map lives in server RAM only (VAULTS, keyed by privacy_ref =
+  intake session_id, 30-min TTL) and is cleared when the session ends; never
+  log it or put it in a prompt or frame
+- TOKEN_PRESERVATION_RULE (router.py) goes on every prompt that sees user text
+- Web-derived text (fact-check audit, citations) reaching Claude goes through
+  wrap_untrusted_evidence() behind UNTRUSTED_EVIDENCE_RULE (prepended).
+  This is separate from wrap_model_response()
+- Retention: OpenAI calls pass store=False; OpenRouter calls pass
+  OPENROUTER_PRIVACY (zdr + data_collection=deny); call_grok checks the
+  x-zero-data-retention header. Org-level ZDR for Anthropic, OpenAI, xAI,
+  Gemini and Perplexity is a dashboard/contract step, documented at each
+  client's _get_client
+- A public name being redacted (over-redaction) → add it to
+  privacy_allowlist.json public_names
+
 ### Prompt rules
 - Never rename prompt variables without updating all call sites
 - Template variables use {curly_brace} syntax
@@ -135,13 +159,13 @@ docs/description — documentation only
 
 ## Testing
 uv run pytest — always run before committing (never bare pytest)
-RUN_LIVE_EVALS=1 uv run pytest tests/test_live_synthesis_post_cutoff.py —
-  paid live check; run when changing synthesis models or prompts
+RUN_LIVE_EVALS=1 uv run pytest tests/test_live_synthesis_post_cutoff.py tests/test_live_injection.py —
+  paid live checks; run when changing synthesis models or prompts
 CI (.github/workflows/tests.yml) runs on every PR and push to main: clean
   pinned install, lockfile-in-sync check, full suite. No secrets needed
 tests/test_ws_close_paths.py runs the app on a real uvicorn server and fails
   on any server traceback when a WebSocket session ends (six close paths)
-381 passed, 2 skipped as of November 2026
+488 passed, 4 skipped as of November 2026
 
 ## Environment
 - Python 3.13 (pinned via .python-version)

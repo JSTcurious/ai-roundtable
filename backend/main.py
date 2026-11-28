@@ -41,6 +41,14 @@ from pydantic import BaseModel, field_validator
 from starlette.websockets import WebSocketDisconnect
 
 from backend.intake import INTAKE_OPENING_MESSAGE, IntakeSession
+from backend.privacy_guard import (
+    VAULTS,
+    PrivacyVault,
+    StreamRehydrator,
+    rehydrate_obj,
+    sanitize_obj,
+    sanitize_text,
+)
 from backend.transcript import Transcript
 from backend.router import (
     get_tier_config,
@@ -273,8 +281,12 @@ async def intake_start(req: IntakeStartRequest):
     session_id = str(uuid.uuid4())
     session = IntakeSession()
     _intake_sessions[session_id] = session
+    # Privacy gate: the intake model only ever sees tokens (PRIVACY_SECURITY_SPEC §4.1).
+    vault = PrivacyVault()
+    VAULTS.put(session_id, vault)
+    prompt = sanitize_text(req.prompt, vault)
     try:
-        result = await asyncio.to_thread(session.analyze, req.prompt)
+        result = await asyncio.to_thread(session.analyze, prompt)
     except RuntimeError as e:
         if "unavailable after 3 attempts" in str(e):
             raise HTTPException(
@@ -284,7 +296,11 @@ async def intake_start(req: IntakeStartRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Gemini intake error: {e}")
-    return {"session_id": session_id, "opening_message": INTAKE_OPENING_MESSAGE, **result}
+    return {
+        "session_id": session_id,
+        "opening_message": INTAKE_OPENING_MESSAGE,
+        **_intake_result_for_client(result, session_id, vault),
+    }
 
 
 @app.post("/api/intake/respond")
@@ -305,11 +321,28 @@ async def intake_respond(req: IntakeRespondRequest):
     session = _intake_sessions.get(req.session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Intake session not found.")
+    vault = VAULTS.get(req.session_id)
+    if vault is None:  # expired or lost on restart — tokenize from here on
+        vault = PrivacyVault()
+        VAULTS.put(req.session_id, vault)
+    answer = sanitize_text(req.answer, vault)
     try:
-        result = await asyncio.to_thread(session.respond, req.answer)
+        result = await asyncio.to_thread(session.respond, answer)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Gemini intake error: {e}")
-    return {"session_id": req.session_id, **result}
+    return {"session_id": req.session_id, **_intake_result_for_client(result, req.session_id, vault)}
+
+
+def _intake_result_for_client(result: dict, session_id: str, vault: PrivacyVault) -> dict:
+    """
+    Re-hydrate an intake result for the user and tag a finished config with
+    privacy_ref so the session WebSocket can find this vault. Returns a copy:
+    the IntakeSession keeps its tokenized config.
+    """
+    shown = rehydrate_obj(result, vault)
+    if isinstance(shown.get("config"), dict):
+        shown["config"]["privacy_ref"] = session_id
+    return shown
 
 
 
@@ -401,6 +434,76 @@ async def export_drive():
 
 
 # ── WebSocket streaming ───────────────────────────────────────────────────────
+
+# session_config / frame keys that are never user text.
+_PRIVACY_SKIP_KEYS = frozenset({"type", "privacy_ref", "tier", "output_type"})
+_STREAM_FRAMES = ("token", "synthesis_token")
+
+
+class _PrivacySocket:
+    """
+    WebSocket wrapper that enforces the privacy boundary (PRIVACY_SECURITY_SPEC §4.1).
+
+    receive_json(): every inbound frame is tokenized with the session vault.
+    send_json():    every outbound frame is re-hydrated. Streamed frames
+                    ("token" per sender, "synthesis_token") go through a
+                    StreamRehydrator so a token split across chunks is still
+                    restored; held text is flushed before the next non-stream
+                    frame (model_complete flushes only its own sender).
+    Everything else (close, client_state, …) is delegated unchanged.
+    """
+
+    def __init__(self, websocket: WebSocket, vault: PrivacyVault):
+        self._ws = websocket
+        self._vault = vault
+        self._streams: Dict[tuple, StreamRehydrator] = {}
+
+    def __getattr__(self, name):
+        return getattr(self._ws, name)
+
+    async def receive_json(self, *args, **kwargs):
+        data = await self._ws.receive_json(*args, **kwargs)
+        return sanitize_obj(data, self._vault, skip_keys=_PRIVACY_SKIP_KEYS)
+
+    def _stream_key(self, msg: dict) -> tuple:
+        if msg.get("type") == "token":
+            return ("token", msg.get("sender"))
+        return ("synthesis_token", None)
+
+    def _flush_frame(self, key: tuple) -> Optional[dict]:
+        stream = self._streams.pop(key, None)
+        text = stream.flush() if stream else ""
+        if not text:
+            return None
+        if key[0] == "token":
+            return {"type": "token", "sender": key[1], "token": text}
+        return {"type": "synthesis_token", "token": text}
+
+    async def send_json(self, data, *args, **kwargs):
+        frames: List[dict] = []
+        msg_type = data.get("type") if isinstance(data, dict) else None
+        if msg_type in _STREAM_FRAMES:
+            key = self._stream_key(data)
+            stream = self._streams.setdefault(key, StreamRehydrator(self._vault))
+            text = stream.feed(data.get("token") or "")
+            if text:
+                frames.append({**data, "token": text})
+        else:
+            if msg_type == "synthesis_reset":
+                self._streams.pop(("synthesis_token", None), None)
+            elif msg_type == "model_complete":
+                frame = self._flush_frame(("token", data.get("sender")))
+                if frame:
+                    frames.append(frame)
+            else:
+                for key in list(self._streams):
+                    frame = self._flush_frame(key)
+                    if frame:
+                        frames.append(frame)
+            frames.append(rehydrate_obj(data, self._vault))
+        for frame in frames:
+            await self._ws.send_json(frame, *args, **kwargs)
+
 
 async def safe_close(ws):
     """Close a WebSocket, silently ignoring errors if already closed.
@@ -863,9 +966,15 @@ async def session_websocket(websocket: WebSocket):
             continue
         break
 
-    prompt = data.get("prompt", "")
-    config = data.get("session_config", {})
-    history = data.get("history", [])
+    # Privacy gate: from here on, models see tokens and the user sees originals.
+    # The vault comes from intake (privacy_ref) and lives only in this
+    # connection's scope; an unknown ref starts a fresh one.
+    config = data.get("session_config", {}) if isinstance(data, dict) else {}
+    vault = VAULTS.take(config.get("privacy_ref") if isinstance(config, dict) else None) or PrivacyVault()
+    prompt = sanitize_text(data.get("prompt", ""), vault)
+    config = sanitize_obj(config, vault, skip_keys=_PRIVACY_SKIP_KEYS)
+    history = sanitize_obj(data.get("history", []), vault)
+    websocket = _PrivacySocket(websocket, vault)
     tier = config.get("tier", "smart"); print(f"[SESSION] tier={tier} models={RESOLUTION.fingerprint()}", flush=True)
     output_type = config.get("output_type", "report")
 
@@ -1146,6 +1255,7 @@ async def session_websocket(websocket: WebSocket):
             "closing_questions": closing_questions,
             "synthesis_model_used": current_synthesis_model,
             "synthesis_route": health.synthesis_routed or synthesis_route,
+            "privacy_audit": vault.audit(),
         })
         print(timer.summary("first_draft"), flush=True)
 
@@ -1168,6 +1278,7 @@ async def session_websocket(websocket: WebSocket):
                     "content": current_synthesis,
                     "revision": revision_count,
                     "synthesis_model_used": current_synthesis_model,
+                    "privacy_audit": vault.audit(),
                 })
                 break
 
@@ -1221,6 +1332,7 @@ async def session_websocket(websocket: WebSocket):
                     "closing_questions": closing_questions,
                     "synthesis_model_used": current_synthesis_model,
                     "synthesis_route": health.synthesis_routed or synthesis_route,
+                    "privacy_audit": vault.audit(),
                 })
 
         print(f"[SESSION] {health.summary()}", flush=True)
@@ -1243,4 +1355,5 @@ async def session_websocket(websocket: WebSocket):
             await ping_task
         except asyncio.CancelledError:
             pass
+        vault.clear()  # token_map is discarded with the session
         await safe_close(websocket)

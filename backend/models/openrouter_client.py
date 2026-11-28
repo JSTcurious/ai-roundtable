@@ -29,6 +29,17 @@ def _extract_json(text: str) -> str:
     return text.strip()
 
 
+# ── Data retention (docs/PRIVACY_SECURITY_SPEC.md §4.2) ──────────────────────
+# Every request routes only to endpoints that keep no data and do not train:
+#   zdr=True              → Zero Data Retention endpoints only
+#   data_collection=deny  → exclude providers that store or train on prompts
+# If no endpoint qualifies, OpenRouter errors instead of falling back to one
+# that logs (verified 2026-11-28: qwen/qwen-2.5-72b-instruct has a ZDR
+# endpoint, GET https://openrouter.ai/api/v1/endpoints/zdr). The same default
+# can also be set account-wide in OpenRouter → Settings → Privacy.
+OPENROUTER_PRIVACY = {"provider": {"zdr": True, "data_collection": "deny"}}
+
+
 def _get_client() -> OpenAI:
     global _client
     if _client is None:
@@ -75,6 +86,7 @@ def call_intake_fallback1(prompt: str):
             {"role": "system", "content": system_prompt},
             {"role": "user",   "content": prompt},
         ],
+        extra_body=OPENROUTER_PRIVACY,
     )
     raw = _extract_json(response.choices[0].message.content or "")
     try:
@@ -109,5 +121,6 @@ def call_synthesis_fallback(
         model=SYNTHESIS_FALLBACK,
         max_tokens=4096,
         messages=full_messages,
+        extra_body=OPENROUTER_PRIVACY,
     )
     return response.choices[0].message.content or ""

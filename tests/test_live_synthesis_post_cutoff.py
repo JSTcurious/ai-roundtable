@@ -53,4 +53,8 @@ def test_synthesis_accepts_post_cutoff_perplexity_data(streamed):
 
     assert "$5" in text and "25" in text, "Opus 4.7 $5/$25 pricing missing"
     assert "retire" in low or "deprecat" in low, "Claude 3 Opus retirement missing"
-    assert "fabricat" not in low, "synthesis called Perplexity data fabricated"
+    at = low.find("fabricat")
+    assert at == -1, (
+        "synthesis called Perplexity data fabricated: …"
+        + text[max(0, at - 300):at + 120] + "…"
+    )

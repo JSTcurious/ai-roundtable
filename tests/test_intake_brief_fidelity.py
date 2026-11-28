@@ -221,8 +221,12 @@ class TestReviewGate:
     def test_no_facts_falls_back_to_verbatim_prompt(self):
         _, panel, _ = self._run({"type": "prompt_confirmed", "stated_facts": []},
                                 config_extra={"stated_facts": []})
+        # The verbatim prompt reaches the panel with its amount tokenized
+        # (PRIVACY_SECURITY_SPEC §4.1, Q2: magnitude hint).
+        tokenized = CONSULTANCY_PROMPT.replace("$180k", "[AMOUNT_1 ≈ $180K]")
         for text in panel.values():
-            assert CONSULTANCY_PROMPT in text
+            assert tokenized in text
+            assert "$180k" not in text
 
 
 # ── AC7 — the strings live only in router.py ──────────────────────────────────
