@@ -315,6 +315,14 @@ from §4–§6:
   (one `$500M` tokenized, which is correct).
 - **Amount hints round half-up.** Python's `%g` rounds half-to-even
   ($185k → $180K); `_round_sig` uses `Decimal` with `ROUND_HALF_UP`.
+- **Org names containing a common word (fixed after Phase 1).** A run ending
+  in a company suffix used to be cut at the first common word, so "Halvorsen
+  Health Group" became "[ORG_1] Health Group" and part of the name reached the
+  models. Suffix-anchored runs now keep common words in the middle
+  (`_trim_run(keep_interior=True)`); leading common words ("The", "Should")
+  are still dropped, and the cue rule ("works at …") still stops at a common
+  word because nothing anchors the name there. Replaying the saved
+  transcripts gives identical redactions before and after.
 - **ORG cue words.** A bare "with", "for" or "from" is not a cue ("with
   Python", "from January"). The cues are employment verbs, "at", and
   "my/our employer|company|client…".

@@ -262,3 +262,47 @@ def test_vault_repr_never_shows_values():
     vault = PrivacyVault()
     sanitize(ACCEPTANCE_PROMPT, vault)
     assert "Sarah" not in repr(vault)
+
+
+# ── Org names that contain a common word (regression) ───────────────────────
+# "Halvorsen Health Group" used to become "[ORG_1] Health Group": the run was
+# cut at the first common word ("Health"), so part of the name leaked. When a
+# company suffix anchors the name, the whole run is the name.
+
+@pytest.mark.parametrize("text, name", [
+    ("our biggest client, Halvorsen Health Group, requires SOC 2", "Halvorsen Health Group"),
+    ("we compete with Apex Health Group on price", "Apex Health Group"),
+    ("Bright Data Systems Inc signed the contract", "Bright Data Systems Inc"),
+    ("a deal with Northwind Digital Product Labs last year", "Northwind Digital Product Labs"),
+    ("Cedar Mental Health Partners renewed", "Cedar Mental Health Partners"),
+])
+def test_suffix_anchored_org_with_common_word_is_redacted_whole(text, name):
+    result, vault = _sanitize(text)
+    assert name not in result.sanitized_text
+    for word in name.split():
+        assert word not in result.sanitized_text, (word, result.sanitized_text)
+    assert result.sanitized_text.count("[ORG_1]") == 1
+    assert list(vault.token_map.values()) == [name]
+    assert rehydrate(result.sanitized_text, vault) == text
+
+
+def test_leading_common_words_are_still_left_out_of_the_name():
+    result, vault = _sanitize("The Apex Health Group is hiring")
+    assert result.sanitized_text == "The [ORG_1] is hiring"
+    assert list(vault.token_map.values()) == ["Apex Health Group"]
+
+
+def test_sentence_start_common_word_is_not_swallowed():
+    result, vault = _sanitize("Should Brightwater Analytics Inc renew?")
+    assert result.sanitized_text == "Should [ORG_1] renew?"
+
+
+def test_cue_rule_still_stops_at_a_common_word():
+    # No company suffix to anchor the name, so "Monday" is not part of it.
+    result, vault = _sanitize("I start at Zentrix Monday")
+    assert result.sanitized_text == "I start at [ORG_1] Monday"
+
+
+def test_public_org_with_suffix_still_not_redacted():
+    text = "We run on Google Cloud and Amazon Web Services"
+    assert _sanitize(text)[0].sanitized_text == text

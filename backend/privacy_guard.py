@@ -210,11 +210,16 @@ def _is_public(candidate: str) -> bool:
     return False
 
 
-def _trim_run(m: re.Match) -> Optional[tuple[int, int]]:
+def _trim_run(m: re.Match, keep_interior: bool = False) -> Optional[tuple[int, int]]:
     """
-    Shrink a run of capitalized words to the plausible name: drop leading and
-    trailing common words, stop at the first common word, strip trailing
-    punctuation and possessives. Returns None if nothing private is left.
+    Shrink a run of capitalized words to the plausible name: drop leading
+    common words, strip trailing punctuation and possessives, and stop at the
+    first common word after the name has started. Returns None if nothing
+    private is left.
+
+    keep_interior=True is for runs anchored by a company suffix ("Apex Health
+    Group"): the suffix says the whole run is the name, so a common word in
+    the middle ("Health") does not end it.
     """
     start, end = m.start("v"), m.end("v")
     text = m.string
@@ -233,7 +238,7 @@ def _trim_run(m: re.Match) -> Optional[tuple[int, int]]:
         words.pop(0)
     kept = []
     for w in words:
-        if text[w[0]:w[1]] in COMMON_WORDS:
+        if text[w[0]:w[1]] in COMMON_WORDS and not keep_interior:
             break
         kept.append(w)
     if not kept:
@@ -246,7 +251,7 @@ def _trim_run(m: re.Match) -> Optional[tuple[int, int]]:
 
 
 def _org_suffix_select(m: re.Match) -> Optional[tuple[int, int]]:
-    span = _trim_run(m)
+    span = _trim_run(m, keep_interior=True)
     if span is None:
         return None
     candidate = m.string[span[0]:span[1]]
