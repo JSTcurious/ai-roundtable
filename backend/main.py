@@ -65,6 +65,7 @@ from backend.router import (
     clean_stated_facts,
     build_seat_system,
     call_panel_router,
+    format_seats_line,
     render_seat,
     structure_seat,
 )
@@ -1115,6 +1116,10 @@ async def session_websocket(websocket: WebSocket):
             lab for lab, seat in seat_results.items()
             if seat.degraded and availability[lab] != "unavailable"
         ]
+        health.panel_repaired_seats = [
+            lab for lab, seat in seat_results.items() if seat.repaired
+        ]
+        print(format_seats_line(seat_results), flush=True)
         gemini_text = render_seat(seat_results["gemini"])
         gpt_text = render_seat(seat_results["gpt"])
         grok_text = render_seat(seat_results["grok"])

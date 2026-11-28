@@ -182,7 +182,7 @@ CI (.github/workflows/tests.yml) runs on every PR and push to main: clean
   pinned install, lockfile-in-sync check, full suite. No secrets needed
 tests/test_ws_close_paths.py runs the app on a real uvicorn server and fails
   on any server traceback when a WebSocket session ends (six close paths)
-559 passed, 8 skipped as of November 2026
+584 passed, 9 skipped as of November 2026
 
 ## Environment
 - Python 3.13 (pinned via .python-version)
@@ -250,7 +250,12 @@ stale UI.
   synthesis, refinement.N, plus
   synthesis.first_token / refinement.N.first_token) and a
   [TIMING] first_draft total=… summary. Timing starts after prompt review,
-  so user wait is excluded (backend/stage_timing.py)
+  so user wait is excluded (backend/stage_timing.py). Each session also logs
+  [PANEL] (router's domain, stakes, roles, or its fallback reason) and
+  [SEATS] (per seat: json | repaired | degraded and reply length, no content).
+  The router and the seats are length-limited on purpose: output tokens are
+  what their time is made of (docs/PANEL_LATENCY_SPEC.md); do not loosen the
+  limits without re-measuring
 - python -m tools.check_models reports against live provider lists;
   --write adds new provider models as candidates (never approved) and
   refreshes retirement dates. Approving a model = editing its status in a PR

@@ -24,6 +24,8 @@ class PipelineHealth:
     synthesis_routed:    str  = "primary"  # primary | fallback
     panel_fallback:      bool = False      # router failed → default four seats
     panel_degraded_seats: list = field(default_factory=list)
+    panel_repaired_seats: list = field(default_factory=list)
+    # labs whose seat was valid only after the repair call
     # labs whose seat answered but not in the JSON shape (kept as plain text)
 
     def summary(self) -> str:
@@ -42,7 +44,12 @@ class PipelineHealth:
         if unavailable:
             degraded.append(f"research({','.join(unavailable)})")
         status = "degraded" if degraded else "healthy"
-        return f"Pipeline {status}: synthesis={self.synthesis_routed}"
+        line = f"Pipeline {status}: synthesis={self.synthesis_routed}"
+        if self.panel_repaired_seats:
+            line += f" repaired={','.join(self.panel_repaired_seats)}"
+        if self.panel_degraded_seats:
+            line += f" degraded={','.join(self.panel_degraded_seats)}"
+        return line
 
     def to_annotation(self) -> list:
         """
@@ -59,6 +66,8 @@ class PipelineHealth:
                 lines.append(f"ℹ️ {lab.capitalize()} used fallback model")
         if self.panel_fallback:
             lines.append("ℹ️ Panel router unavailable — used the default four seats")
+        for lab in self.panel_repaired_seats:
+            lines.append(f"ℹ️ {lab.capitalize()} needed a format repair — shown as normal")
         for lab in self.panel_degraded_seats:
             lines.append(f"ℹ️ {lab.capitalize()} did not return structured output — shown as plain text")
         if self.factcheck_degraded:

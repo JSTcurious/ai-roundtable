@@ -1265,7 +1265,7 @@ PANEL_ASSIGNED_TO_LAB = {name: lab for lab, name in PANEL_LAB_TO_ASSIGNED.items(
 PANEL_STAKES = ("low", "medium", "high")
 SEAT_MAX_CLAIMS = 6
 PANEL_ROUTER_TIMEOUT = 25.0
-PANEL_ROUTER_MAX_TOKENS = 1200
+PANEL_ROUTER_MAX_TOKENS = 700   # a full four-seat plan is ~450 tokens
 SEAT_REPAIR_MAX_TOKENS = 2000
 
 PANEL_ROUTER_SYSTEM = """\
@@ -1304,7 +1304,10 @@ Rules for every seat brief:
 - Preserve every bracketed placeholder such as [PERSON_1], [ORG_1] or
   [AMOUNT_1 ≈ $440K] verbatim, with the same brackets, casing and number.
   Never guess what a placeholder stands for.
-- Titles are short job titles. "mandate" is one or two sentences.
+- Length limits (output length is what the router's time is made of):
+  functional_title at most 5 words, mandate at most 20 words,
+  blind_spot_guardrail at most 15 words, domain_detected at most 5 words.
+  The seat's own prompt does the detailed work; keep the brief short.
 
 Return JSON only, no prose and no code fences, in exactly this shape:
 {
@@ -1488,9 +1491,12 @@ code fences. Exactly these keys:
   "blind_spots_flagged": ["what this panel or the brief may be missing or assuming"],
   "falsifiable_claims": ["specific factual claims a web search could confirm or refute: figures, dates, named rules, prices, benchmarks"]
 }
-Use [] for an empty list. Put at most 6 claims in falsifiable_claims, each a
-single self-contained sentence. Never put private placeholders' contents
-anywhere: only the placeholders.
+Use [] for an empty list. Length limits (shorter answers finish sooner and the
+synthesizer reads four of them): core_assessment at most 350 words; every list
+item one sentence; cross_functional_conflicts and blind_spots_flagged at most
+4 items each; falsifiable_claims at most 6 claims, each a single
+self-contained sentence. Spend the words on your strongest points. Never put
+private placeholders' contents anywhere: only the placeholders.
 """
 
 
@@ -1513,7 +1519,9 @@ class SeatResult:
     cross_functional_conflicts: list = field(default_factory=list)
     blind_spots_flagged: list = field(default_factory=list)
     falsifiable_claims: list = field(default_factory=list)
-    degraded: bool = False
+    degraded: bool = False     # kept as plain text: not valid seat JSON, even after repair
+    repaired: bool = False     # valid only because the repair call fixed it
+    raw_chars: int = 0         # length of the model's own reply, for the [SEATS] log
 
     def to_dict(self) -> dict:
         return {
@@ -1577,10 +1585,13 @@ async def structure_seat(
     """
     import asyncio as _asyncio
 
+    raw_chars = len(text or "")
     parsed = parse_seat_response(text, lab, seat)
     if parsed is not None:
+        parsed.raw_chars = raw_chars
         return parsed
-    plain = SeatResult(lab, seat.functional_title, (text or "").strip(), degraded=True)
+    plain = SeatResult(lab, seat.functional_title, (text or "").strip(),
+                       degraded=True, raw_chars=raw_chars)
     if availability == "unavailable" or not plain.core_assessment:
         return plain
     try:
@@ -1594,9 +1605,29 @@ async def structure_seat(
             max_tokens=SEAT_REPAIR_MAX_TOKENS,
         )
         repaired = parse_seat_response(response.content[0].text, lab, seat)
-        return repaired or plain
+        if repaired is None:
+            return plain
+        repaired.repaired = True
+        repaired.raw_chars = raw_chars
+        return repaired
     except Exception:
         return plain
+
+
+def seat_status(result: SeatResult) -> str:
+    """json (valid first time) | repaired (valid after one repair call) | degraded (plain text)."""
+    if result.degraded:
+        return "degraded"
+    return "repaired" if result.repaired else "json"
+
+
+def format_seats_line(seat_results: dict) -> str:
+    """The per-session [SEATS] log line: status and reply length per lab, never content."""
+    parts = [
+        f"{lab}={seat_status(seat_results[lab])}:{seat_results[lab].raw_chars}ch"
+        for lab in ("gpt", "gemini", "grok", "claude") if lab in seat_results
+    ]
+    return "[SEATS] " + " ".join(parts)
 
 
 def render_seat(result: SeatResult) -> str:
