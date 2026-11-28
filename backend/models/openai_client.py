@@ -38,11 +38,19 @@ from openai import OpenAI
 
 from backend.models.intake_decision import IntakeDecision
 from backend.router import (
+    TOKEN_PRESERVATION_RULE,
     BRIEF_FACT_CARRYOVER_RULE,
     STATED_FACTS_RULE,
     build_advisor_messages,
 )
 
+# ── Data retention (docs/PRIVACY_SECURITY_SPEC.md §4.2) ──────────────────────
+# In code: every chat.completions.create passes store=False, so OpenAI does
+#   not keep completions for its Stored Completions / evals features.
+# Not in code: API data is not used for training by default, but OpenAI keeps
+#   abuse-monitoring logs (up to 30 days) unless the org is approved for Zero
+#   Data Retention / Modified Abuse Monitoring — request that from OpenAI at
+#   the organization level (platform.openai.com → Settings → Data controls).
 _client = None
 
 def _get_client() -> OpenAI:
@@ -410,6 +418,7 @@ regardless of depth." \
 Replace [N] and [name] with the actual count and track names from the user's \
 intake. If only one track exists, do not add this instruction. \
 
+""" + TOKEN_PRESERVATION_RULE + """
 CRITICAL OUTPUT FORMAT: Return raw JSON only. No markdown. \
 No backtick fences. No prose before or after the JSON object. \
 Your response must start with '{' and end with '}'. \
@@ -447,6 +456,7 @@ def _call_gpt4o_mini_intake_once(prompt: str) -> IntakeDecision:
         max_completion_tokens=2000,
         temperature=0.1,
         response_format={"type": "json_object"},
+        store=False,
         messages=[
             {"role": "system", "content": _INTAKE_SYSTEM},
             {"role": "user",   "content": prompt},
@@ -520,6 +530,7 @@ def call_for_chips(prompt: str, system: str, max_tokens: int = 200) -> str:
         model=INTAKE_MODEL,
         max_completion_tokens=max_tokens,
         temperature=0.3,
+        store=False,
         messages=[
             {"role": "system", "content": system},
             {"role": "user",   "content": prompt},
@@ -567,6 +578,7 @@ def call_gpt(
         max_completion_tokens=4096,
         messages=full_messages,
         stream=stream,
+        store=False,
     )
 
 

@@ -42,6 +42,11 @@ from backend.router import build_advisor_messages
 
 logger = logging.getLogger(__name__)
 
+# ── Data retention (docs/PRIVACY_SECURITY_SPEC.md §4.2) ──────────────────────
+# The Gemini API has no per-request retention flag. Paid-tier (billed project)
+# traffic is not used for training; free-tier keys are. Keep GOOGLE_API_KEY on
+# a project with Cloud Billing enabled. Prompts are still logged for a limited
+# period for abuse monitoring — full ZDR needs Vertex AI plus a Google contract.
 _client = None
 
 def _get_client() -> genai.Client:

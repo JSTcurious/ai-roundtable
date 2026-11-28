@@ -29,8 +29,15 @@ import os
 from openai import OpenAI
 
 from backend.models.model_config import FACTCHECK_FALLBACK1, FACTCHECK_PRIMARY
-from backend.router import current_date_note
+from backend.router import TOKEN_PRESERVATION_RULE, current_date_note
 
+# ── Data retention (docs/PRIVACY_SECURITY_SPEC.md §4.2) ──────────────────────
+# Perplexity's API has no retention parameter. Its privacy docs state the
+# Sonar API keeps no prompt data and never trains on it, but one docs FAQ says
+# retention depends on account configuration — confirm ZDR with Perplexity in
+# writing (spec Q5). Nothing here can enforce it.
+# The GPT web-search fallback (_call_gpt_audit_with_web_search) is an OpenAI
+# call and passes store=False like openai_client.
 _client = None
 
 
@@ -79,6 +86,7 @@ def research(prompt: str, tier: str = "quick") -> str:
         f"5. Current salary and market data\n\n"
         f"Return findings with citations and dates. "
         f"Flag anything that changed significantly in the last 6 months."
+        + TOKEN_PRESERVATION_RULE
         + current_date_note()
     )
 
@@ -108,6 +116,7 @@ You are fact-checking AI model responses for accuracy and currency.
 
 ## Pre-Research Context (your own earlier web search — not a model response)
 {research_text or '(no pre-research available)'}
+{TOKEN_PRESERVATION_RULE}
 """
 
     if tier == "deep":
@@ -209,6 +218,7 @@ def _call_gpt_audit_with_web_search(
         model=FACTCHECK_FALLBACK2,
         max_completion_tokens=get_factcheck_max_tokens(tier),
         messages=[{"role": "user", "content": prompt}],
+        store=False,
     )
     return response.choices[0].message.content.strip()
 

@@ -44,6 +44,10 @@ from backend.router import build_advisor_messages
 
 logger = logging.getLogger(__name__)
 
+# ── Data retention (docs/PRIVACY_SECURITY_SPEC.md §4.2) ──────────────────────
+# The Messages API has no retention parameter. Anthropic does not train on API
+# data by default; Zero Data Retention is an org-level agreement arranged with
+# Anthropic (sales / account team), after which it covers every key in the org.
 _client = None
 
 def _get_client() -> Anthropic:
