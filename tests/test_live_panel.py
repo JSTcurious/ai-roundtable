@@ -83,6 +83,16 @@ def test_router_never_invents_or_drops_placeholders():
         assert token in LAUNCH, f"invented placeholder {token}"
 
 
+def test_router_plans_respect_the_length_limits():
+    # PANEL_LATENCY_SPEC AC5: prompt says 20 / 15 / 5 words; allow headroom.
+    for brief in (LAUNCH, INFRA):
+        plan = _plan(brief)
+        for seat in plan.seats.values():
+            assert len(seat.mandate.split()) <= 30, seat.mandate
+            assert len(seat.blind_spot_guardrail.split()) <= 25, seat.blind_spot_guardrail
+            assert len(seat.functional_title.split()) <= 8, seat.functional_title
+
+
 def test_a_real_seat_returns_the_json_shape():
     from backend.models.anthropic_client import call_claude
     from backend.router import build_seat_system, parse_seat_response
@@ -96,5 +106,8 @@ def test_a_real_seat_returns_the_json_shape():
     result = parse_seat_response(reply, "claude", seat)
     assert result is not None, reply[:500]
     assert len(result.core_assessment) > 200
+    # PANEL_LATENCY_SPEC AC5: cap is 350 words; allow 25% headroom.
+    assert len(result.core_assessment.split()) <= 437, len(result.core_assessment.split())
+    assert len(result.blind_spots_flagged) <= 6 and len(result.cross_functional_conflicts) <= 6
     assert result.blind_spots_flagged
     assert not re.search(r"\b\d+(\.\d+)?\s*/\s*10\b", result.core_assessment), "invented numeric score"
