@@ -21,7 +21,10 @@ quality ceiling, not cost floor.
 
 ## Pipeline flow
 INTAKE (multi-turn, minimum questions enforced per domain)
-→ RESEARCH (parallel: Claude + Gemini + GPT + Grok)
+→ PANEL ROUTER (Claude Sonnet picks 3–4 functional seats for this decision;
+  falls back to the four default seats, never blocks)
+→ RESEARCH (parallel: Claude + Gemini + GPT + Grok, each in its routed seat,
+  answering in JSON that is rendered to readable text)
 → FACT-CHECK (Perplexity)
 → SYNTHESIS DRAFT (auto-triggers, no user gate)
 → DIALOGUE (user responds, Claude refines)
@@ -56,6 +59,8 @@ fact-check. User engages with the draft, not a blank textarea.
 - backend/models/registry.py — resolves each role to a model at startup
 - backend/models/model_config.py — resolved constants used by call sites
 - backend/models/intake_decision.py — IntakeDecision Pydantic schema
+- backend/router.py also holds the panel router (PANEL_ROUTER_SYSTEM,
+  call_panel_router, build_seat_system, structure_seat, render_seat)
 - backend/privacy_guard.py — PII tokenizer, PrivacyVault/VAULTS, rehydrate,
   StreamRehydrator (spec: docs/PRIVACY_SECURITY_SPEC.md); word lists in
   backend/privacy_allowlist.json
@@ -87,6 +92,15 @@ Cognitive roles:
 - gpt     → PRAGMATIST (practical, concrete, actionable)
 - gemini  → SCOUT (finds angles and options others miss)
 - grok    → CHALLENGER (stress-tests the premise itself)
+
+Seats (docs/PANEL_FACTCHECK_SPEC.md): call_panel_router() assigns each
+model a functional role for the decision (e.g. VP of Finance, FinOps Lead).
+build_seat_system(lab, seat) layers that role (SEAT_TEMPLATE) on top of the
+model's cognitive stance above, so the stances and the landing-page
+descriptions stay true; the default plan is the old four seats. Seats reply
+in JSON (SEAT_JSON_RULES); structure_seat() parses it (one repair call, then
+plain text) and render_seat() turns it into the text the panels and the
+synthesizer receive. get_round1_system_prompt() is unchanged.
 
 All four model responses must be wrapped with
 wrap_model_response() before synthesis injection.
@@ -159,13 +173,16 @@ docs/description — documentation only
 
 ## Testing
 uv run pytest — always run before committing (never bare pytest)
-RUN_LIVE_EVALS=1 uv run pytest tests/test_live_synthesis_post_cutoff.py tests/test_live_injection.py —
-  paid live checks; run when changing synthesis models or prompts
+RUN_LIVE_EVALS=1 uv run pytest tests/test_live_synthesis_post_cutoff.py tests/test_live_injection.py tests/test_live_panel.py —
+  paid live checks; run when changing synthesis models or prompts, and
+  test_live_panel.py when changing PANEL_ROUTER_SYSTEM or the seat prompts
+conftest.py blocks the real Anthropic client in tests (the router and seat
+  repair call Claude every session); live evals keep it
 CI (.github/workflows/tests.yml) runs on every PR and push to main: clean
   pinned install, lockfile-in-sync check, full suite. No secrets needed
 tests/test_ws_close_paths.py runs the app on a real uvicorn server and fails
   on any server traceback when a WebSocket session ends (six close paths)
-488 passed, 4 skipped as of November 2026
+559 passed, 8 skipped as of November 2026
 
 ## Environment
 - Python 3.13 (pinned via .python-version)
@@ -229,7 +246,8 @@ stale UI.
   the role → model table; ⚠️ lines after it are real (retiring,
   missing or unresolved models). Fix them in model_registry.json
 - Each session logs a [TIMING] line per stage (research.<model>, research,
-  research.emit, factcheck, self_critique, synthesis, refinement.N, plus
+  research.emit, panel_router, seat_parse, factcheck, self_critique,
+  synthesis, refinement.N, plus
   synthesis.first_token / refinement.N.first_token) and a
   [TIMING] first_draft total=… summary. Timing starts after prompt review,
   so user wait is excluded (backend/stage_timing.py)

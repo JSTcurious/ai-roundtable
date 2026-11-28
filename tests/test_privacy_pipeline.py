@@ -52,10 +52,12 @@ def _dump(obj) -> str:
 class _Recorder:
     def __init__(self):
         self.payloads: list[tuple[str, str]] = []  # (provider, serialized kwargs)
+        self.contents: list[tuple[str, str]] = []  # (provider, conversation text only)
 
     def record(self, provider: str, kwargs: dict) -> str:
         text = _dump(kwargs)
         self.payloads.append((provider, text))
+        self.contents.append((provider, _content(kwargs)))
         return text
 
     def providers(self) -> set:
@@ -96,6 +98,18 @@ def _echo(text_in: str) -> str:
     )
 
 
+_responder = None  # set per run by _run_session(responder=...): (provider, kwargs) -> text
+
+
+def _reply(provider: str, kw: dict) -> str:
+    """The fake model's answer: a custom responder if the test set one, else an echo."""
+    if _responder is not None:
+        out = _responder(provider, kw)
+        if out is not None:
+            return out
+    return _echo(_content(kw))
+
+
 def _intake_json() -> str:
     return json.dumps({
         "needs_clarification": False,
@@ -117,7 +131,7 @@ def _make_fakes(rec: _Recorder):
             decision["optimized_prompt"] = "Brief: " + _content(kw)
             out = json.dumps(decision, ensure_ascii=False)
         else:
-            out = _echo(_content(kw))
+            out = _reply("anthropic", kw)
         return SimpleNamespace(
             content=[SimpleNamespace(text=out)],
             usage=SimpleNamespace(input_tokens=1, output_tokens=1),
@@ -127,7 +141,7 @@ def _make_fakes(rec: _Recorder):
     @contextlib.contextmanager
     def anthropic_stream(**kw):
         rec.record("anthropic", kw)
-        out = _echo(_content(kw))
+        out = _reply("anthropic", kw)
         # 3-char chunks: placeholders are always split across chunks.
         yield SimpleNamespace(text_stream=[out[i:i + 3] for i in range(0, len(out), 3)])
 
@@ -138,7 +152,7 @@ def _make_fakes(rec: _Recorder):
     # ── Gemini
     def gemini_generate(**kw):
         rec.record("gemini", kw)
-        out = _echo(_content(kw))
+        out = _reply("gemini", kw)
         return SimpleNamespace(text=out, usage_metadata=SimpleNamespace(
             prompt_token_count=1, candidates_token_count=1))
 
@@ -149,7 +163,7 @@ def _make_fakes(rec: _Recorder):
     def chat(provider):
         def create(**kw):
             rec.record(provider, kw)
-            out = _echo(_content(kw))
+            out = _reply(provider, kw)
             resp = SimpleNamespace(
                 choices=[SimpleNamespace(message=SimpleNamespace(content=out))],
                 usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1),
@@ -198,8 +212,18 @@ def _faked_providers(rec: _Recorder):
         yield
 
 
-def _run_session(prompt: str, dialogue: str = DIALOGUE):
+def _run_session(prompt: str, dialogue: str = DIALOGUE, responder=None):
+    global _responder
     from backend import main
+
+    _responder = responder
+    try:
+        return _run_session_inner(main, prompt, dialogue)
+    finally:
+        _responder = None
+
+
+def _run_session_inner(main, prompt: str, dialogue: str):
 
     rec = _Recorder()
     frames: list[dict] = []
@@ -347,9 +371,9 @@ def test_public_terms_reach_perplexity():
     research = perplexity[0]
     assert "Search the current web" in research
     assert "AWS" in research and "SOC 2" in research and "GDPR" in research
-    # Nothing was tokenized anywhere (the placeholder rule's examples aside).
-    for _, text in run.rec.payloads:
-        cleaned = text.replace(json.dumps(TOKEN_PRESERVATION_RULE.strip(), ensure_ascii=False)[1:-1], "")
-        assert not re.search(r"\[(?:PERSON|ORG|AMOUNT|ID)_\d+", cleaned)
+    # Nothing was tokenized anywhere. Only the conversation is checked: the
+    # system prompts legitimately mention example placeholders.
+    for provider, content in run.rec.contents:
+        assert not re.search(r"\[(?:PERSON|ORG|AMOUNT|ID)_\d+", content), provider
     final = next(f for f in run.frames if f["type"] == "synthesis_final")
     assert final["privacy_audit"]["pii_tokens_redacted"] == 0

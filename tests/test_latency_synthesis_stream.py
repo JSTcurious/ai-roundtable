@@ -51,12 +51,14 @@ class FakeClaude:
 
     def __init__(self, *streams):
         self.streams = list(streams)
-        self.calls = []
+        self.calls = []       # streamed calls: synthesis and refinement
+        self.aux_calls = []   # non-streamed: panel router and seat repair (they degrade on error)
 
     def __call__(self, **kwargs):
-        self.calls.append(kwargs)
         if not kwargs.get("stream"):
-            raise AssertionError("expected a streamed call")
+            self.aux_calls.append(kwargs)
+            raise RuntimeError("offline: only streamed synthesis calls are served")
+        self.calls.append(kwargs)
         return self.streams.pop(0)
 
 

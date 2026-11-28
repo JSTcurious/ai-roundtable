@@ -1241,3 +1241,374 @@ def build_synthesis_system(
         + perplexity_section
         + citation_section
     )
+
+
+# ── Dynamic functional panel (docs/PANEL_FACTCHECK_SPEC.md §4.1–4.2) ─────────
+#
+# A router call reads the (tokenized) brief and assigns each of the four
+# models a functional seat for THIS question. The seat sits on top of the
+# model's cognitive stance in ROUND1_SYSTEM_PROMPTS (Q1: layer, don't
+# replace), so the Analyst/Pragmatist/Scout/Challenger descriptions on the
+# landing page stay true. Router failure never blocks a session: the default
+# plan is the old four seats.
+
+import json as _json
+from dataclasses import dataclass, field
+
+# router "assigned_model" value -> panel lab key used everywhere else
+# (Seat names, not model IDs; built from lab keys so no model-id-like literal
+# appears here — see tests/test_model_registry.py AC1.)
+PANEL_LAB_TO_ASSIGNED = {
+    "gpt": "chat" + "gpt", "gemini": "gemini", "grok": "grok", "claude": "claude_research",
+}
+PANEL_ASSIGNED_TO_LAB = {name: lab for lab, name in PANEL_LAB_TO_ASSIGNED.items()}
+PANEL_STAKES = ("low", "medium", "high")
+SEAT_MAX_CLAIMS = 6
+PANEL_ROUTER_TIMEOUT = 25.0
+PANEL_ROUTER_MAX_TOKENS = 1200
+SEAT_REPAIR_MAX_TOKENS = 2000
+
+PANEL_ROUTER_SYSTEM = """\
+You assemble the expert panel for a decision-support roundtable. You are given
+a research brief. Choose 3 or 4 functional roles that fit THIS decision and
+write each seat's brief. Four AI models will fill the seats: chatgpt, gemini,
+grok and claude_research (one seat each; you may leave one model out only if
+fewer than four functions are genuinely needed).
+
+Choose functions from the decision itself. Examples:
+- product launch: VP of Product Development, VP of Product Marketing, VP of
+  Finance, Legal & Compliance Lead
+- technical migration: Principal Infra Architect, FinOps Lead, Security &
+  Compliance Officer, Developer Experience Lead
+- career or personal decision: pick the functions a thoughtful advisor board
+  would need (for example Compensation & Market Analyst, Risk & Downside
+  Analyst, Long-Term Career Strategist, Legal & Contract Reviewer)
+
+Give the seats complementary and, where the decision allows, opposing
+vantage points: one seat should own the strongest case against the option the
+user seems to favour. Match assigned_model to temperament: chatgpt for
+execution, practical and technical functions; gemini for market, ecosystem and
+blind-spot functions; grok for commercial, finance and adversarial red-team
+functions; claude_research for governance, legal and primary-research
+functions. Break the match whenever the decision needs it.
+
+Rules for every seat brief:
+- Unanchored framing: do not assume or favour any option. Describe the
+  question, not an answer.
+- Proxy hygiene: remove demographic, educational, cultural and
+  coastal-enterprise assumptions the user did not state (for example a
+  Silicon Valley salary scale, a US-only legal regime, a large-company
+  org chart). If the brief does not say, the seat must not assume.
+- "blind_spot_guardrail" names the specific assumption or omission this
+  function is most likely to get wrong for this decision.
+- Preserve every bracketed placeholder such as [PERSON_1], [ORG_1] or
+  [AMOUNT_1 ≈ $440K] verbatim, with the same brackets, casing and number.
+  Never guess what a placeholder stands for.
+- Titles are short job titles. "mandate" is one or two sentences.
+
+Return JSON only, no prose and no code fences, in exactly this shape:
+{
+  "domain_detected": "string",
+  "decision_stakes": "low | medium | high",
+  "panel_seats": [
+    {"assigned_model": "chatgpt | gemini | grok | claude_research",
+     "functional_title": "string", "mandate": "string",
+     "blind_spot_guardrail": "string"}
+  ]
+}
+"""
+
+# Default seat per lab: the old cognitive stance with a generic title.
+_DEFAULT_SEATS = {
+    "claude": ("Analyst", "Reason from first principles and name what the other seats will miss."),
+    "gpt": ("Pragmatist", "Ground the discussion in what works in practice and what the user can do now."),
+    "gemini": ("Scout", "Bring angles, options and recent developments the other seats lack."),
+    "grok": ("Challenger", "Stress-test the premise and ask whether this is the right question."),
+}
+_DEFAULT_GUARDRAIL = (
+    "State any assumption about the user's situation, location or resources "
+    "that the brief does not support, and do not rely on it."
+)
+
+
+@dataclass
+class PanelSeat:
+    lab: str
+    assigned_model: str
+    functional_title: str
+    mandate: str
+    blind_spot_guardrail: str
+    is_default: bool = False
+
+
+@dataclass
+class PanelPlan:
+    domain_detected: str = ""
+    decision_stakes: str = "medium"
+    seats: dict = field(default_factory=dict)       # lab -> PanelSeat, always all four
+    router_degraded: bool = False
+    reason: str = ""
+    defaulted: list = field(default_factory=list)   # labs running a default seat
+
+    def roles(self) -> list:
+        """Functional titles in a stable order (for audit metrics)."""
+        return [self.seats[lab].functional_title for lab in ("gpt", "gemini", "grok", "claude")
+                if lab in self.seats]
+
+
+def _default_seat(lab: str) -> PanelSeat:
+    title, mandate = _DEFAULT_SEATS[lab]
+    return PanelSeat(lab, PANEL_LAB_TO_ASSIGNED[lab], title, mandate, _DEFAULT_GUARDRAIL, True)
+
+
+def default_panel_plan(reason: str = "") -> PanelPlan:
+    seats = {lab: _default_seat(lab) for lab in _DEFAULT_SEATS}
+    return PanelPlan(
+        domain_detected="", decision_stakes="medium", seats=seats,
+        router_degraded=True, reason=reason, defaulted=sorted(seats),
+    )
+
+
+def extract_json_object(text) -> Optional[dict]:
+    """Parse the first JSON object in text (tolerates code fences and chatter)."""
+    if not isinstance(text, str) or "{" not in text:
+        return None
+    start, end = text.find("{"), text.rfind("}")
+    if end <= start:
+        return None
+    try:
+        data = _json.loads(text[start:end + 1])
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _clean_str(value) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def parse_panel_plan(text: str) -> PanelPlan:
+    """
+    Validate the router's JSON. Raises ValueError on any problem. Returns a
+    plan with all four labs: a model the router left out gets its default seat.
+    """
+    data = extract_json_object(text)
+    if data is None:
+        raise ValueError("router reply is not a JSON object")
+    stakes = _clean_str(data.get("decision_stakes")).lower()
+    if stakes not in PANEL_STAKES:
+        raise ValueError(f"decision_stakes {stakes!r} not in {PANEL_STAKES}")
+    raw_seats = data.get("panel_seats")
+    if not isinstance(raw_seats, list) or not 3 <= len(raw_seats) <= 4:
+        raise ValueError("panel_seats must be a list of 3 or 4 seats")
+    seats: dict = {}
+    for raw in raw_seats:
+        if not isinstance(raw, dict):
+            raise ValueError("seat is not an object")
+        lab = PANEL_ASSIGNED_TO_LAB.get(_clean_str(raw.get("assigned_model")))
+        if lab is None:
+            raise ValueError(f"unknown assigned_model {raw.get('assigned_model')!r}")
+        if lab in seats:
+            raise ValueError(f"model {raw.get('assigned_model')!r} assigned twice")
+        fields = {k: _clean_str(raw.get(k)) for k in
+                  ("functional_title", "mandate", "blind_spot_guardrail")}
+        if not all(fields.values()):
+            raise ValueError("seat has an empty functional_title, mandate or guardrail")
+        seats[lab] = PanelSeat(lab, PANEL_LAB_TO_ASSIGNED[lab], **fields)
+    defaulted = []
+    for lab in _DEFAULT_SEATS:
+        if lab not in seats:
+            seats[lab] = _default_seat(lab)
+            defaulted.append(lab)
+    return PanelPlan(
+        domain_detected=_clean_str(data.get("domain_detected")),
+        decision_stakes=stakes, seats=seats, defaulted=defaulted,
+    )
+
+
+async def _call_router_model(brief: str) -> str:
+    import asyncio as _asyncio
+    from backend.models.anthropic_client import call_claude
+
+    response = await _asyncio.to_thread(
+        call_claude,
+        messages=[{"role": "user", "content": brief}],
+        tier="smart",
+        system=PANEL_ROUTER_SYSTEM + TOKEN_PRESERVATION_RULE + current_date_note(),
+        max_tokens=PANEL_ROUTER_MAX_TOKENS,
+    )
+    return response.content[0].text
+
+
+async def call_panel_router(brief: str, timeout: float = PANEL_ROUTER_TIMEOUT) -> PanelPlan:
+    """Pick the panel for this brief. Never raises: any failure returns the default plan."""
+    import asyncio as _asyncio
+
+    try:
+        text = await _asyncio.wait_for(_call_router_model(brief), timeout)
+        return parse_panel_plan(text)
+    except _asyncio.TimeoutError:
+        return default_panel_plan(f"router timed out after {timeout:g}s")
+    except Exception as exc:
+        return default_panel_plan(f"{type(exc).__name__}: {exc}")
+
+
+SEAT_TEMPLATE = """\
+<panel_seat model="{assigned_model}">
+<role>{functional_title}</role>
+<mandate>{mandate}</mandate>
+<blind_spot_check>{blind_spot_guardrail}</blind_spot_check>
+<rules>
+- Answer as the role above, from the mandate above, for THIS decision.
+- Before you answer, run the blind-spot check: find where that assumption
+  shows up in the brief or in your own first instinct, and correct for it.
+- Do not assume or favour an option. Do not assume the user's location,
+  employer size, education or background beyond what the brief states.
+- No false precision: never invent statistics, studies or sources, and never
+  assign numerical scores or ratings to qualitative traits. If you cite a
+  number, it must be one you can name a source for, and it goes in
+  falsifiable_claims so it can be fact-checked.
+- Keep every bracketed placeholder such as [ORG_1] or [AMOUNT_1 ≈ $440K]
+  verbatim.
+</rules>
+</panel_seat>
+
+"""
+
+SEAT_JSON_RULES = """
+
+## Output format (overrides any earlier instruction about how to start or lay out your answer)
+Reply with ONE JSON object and nothing else: no prose before or after it, no
+code fences. Exactly these keys:
+{
+  "model": "your model family",
+  "functional_title": "the role above",
+  "core_assessment": "your full analysis as prose, leading with your strongest claim",
+  "cross_functional_conflicts": ["where your function's interests clash with another function's"],
+  "blind_spots_flagged": ["what this panel or the brief may be missing or assuming"],
+  "falsifiable_claims": ["specific factual claims a web search could confirm or refute: figures, dates, named rules, prices, benchmarks"]
+}
+Use [] for an empty list. Put at most 6 claims in falsifiable_claims, each a
+single self-contained sentence. Never put private placeholders' contents
+anywhere: only the placeholders.
+"""
+
+
+def build_seat_system(lab: str, seat: PanelSeat) -> str:
+    """Shared seat template + the model's cognitive stance and guardrails + JSON rules."""
+    head = SEAT_TEMPLATE.format(
+        assigned_model=seat.assigned_model,
+        functional_title=seat.functional_title,
+        mandate=seat.mandate,
+        blind_spot_guardrail=seat.blind_spot_guardrail,
+    )
+    return head + get_round1_system_prompt(lab) + SEAT_JSON_RULES
+
+
+@dataclass
+class SeatResult:
+    model: str
+    functional_title: str
+    core_assessment: str
+    cross_functional_conflicts: list = field(default_factory=list)
+    blind_spots_flagged: list = field(default_factory=list)
+    falsifiable_claims: list = field(default_factory=list)
+    degraded: bool = False
+
+    def to_dict(self) -> dict:
+        return {
+            "model": self.model, "functional_title": self.functional_title,
+            "core_assessment": self.core_assessment,
+            "cross_functional_conflicts": list(self.cross_functional_conflicts),
+            "blind_spots_flagged": list(self.blind_spots_flagged),
+            "falsifiable_claims": list(self.falsifiable_claims),
+        }
+
+
+def _clean_list(value, limit: Optional[int] = None) -> list:
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list):
+        return []
+    out = [v.strip() for v in value if isinstance(v, str) and v.strip()]
+    return out[:limit] if limit else out
+
+
+def parse_seat_response(text: str, lab: str, seat: PanelSeat) -> Optional[SeatResult]:
+    """
+    Parse a seat's JSON. Identity (model, title) comes from the seat, never
+    from the model's own claim. Returns None when the text has no usable
+    core_assessment.
+    """
+    data = extract_json_object(text)
+    if data is None:
+        return None
+    core = _clean_str(data.get("core_assessment"))
+    if not core:
+        return None
+    return SeatResult(
+        model=lab,
+        functional_title=seat.functional_title,
+        core_assessment=core,
+        cross_functional_conflicts=_clean_list(data.get("cross_functional_conflicts")),
+        blind_spots_flagged=_clean_list(data.get("blind_spots_flagged")),
+        falsifiable_claims=_clean_list(data.get("falsifiable_claims"), SEAT_MAX_CLAIMS),
+    )
+
+
+SEAT_REPAIR_SYSTEM = (
+    "You convert a draft panel answer into JSON. Output ONE JSON object and "
+    "nothing else, with exactly the keys model, functional_title, "
+    "core_assessment, cross_functional_conflicts, blind_spots_flagged, "
+    "falsifiable_claims (the last three are lists of strings; use [] when "
+    "empty). Put the draft's analysis in core_assessment without changing its "
+    "meaning. Do not add facts. Keep bracketed placeholders such as [ORG_1] "
+    "verbatim."
+)
+
+
+async def structure_seat(
+    text: str, lab: str, seat: PanelSeat, availability: str = "primary"
+) -> SeatResult:
+    """
+    Turn a seat's raw reply into a SeatResult: parse; if that fails, one
+    repair call; if that fails too, keep the whole text as core_assessment
+    and mark the seat degraded. Never raises.
+    """
+    import asyncio as _asyncio
+
+    parsed = parse_seat_response(text, lab, seat)
+    if parsed is not None:
+        return parsed
+    plain = SeatResult(lab, seat.functional_title, (text or "").strip(), degraded=True)
+    if availability == "unavailable" or not plain.core_assessment:
+        return plain
+    try:
+        from backend.models.anthropic_client import call_claude
+
+        response = await _asyncio.to_thread(
+            call_claude,
+            messages=[{"role": "user", "content": text}],
+            tier="smart",
+            system=SEAT_REPAIR_SYSTEM,
+            max_tokens=SEAT_REPAIR_MAX_TOKENS,
+        )
+        repaired = parse_seat_response(response.content[0].text, lab, seat)
+        return repaired or plain
+    except Exception:
+        return plain
+
+
+def render_seat(result: SeatResult) -> str:
+    """Readable markdown for the panel and for the synthesizer. No raw JSON."""
+    if result.degraded:
+        return result.core_assessment
+    parts = [f"**{result.functional_title}**", result.core_assessment]
+    for heading, items in (
+        ("Cross-functional conflicts", result.cross_functional_conflicts),
+        ("Blind spots flagged", result.blind_spots_flagged),
+        ("Claims that can be fact-checked", result.falsifiable_claims),
+    ):
+        if items:
+            parts.append(f"**{heading}**\n" + "\n".join(f"- {item}" for item in items))
+    return "\n\n".join(parts)

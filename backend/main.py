@@ -63,6 +63,10 @@ from backend.router import (
     get_use_case,
     build_stated_facts_block,
     clean_stated_facts,
+    build_seat_system,
+    call_panel_router,
+    render_seat,
+    structure_seat,
 )
 from backend.models.anthropic_client import (
     call_claude,
@@ -1035,10 +1039,23 @@ async def session_websocket(websocket: WebSocket):
         gpt_history    = transcript.get_history_for_model("gpt")
         grok_history   = transcript.get_history_for_model("grok")
         claude_history = transcript.get_history_for_model("claude")
-        gemini_system  = get_round1_system_prompt("gemini")
-        gpt_system     = get_round1_system_prompt("gpt")
-        grok_system    = get_round1_system_prompt("grok")
-        claude_system  = get_round1_system_prompt("claude")
+        # Panel router: picks this decision's functional seats. Never blocks:
+        # any failure returns the default (old) four seats. The brief it sees
+        # is already tokenized by the privacy gate.
+        async with timer.stage("panel_router"):
+            panel_plan = await call_panel_router(optimized_prompt)
+        health.panel_fallback = panel_plan.router_degraded
+        print(
+            f"[PANEL] domain={panel_plan.domain_detected or 'n/a'} stakes={panel_plan.decision_stakes} "
+            f"roles={panel_plan.roles()}"
+            + (f" — router fallback: {panel_plan.reason}" if panel_plan.router_degraded else ""),
+            flush=True,
+        )
+        seats = panel_plan.seats
+        gemini_system  = build_seat_system("gemini", seats["gemini"])
+        gpt_system     = build_seat_system("gpt", seats["gpt"])
+        grok_system    = build_seat_system("grok", seats["grok"])
+        claude_system  = build_seat_system("claude", seats["claude"])
         send_lock      = asyncio.Lock()
 
         async def _research_task() -> str:
@@ -1077,6 +1094,31 @@ async def session_websocket(websocket: WebSocket):
         grok_text,      grok_avail      = _unpack(results[2], "grok")
         claude_r1_text, claude_avail    = _unpack(results[3], "claude")
         perplexity_pre = results[4] if isinstance(results[4], str) else ""
+
+        # Seats answer in JSON. Parse (repairing once if needed) and render to
+        # readable text, so the panels and the synthesizer get prose and the
+        # frontend is unchanged. seat_results keeps the structure (claims,
+        # blind spots) for the fact-check stage.
+        async with timer.stage("seat_parse"):
+            parsed_seats = await asyncio.gather(
+                structure_seat(gemini_text, "gemini", seats["gemini"], gemini_avail),
+                structure_seat(gpt_text, "gpt", seats["gpt"], gpt_avail),
+                structure_seat(grok_text, "grok", seats["grok"], grok_avail),
+                structure_seat(claude_r1_text, "claude", seats["claude"], claude_avail),
+            )
+        seat_results = {seat.model: seat for seat in parsed_seats}
+        availability = {"gemini": gemini_avail, "gpt": gpt_avail,
+                        "grok": grok_avail, "claude": claude_avail}
+        # "degraded" = the seat answered but not in the JSON shape; a seat that
+        # was unavailable is reported by research_models instead.
+        health.panel_degraded_seats = [
+            lab for lab, seat in seat_results.items()
+            if seat.degraded and availability[lab] != "unavailable"
+        ]
+        gemini_text = render_seat(seat_results["gemini"])
+        gpt_text = render_seat(seat_results["gpt"])
+        grok_text = render_seat(seat_results["grok"])
+        claude_r1_text = render_seat(seat_results["claude"])
 
         health.research_models = {
             "gemini": gemini_avail,
