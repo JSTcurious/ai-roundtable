@@ -47,7 +47,7 @@ LANDING ──► INTAKE ──► PROMPT REVIEW ──► RESEARCH ──► FA
 
 The browser talks to the backend over two channels: plain HTTP for intake and
 export, and one WebSocket (`/ws/session`) for everything from the prompt
-review onward.
+review onward. There is no other way to run a session.
 
 ## 3. Intake
 
@@ -284,17 +284,10 @@ counted. Latency work is tracked in `docs/LATENCY_SPEC.md`.
 
 ## 14. Known mismatches
 
-The code and its comments agree except for one item that needs a decision,
-not a comment fix:
-
-- `POST /api/session/run` (REST, no review gate) still exists beside the
-  WebSocket path. The product flow uses the WebSocket path. Its docstring also
-  says Claude does not take part in Round 1, but the code runs all four labs.
-  Because it skips the review, it never shows the user the facts list.
-
-(Earlier stale comments in `transcript.py`, `synthesizer.py`, `intake.py` and
-the `/api/intake/start` docstring were corrected after this document was
-first written.)
+None known. Stale comments in `transcript.py`, `synthesizer.py` and the intake
+docstrings were corrected after this document was first written, and the old
+REST route `POST /api/session/run` (no review gate, no facts list) was removed
+because nothing called it. The session runs only through `/ws/session`.
 
 ## 15. Where to read more
 

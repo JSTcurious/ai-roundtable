@@ -127,8 +127,9 @@ the facts become a list the user checks.
   The facts the user saw are the facts the panel gets, word for word.
   Incoming lines are sanitized, stripped, and capped at 20 lines of 300
   characters each.
-- The REST path (`/api/session/run`) has no review gate. It uses the same
-  block from the config.
+- The REST path (`/api/session/run`) had no review gate and used the same
+  block from the config. It was removed later because nothing called it, so
+  the review gate is the only way to start research.
 
 ### 3. Fix: corrections at review never reached the four panel models
 
