@@ -110,11 +110,23 @@ Synthesis output format — four required sections:
 - Never hardcode model IDs — they live only in model_registry.json; code uses
   model_config.py constants (tests/test_model_registry.py AC1 enforces this)
 
-## Git workflow
-- Terminal: branch creation and pushing
-- Claude Code: file changes and commits
-- GitHub: PR review and merge
-- Always specify branch name explicitly — never use claude/ prefix
+## Spec-driven development process
+- **Non-trivial changes** (new features, architectural changes, multi-file refactors, or synthesis/intake logic updates):
+  1. Draft or update the specification in `docs/` first.
+  2. Pause for explicit user approval of the spec before writing tests or implementation code.
+  3. Write failing tests first, then implement code until the suite passes.
+- **Trivial changes** (typos, single-line bug fixes, documentation tweaks): Proceed directly to implementation and tests without a formal spec.
+
+## Git & PR workflow
+- **Default division of labor:**
+  - **Terminal (User):** Branch creation and `git push`.
+  - **Claude Code:** File changes, local validation gates, local commits, and opening PRs via `gh pr create` **only after explicit user OK**.
+  - **GitHub (User):** PR review and merge.
+- **Explicit override exception:** Do **not** run `git push` or `gh pr merge` unless explicitly instructed by the user in the current turn. Even when explicitly instructed to merge, **wait for all GitHub CI checks to pass first**, and use standard merge commits (never squash/rebase unless requested). Never treat a one-off instruction as standing permission for future turns.
+- **Branch & worktree hygiene:**
+  - Use Git worktrees branched cleanly from `main` for isolated feature/fix work (except when debugging live backend issues—see *What not to do*).
+  - Avoid stacked PRs; keep each branch and PR scoped to a single logical unit of work branched from `main`.
+  - Always specify branch name explicitly — never use `claude/` prefix.
 
 ## Branch naming
 feat/description — new features
@@ -122,14 +134,14 @@ fix/description — bug fixes
 docs/description — documentation only
 
 ## Testing
-uv run pytest — always run before committing
+uv run pytest — always run before committing (never bare pytest)
 RUN_LIVE_EVALS=1 uv run pytest tests/test_live_synthesis_post_cutoff.py —
   paid live check; run when changing synthesis models or prompts
 CI (.github/workflows/tests.yml) runs on every PR and push to main: clean
   pinned install, lockfile-in-sync check, full suite. No secrets needed
 tests/test_ws_close_paths.py runs the app on a real uvicorn server and fails
   on any server traceback when a WebSocket session ends (six close paths)
-362 tests passing as of November 2026
+381 passed, 2 skipped as of November 2026
 
 ## Environment
 - Python 3.13 (pinned via .python-version)
@@ -175,17 +187,15 @@ Spec: docs/DEPENDENCY_PINNING_SPEC.md
 ## Frontend build
 Railway serves frontend/build/ as a static site — it does NOT
 rebuild from source on deploy. After any frontend JSX/CSS change,
-run a local build and commit the artifacts before pushing to main:
+run a local build and commit the artifacts on your feature/fix branch
+before pushing and opening a PR:
 
-  cd frontend
-  npm run build
-  cd ..
+  cd frontend && npm run build && cd ..
   git add frontend/build/
   git commit -m "chore: rebuild frontend for production"
-  git push origin main
 
 Never push frontend code changes without a matching build commit.
-The two must travel together in the same push or Railway will serve
+The two must travel together in the same branch/PR or Railway will serve
 stale UI.
 
 ## Known issues and notes
@@ -220,7 +230,9 @@ stale UI.
 
 ## What not to do
 - Never use claude/ prefixed branch names
-- Never merge PRs without review
+- Never create stacked PRs
+- Never merge PRs without review and passing CI
+- Never push or merge without explicit user instruction in the current turn
 - Never hardcode model IDs — add them to model_registry.json
 - Never commit backend/.env
 - Never use worktree mode when debugging live backend issues
