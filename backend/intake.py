@@ -22,6 +22,7 @@ from typing import Any, Optional
 
 from backend.models.intake_decision import IntakeDecision
 from backend.models.resilient_caller import call_with_fallback
+from backend.router import BRIEF_FACT_CARRYOVER_RULE, clean_stated_facts
 
 logger = logging.getLogger(__name__)
 
@@ -341,6 +342,7 @@ def _decision_to_config(decision: IntakeDecision) -> dict:
         "open_questions": decision.open_questions,
         "session_title": decision.session_title,
         "output_intent": decision.output_intent,
+        "stated_facts": clean_stated_facts(decision.stated_facts),
     })
 
 
@@ -567,6 +569,9 @@ class IntakeSession:
         self.session_config["background_context"] = (
             self._background_context or BACKGROUND_CONTEXT_DEFAULT
         )
+        self.session_config["original_prompt"] = sanitize_text(
+            self._original_prompt or ""
+        )
         return {
             "status": "complete",
             "clarifying_question": None,
@@ -628,7 +633,7 @@ class IntakeSession:
             history_lines.append(f"User's answer: {a}")
         history_block = "\n".join(history_lines)
         return (
-            f"Original prompt: {self._original_prompt}\n"
+            f"Original prompt (verbatim, user's own words): {self._original_prompt}\n"
             f"{history_block}\n\n"
             "Based on the conversation so far, return an IntakeDecision. "
             "If critical context is still missing, set needs_clarification=true "
@@ -639,5 +644,6 @@ class IntakeSession:
             "names, or version numbers — even if you believe they are incorrect or refer "
             "to unreleased products. The research models will handle verification. "
             "Incorporate the user's clarification answers to add context and specificity, "
-            "but keep the original proper nouns intact."
+            "but keep the original proper nouns intact.\n\n"
+            f"{BRIEF_FACT_CARRYOVER_RULE}"
         )
